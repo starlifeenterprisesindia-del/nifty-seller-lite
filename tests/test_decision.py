@@ -175,3 +175,20 @@ def test_verified_high_event_risk_forces_wait():
     assert result.final_action == "WAIT"
     assert result.wait_need.score >= 60
     assert "event risk" in result.blocker.lower()
+
+
+def test_unavailable_vix_adds_wait_and_caution():
+    kwargs = common_kwargs()
+    kwargs["vix"] = VixContext(
+        as_of=NOW,
+        last_price=None,
+        previous_close=None,
+        change_pct=None,
+        regime="UNAVAILABLE",
+        movement="UNAVAILABLE",
+        seller_environment="VIX DATA UNAVAILABLE",
+        status="INVALID / UNAVAILABLE",
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.wait_need.score >= 16
+    assert "India VIX data is unavailable" in result.pe_sell.cautions

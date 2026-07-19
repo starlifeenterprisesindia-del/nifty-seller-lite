@@ -7,6 +7,18 @@ from typing import Any
 import pandas as pd
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.isoformat()
+    if isinstance(value, time):
+        return value.isoformat(timespec="minutes")
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True)
 class Credentials:
     client_id: str
@@ -537,48 +549,52 @@ class MarketSnapshot:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def public_summary(self) -> dict[str, Any]:
-        return {
-            "snapshot_id": self.snapshot_id,
-            "created_at": self.created_at.isoformat(),
-            "market_session": asdict(self.market_session),
-            "nifty_last_price": self.nifty_quote.get("last_price"),
-            "expiry": self.expiry,
-            "option_rows": int(len(self.option_chain)),
-            "candles_1m": int(len(self.candles_1m)),
-            "candles_3m": int(len(self.candles_3m)),
-            "candles_15m": int(len(self.candles_15m)),
-            "future_candles_1m": int(len(self.future_candles_1m)),
-            "future_candles_3m": int(len(self.future_candles_3m)),
-            "future_candles_15m": int(len(self.future_candles_15m)),
-            "indicators": {
-                "3m": asdict(self.indicators.three_minute),
-                "15m": asdict(self.indicators.fifteen_minute),
-            },
-            "price_action": asdict(self.price_action),
-            "levels": asdict(self.levels),
-            "volume": asdict(self.volume),
-            "core_evidence": asdict(self.core_evidence),
-            "option_intelligence": asdict(self.option_intelligence),
-            "heavyweights": asdict(self.heavyweights),
-            "vix_context": asdict(self.vix_context),
-            "institutional_context": asdict(self.institutional_context),
-            "event_risk": asdict(self.event_risk),
-            "decision": asdict(self.decision),
-            "trade_plan": asdict(self.trade_plan),
-            "execution_guard": asdict(self.execution_guard),
-            "position_guardian": asdict(self.position_guardian),
-            "risk_profile": {
-                **asdict(self.risk_profile),
-                "entry_start": self.risk_profile.entry_start.isoformat(
-                    timespec="minutes"
-                ),
-                "entry_end": self.risk_profile.entry_end.isoformat(timespec="minutes"),
-                "forced_exit": self.risk_profile.forced_exit.isoformat(
-                    timespec="minutes"
-                ),
-            },
-            "discipline_state": asdict(self.discipline_state),
-            "feeds": {
-                name: asdict(status) for name, status in self.feed_status.items()
-            },
-        }
+        return _json_safe(
+            {
+                "snapshot_id": self.snapshot_id,
+                "created_at": self.created_at.isoformat(),
+                "market_session": asdict(self.market_session),
+                "nifty_last_price": self.nifty_quote.get("last_price"),
+                "expiry": self.expiry,
+                "option_rows": int(len(self.option_chain)),
+                "candles_1m": int(len(self.candles_1m)),
+                "candles_3m": int(len(self.candles_3m)),
+                "candles_15m": int(len(self.candles_15m)),
+                "future_candles_1m": int(len(self.future_candles_1m)),
+                "future_candles_3m": int(len(self.future_candles_3m)),
+                "future_candles_15m": int(len(self.future_candles_15m)),
+                "indicators": {
+                    "3m": asdict(self.indicators.three_minute),
+                    "15m": asdict(self.indicators.fifteen_minute),
+                },
+                "price_action": asdict(self.price_action),
+                "levels": asdict(self.levels),
+                "volume": asdict(self.volume),
+                "core_evidence": asdict(self.core_evidence),
+                "option_intelligence": asdict(self.option_intelligence),
+                "heavyweights": asdict(self.heavyweights),
+                "vix_context": asdict(self.vix_context),
+                "institutional_context": asdict(self.institutional_context),
+                "event_risk": asdict(self.event_risk),
+                "decision": asdict(self.decision),
+                "trade_plan": asdict(self.trade_plan),
+                "execution_guard": asdict(self.execution_guard),
+                "position_guardian": asdict(self.position_guardian),
+                "risk_profile": {
+                    **asdict(self.risk_profile),
+                    "entry_start": self.risk_profile.entry_start.isoformat(
+                        timespec="minutes"
+                    ),
+                    "entry_end": self.risk_profile.entry_end.isoformat(
+                        timespec="minutes"
+                    ),
+                    "forced_exit": self.risk_profile.forced_exit.isoformat(
+                        timespec="minutes"
+                    ),
+                },
+                "discipline_state": asdict(self.discipline_state),
+                "feeds": {
+                    name: asdict(status) for name, status in self.feed_status.items()
+                },
+            }
+        )

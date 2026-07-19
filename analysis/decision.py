@@ -230,7 +230,10 @@ def calculate_final_decision(
         if direction_gap < CONFIG.decision_minimum_margin and condor < 62:
             wait += 12
             blockers.append("Directional edge is not separated")
-        if vix.movement == "RISING FAST" or vix.regime == "HIGH":
+        if vix.status != "READY":
+            wait += 6
+            blockers.append("India VIX data is unavailable")
+        elif vix.movement == "RISING FAST" or vix.regime == "HIGH":
             wait += 14
             blockers.append("VIX risk is elevated")
         if inst_caution:
@@ -249,6 +252,11 @@ def calculate_final_decision(
         ce_cautions.append(warning)
         pe_cautions.append(warning)
         condor_cautions.append(warning)
+    if vix.status != "READY":
+        vix_warning = "India VIX data is unavailable"
+        ce_cautions.append(vix_warning)
+        pe_cautions.append(vix_warning)
+        condor_cautions.append(vix_warning)
     if event_blocker:
         ce_cautions.append(event_blocker)
         pe_cautions.append(event_blocker)

@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from analysis.evidence_matrix import build_compact_evidence_matrix
 from models import MarketLevel, MarketSnapshot, TimeframeIndicators
 
 
@@ -36,6 +37,38 @@ def render_header(snapshot: MarketSnapshot) -> None:
     c2.metric("Expiry", snapshot.expiry or "Unavailable")
     c3.metric("Snapshot", snapshot.snapshot_id[-8:])
     c4.metric("Created", snapshot.created_at.strftime("%H:%M:%S IST"))
+
+
+def render_evidence_matrix(snapshot: MarketSnapshot) -> None:
+    st.subheader("All Features — Compact Evidence")
+    st.caption(
+        "Six compact rows cover every active feature. Directional percentages inside each "
+        "row add to 100 and are evidence mix, not profit probability. This table is display-only "
+        "and cannot change the Final One-Brain Decision."
+    )
+    rows = build_compact_evidence_matrix(snapshot)
+    st.dataframe(
+        pd.DataFrame(rows),
+        width="stretch",
+        hide_index=True,
+        row_height=38,
+        column_config={
+            "Module": st.column_config.TextColumn("Module", width="medium"),
+            "Bullish %": st.column_config.ProgressColumn(
+                "Bullish", min_value=0, max_value=100, format="%.0f%%", width="small"
+            ),
+            "Bearish %": st.column_config.ProgressColumn(
+                "Bearish", min_value=0, max_value=100, format="%.0f%%", width="small"
+            ),
+            "Neutral %": st.column_config.ProgressColumn(
+                "Neutral", min_value=0, max_value=100, format="%.0f%%", width="small"
+            ),
+            "Confidence %": st.column_config.ProgressColumn(
+                "Confidence", min_value=0, max_value=100, format="%.0f%%", width="small"
+            ),
+            "Result": st.column_config.TextColumn("Current result", width="large"),
+        },
+    )
 
 
 def render_decision(snapshot: MarketSnapshot) -> None:
@@ -70,18 +103,33 @@ def render_decision(snapshot: MarketSnapshot) -> None:
         st.write("**Main blocker**")
         st.write(f"• {item.blocker}")
 
-    rows = []
-    for strategy in (item.ce_sell, item.pe_sell, item.iron_condor, item.wait_need):
-        rows.append(
-            {
-                "Setup": strategy.name,
-                "Score / Need %": strategy.score,
-                "Status": strategy.status,
-                "Main evidence": " | ".join(strategy.reasons),
-                "Cautions": " | ".join(strategy.cautions),
-            }
+    with st.expander("Decision evidence & cautions", expanded=False):
+        rows = []
+        for strategy in (item.ce_sell, item.pe_sell, item.iron_condor, item.wait_need):
+            rows.append(
+                {
+                    "Setup": strategy.name,
+                    "Score / Need %": strategy.score,
+                    "Status": strategy.status,
+                    "Key evidence": " | ".join(strategy.reasons),
+                    "Cautions": " | ".join(strategy.cautions) or "None",
+                }
+            )
+        st.dataframe(
+            pd.DataFrame(rows),
+            width="stretch",
+            hide_index=True,
+            row_height=44,
+            column_config={
+                "Setup": st.column_config.TextColumn(width="small"),
+                "Score / Need %": st.column_config.NumberColumn(
+                    format="%.1f%%", width="small"
+                ),
+                "Status": st.column_config.TextColumn(width="small"),
+                "Key evidence": st.column_config.TextColumn(width="large"),
+                "Cautions": st.column_config.TextColumn(width="large"),
+            },
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _leg_label(legs: tuple[Any, ...]) -> str:
@@ -129,7 +177,7 @@ def render_trade_plan(snapshot: MarketSnapshot) -> None:
                 "Blocker": plan.blocker,
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     chosen = {
         "CE SELL": bundle.ce_sell,
@@ -190,7 +238,7 @@ def render_execution_guard(snapshot: MarketSnapshot) -> None:
             "SL ₹": item.stop_loss_rupees,
         }
     ]
-    st.dataframe(pd.DataFrame(risk_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(risk_rows), width="stretch", hide_index=True)
 
     low = (
         f"Below {item.spot_invalidation_low:,.2f}"
@@ -286,7 +334,7 @@ def render_position_guardian(snapshot: MarketSnapshot) -> None:
             "Status": item.status,
         }
     ]
-    st.dataframe(pd.DataFrame(rule_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rule_rows), width="stretch", hide_index=True)
 
     if item.legs:
         leg_rows = [
@@ -301,7 +349,7 @@ def render_position_guardian(snapshot: MarketSnapshot) -> None:
             }
             for leg in item.legs
         ]
-        st.dataframe(pd.DataFrame(leg_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(leg_rows), width="stretch", hide_index=True)
 
     left, right = st.columns(2)
     with left:
@@ -327,7 +375,7 @@ def render_feed_status(snapshot: MarketSnapshot) -> None:
                 "Source": status.source,
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def render_core_evidence(snapshot: MarketSnapshot) -> None:
@@ -388,7 +436,7 @@ def render_price_action(snapshot: MarketSnapshot) -> None:
         _price_action_row(bundle.three_minute),
         _price_action_row(bundle.fifteen_minute),
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     with st.expander("Price Action reasons"):
         st.json(
             {
@@ -452,7 +500,7 @@ def render_levels(snapshot: MarketSnapshot) -> None:
         _level_row(item.immediate_resistance, "Immediate Resistance"),
         _level_row(item.strong_resistance, "Strong Resistance"),
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def _volume_row(item: Any) -> dict[str, Any]:
@@ -484,7 +532,7 @@ def render_volume(snapshot: MarketSnapshot) -> None:
         f"**Confidence:** {item.confidence:.1f}% | **Status:** {item.status}"
     )
     rows = [_volume_row(item.three_minute), _volume_row(item.fifteen_minute)]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def render_candles(snapshot: MarketSnapshot) -> None:
@@ -501,27 +549,21 @@ def render_candles(snapshot: MarketSnapshot) -> None:
         st.caption(
             "3-minute candles are aggregated from Dhan 1-minute candles at 09:15 IST."
         )
-        st.dataframe(
-            snapshot.candles_3m.tail(30), use_container_width=True, hide_index=True
-        )
+        st.dataframe(snapshot.candles_3m.tail(30), width="stretch", hide_index=True)
     with tabs[1]:
-        st.dataframe(
-            snapshot.candles_15m.tail(30), use_container_width=True, hide_index=True
-        )
+        st.dataframe(snapshot.candles_15m.tail(30), width="stretch", hide_index=True)
     with tabs[2]:
-        st.dataframe(
-            snapshot.candles_1m.tail(30), use_container_width=True, hide_index=True
-        )
+        st.dataframe(snapshot.candles_1m.tail(30), width="stretch", hide_index=True)
     with tabs[3]:
         st.dataframe(
             snapshot.future_candles_3m.tail(30),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     with tabs[4]:
         st.dataframe(
             snapshot.future_candles_15m.tail(30),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -549,9 +591,7 @@ def render_option_chain(snapshot: MarketSnapshot) -> None:
         "Raw option-chain fields from the same authoritative snapshot. Derived flow is shown "
         "in the Options Intelligence section above."
     )
-    st.dataframe(
-        snapshot.option_chain[available], use_container_width=True, hide_index=True
-    )
+    st.dataframe(snapshot.option_chain[available], width="stretch", hide_index=True)
 
 
 def render_heavyweights(snapshot: MarketSnapshot) -> None:
@@ -580,7 +620,7 @@ def render_heavyweights(snapshot: MarketSnapshot) -> None:
                 "Security ID": item.get("security_id"),
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def _indicator_row(item: TimeframeIndicators) -> dict[str, Any]:
@@ -610,7 +650,7 @@ def render_indicators(snapshot: MarketSnapshot) -> None:
         _indicator_row(snapshot.indicators.three_minute),
         _indicator_row(snapshot.indicators.fifteen_minute),
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     with st.expander("Indicator JSON"):
         st.json(
             {
@@ -654,7 +694,7 @@ def render_option_flow_matrix(snapshot: MarketSnapshot) -> None:
     if not rows:
         st.info("Option flow matrix is unavailable in this snapshot.")
         return
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def render_option_windows(snapshot: MarketSnapshot) -> None:
@@ -679,7 +719,7 @@ def render_option_windows(snapshot: MarketSnapshot) -> None:
         "A 1m/3m/5m window is used only when a historical sample is close enough to "
         "that target. Distant old samples are rejected."
     )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
@@ -698,7 +738,7 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
                 "Status": wall.status,
             }
         )
-    st.dataframe(pd.DataFrame(walls), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(walls), width="stretch", hide_index=True)
     pcr = item.pcr
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
@@ -743,7 +783,7 @@ def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
         f"**Weight date:** {snapshot.metadata.get('top7_weight_date', '—')} | **Status:** {item.status}"
     )
     rows = [asdict(row) for row in item.rows]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def render_market_context(snapshot: MarketSnapshot) -> None:
@@ -785,7 +825,7 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
             "DII net ₹ cr": institutional.dii_15d_net,
         },
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     st.write(
         f"**Institutional status:** {institutional.status} | "
         f"**Observations:** {institutional.observations} | "
@@ -809,6 +849,13 @@ def render_vix_context(snapshot: MarketSnapshot) -> None:
     )
     c3.metric("VIX Regime", item.regime)
     c4.metric("Movement", item.movement)
-    st.info(
+    message = (
         f"**Seller environment:** {item.seller_environment} | **Status:** {item.status}"
     )
+    if item.status != "READY":
+        st.warning(
+            f"{message} — zero or missing VIX is treated as unavailable, never as a "
+            "balanced premium environment."
+        )
+    else:
+        st.info(message)

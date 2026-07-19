@@ -1,68 +1,67 @@
-# Architecture — V1.8 Position Guardian
+# Architecture — V2.0 Compact Evidence & Integrity
 
 ## One market-data authority
 
 Only `services/snapshot_service.py` reads DhanHQ and builds one `MarketSnapshot`.
-Analysis modules never fetch data. The option-chain response is parsed once:
+Analysis modules never fetch data. The option-chain response is parsed once and reused
+for option intelligence, protected strike planning and exact-leg position monitoring.
 
-- ATM±7 rows feed the visible chain, option intelligence and strike planner.
-- The same full parsed chain is kept only inside the snapshot build for monitoring
-  exact legs of a manually marked open trade.
+## One strategy brain
 
-No second option-chain API request is made.
+`analysis/decision.py` remains the only module that can produce:
 
-## Canonical processing order
+- CE Sell suitability
+- PE Sell suitability
+- Iron Condor suitability
+- WAIT Need
+- Final Action
 
-1. Core market and options evidence
-2. `analysis/decision.py` — the only final strategy brain
-3. `analysis/trade_plan.py` — protected strikes after the decision
-4. `analysis/execution_guard.py` — pre-entry safety gate
-5. `analysis/position_guardian.py` — post-entry read-only monitor
+The following modules cannot change the final strategy:
 
-The trade planner, execution guard and position guardian cannot calculate final
-strategy scores, change the selected action, fetch data or place orders.
+- `analysis/evidence_matrix.py` — six-row display summary only
+- `analysis/trade_plan.py` — protected strikes after the decision
+- `analysis/execution_guard.py` — pre-entry safety gate
+- `analysis/position_guardian.py` — post-entry read-only monitor
 
-## Position record
+## Compact evidence matrix
 
-`create_trade_record()` runs only after an `ENTRY READY` setup is manually marked.
-It freezes:
+`analysis/evidence_matrix.py` consumes the already-built snapshot and groups all
+active evidence into six display rows. Directional values are normalized within each
+row so Bullish + Bearish + Neutral = 100. The matrix is not stored as a second market
+state and is not passed into `analysis/decision.py`.
 
-- action, setup and expiry
-- exact short and hedge strikes
-- conservative entry prices: short bid, hedge ask, LTP fallback
-- entry credit, lots, lot size and entry spot
-- target debit, SL debit, spot invalidation and forced-exit time
+The six rows cover:
 
-`services/discipline_store.py` stores this small record in the current-day journal.
-Schema V1 is migrated to V2 by adding an empty trade record without discarding the
-existing same-day signal history or one-trade lock.
+1. 3m and 15m price action
+2. premium, OI, volume, movement windows, persistence, walls and PCR
+3. 3m and 15m EMA, MACD and RSI
+4. support/resistance room and NIFTY-futures participation
+5. Top-7 weighted contribution and FII/DII background
+6. India VIX, feed integrity, market session and verified event risk
 
-## Position monitoring maths
+## VIX integrity
 
-For the exact stored legs:
+A VIX last price that is missing, zero or negative is invalid. It becomes:
 
-- short closing cost = current ask, LTP fallback
-- hedge closing value = current bid, LTP fallback
-- combination close debit = sum(short closing costs) − sum(hedge closing values)
-- P&L points = frozen entry credit − current close debit
-- estimated P&L rupees = P&L points × lot size × lots
+- regime: `UNAVAILABLE`
+- movement: `UNAVAILABLE`
+- seller environment: `VIX DATA UNAVAILABLE`
+- status: `INVALID / UNAVAILABLE`
 
-The monitor blocks P&L when an exact leg, expiry, lot value or entry credit is
-missing. It never substitutes a nearby strike.
+The decision brain applies only a bounded caution/WAIT penalty. It never converts
+invalid VIX into a false balanced-premium signal.
 
-## Alert precedence
+## Compact UI order
 
-For a live open position:
+1. Market-session banner and NIFTY header
+2. All Features — Compact Evidence
+3. Final One-Brain Decision
+4. Collapsed planner/execution/position section
+5. Collapsed detailed core evidence
+6. Collapsed detailed options intelligence
+7. Collapsed raw market data and ISO-safe Snapshot JSON
 
-1. data integrity block
-2. compulsory exit time
-3. NIFTY spot invalidation
-4. protected-combination SL debit
-5. protected-combination target debit
-6. profit-protection / rising-risk warning
-7. hold and monitor
-
-A closed or weekend session is always reference-only. All exits remain manual.
+No calculation or feature is removed; only the default presentation is shortened.
 
 ## Bounded local state
 
@@ -71,5 +70,5 @@ A closed or weekend session is always reference-only. All exits remain manual.
 - `services/discipline_store.py`: current-day signals, one-trade lock, frozen manual
   trade and manual outcome
 
-Runtime files are gitignored and may reset after a Streamlit redeploy. Broker order
-IDs, credentials and account positions are never stored.
+Runtime files are gitignored and may reset after a Streamlit redeploy. Credentials,
+broker order IDs and account positions are never stored by the app.

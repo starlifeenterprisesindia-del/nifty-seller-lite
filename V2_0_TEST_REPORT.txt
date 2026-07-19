@@ -1,0 +1,20 @@
+NIFTY SELLER LITE — V2.0 TEST REPORT
+
+RESULTS
+- Automated tests: 80 passed
+- Python compilation: PASS
+- Ruff lint: PASS
+- Ruff formatting: PASS
+- Streamlit AppTest safe start without credentials: PASS
+- Streamlit headless server startup: PASS
+- Compact matrix: six rows and normalized directional rows: PASS
+- Zero-VIX invalid/unavailable regression: PASS
+- Decision VIX caution/WAIT regression: PASS
+- Nested JSON datetime ISO serialization: PASS
+- One snapshot service / one final strategy brain hygiene: PASS
+
+LIMITATION
+- Authenticated live DhanHQ market validation was not possible in the local test
+  environment because production Streamlit Secrets are not available here.
+- Verify VIX, live feed freshness, option movement windows and final decision on the
+  deployed app during market hours.

@@ -19,6 +19,7 @@ from services.snapshot_service import SnapshotService
 from ui.components import (
     render_candles,
     render_decision,
+    render_evidence_matrix,
     render_execution_guard,
     render_core_evidence,
     render_feed_status,
@@ -45,9 +46,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V1.8 Position Guardian — after the one-brain decision, protected strike plan and "
-    "execution guard, a manually marked trade is monitored for live combination debit, "
-    "P&L, target, SL, spot invalidation and compulsory exit. Read only; no order placement."
+    "V2.0 Compact Evidence & Integrity — every active feature is summarized in one "
+    "six-row table above the Final One-Brain Decision. Detailed engines stay available "
+    "inside compact expanders. Read only; no order placement."
 )
 
 
@@ -84,15 +85,9 @@ with st.sidebar:
     else:
         st.error("Dhan credentials missing")
     st.caption("Credentials remain only in Streamlit Secrets under [dhan].")
-    refresh = st.button(
-        "Fetch Fresh Snapshot", type="primary", use_container_width=True
-    )
-    clear_instrument_cache = st.button(
-        "Clear instrument cache", use_container_width=True
-    )
-    clear_option_state = st.button(
-        "Clear today's option history", use_container_width=True
-    )
+    refresh = st.button("Fetch Fresh Snapshot", type="primary", width="stretch")
+    clear_instrument_cache = st.button("Clear instrument cache", width="stretch")
+    clear_option_state = st.button("Clear today's option history", width="stretch")
     with st.expander("Risk & one-trade discipline", expanded=True):
         capital_rupees = st.number_input(
             "Trading capital ₹",
@@ -160,7 +155,7 @@ with st.sidebar:
         )
         event_verified = st.checkbox("Risk/news personally verified", value=False)
         event_note = st.text_input("Short event note (optional)", value="")
-        save_context = st.button("Save market context", use_container_width=True)
+        save_context = st.button("Save market context", width="stretch")
         st.caption(
             "Missing FII/DII is kept as missing, never converted to zero. "
             "Medium/high event risk is accepted only when verified."
@@ -248,167 +243,178 @@ snapshot = st.session_state.snapshot
 render_market_session(snapshot)
 render_header(snapshot)
 
+render_evidence_matrix(snapshot)
 render_decision(snapshot)
-render_trade_plan(snapshot)
-render_execution_guard(snapshot)
-render_position_guardian(snapshot)
 
-st.write("**Manual one-trade journal**")
-maximum_mark_lots = max(1, snapshot.execution_guard.allowed_lots)
-planned_lots = st.number_input(
-    "Lots to record when trade is taken",
-    min_value=1,
-    max_value=maximum_mark_lots,
-    value=1,
-    step=1,
-    disabled=snapshot.execution_guard.readiness != "ENTRY READY",
+execution_expanded = (
+    snapshot.market_session.is_live and snapshot.decision.final_action != "WAIT"
 )
-trade_col, target_col, sl_col = st.columns(3)
-with trade_col:
-    mark_trade = st.button(
-        "Mark current trade taken",
-        disabled=(
-            snapshot.execution_guard.readiness != "ENTRY READY"
-            or snapshot.discipline_state.trades_taken >= 1
-        ),
-        use_container_width=True,
+with st.expander(
+    "Protected Strike Planner, Execution Guard & Position Guardian",
+    expanded=execution_expanded,
+):
+    render_trade_plan(snapshot)
+    render_execution_guard(snapshot)
+    render_position_guardian(snapshot)
+
+    st.write("**Manual one-trade journal**")
+    maximum_mark_lots = max(1, snapshot.execution_guard.allowed_lots)
+    planned_lots = st.number_input(
+        "Lots to record when trade is taken",
+        min_value=1,
+        max_value=maximum_mark_lots,
+        value=1,
+        step=1,
+        disabled=snapshot.execution_guard.readiness != "ENTRY READY",
     )
-with target_col:
-    mark_target = st.button(
-        "Target / manual exit — lock day",
-        disabled=(
-            snapshot.discipline_state.trades_taken < 1
-            or snapshot.discipline_state.last_outcome != "OPEN"
-        ),
-        use_container_width=True,
+    trade_col, target_col, sl_col = st.columns(3)
+    with trade_col:
+        mark_trade = st.button(
+            "Mark current trade taken",
+            disabled=(
+                snapshot.execution_guard.readiness != "ENTRY READY"
+                or snapshot.discipline_state.trades_taken >= 1
+            ),
+            width="stretch",
+        )
+    with target_col:
+        mark_target = st.button(
+            "Target / manual exit — lock day",
+            disabled=(
+                snapshot.discipline_state.trades_taken < 1
+                or snapshot.discipline_state.last_outcome != "OPEN"
+            ),
+            width="stretch",
+        )
+    with sl_col:
+        mark_sl = st.button(
+            "SL hit — lock day",
+            disabled=(
+                snapshot.discipline_state.trades_taken < 1
+                or snapshot.discipline_state.last_outcome != "OPEN"
+            ),
+            width="stretch",
+        )
+    try:
+        if mark_trade:
+            trade_record = create_trade_record(
+                captured_at=snapshot.created_at,
+                decision=snapshot.decision,
+                trade_plan=snapshot.trade_plan,
+                execution_guard=snapshot.execution_guard,
+                lots=int(planned_lots),
+                lot_size=snapshot.risk_profile.lot_size,
+                spot=snapshot.nifty_quote.get("last_price"),
+            )
+            discipline_store.mark_trade(
+                session_date=snapshot.created_at.date(),
+                action=snapshot.decision.final_action,
+                trade_record=trade_record,
+            )
+            st.session_state.pop("snapshot", None)
+            st.rerun()
+        if mark_target:
+            discipline_store.mark_outcome(
+                session_date=snapshot.created_at.date(),
+                outcome="TARGET / MANUAL EXIT",
+                exit_debit_points=snapshot.position_guardian.current_debit_points,
+                realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
+                captured_at=snapshot.created_at,
+            )
+            st.session_state.pop("snapshot", None)
+            st.rerun()
+        if mark_sl:
+            discipline_store.mark_outcome(
+                session_date=snapshot.created_at.date(),
+                outcome="SL HIT",
+                exit_debit_points=snapshot.position_guardian.current_debit_points,
+                realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
+                captured_at=snapshot.created_at,
+            )
+            st.session_state.pop("snapshot", None)
+            st.rerun()
+    except Exception as exc:
+        st.error(f"Discipline journal not updated: {exc}")
+    st.caption(
+        "The journal is local to the current Streamlit deployment filesystem. It freezes "
+        "the manually marked protected setup for monitoring, but never places, modifies or "
+        "exits a broker order."
     )
-with sl_col:
-    mark_sl = st.button(
-        "SL hit — lock day",
-        disabled=(
-            snapshot.discipline_state.trades_taken < 1
-            or snapshot.discipline_state.last_outcome != "OPEN"
-        ),
-        use_container_width=True,
+
+with st.expander("Detailed Core Market Evidence", expanded=False):
+    st.subheader("Core Market Evidence")
+    render_core_evidence(snapshot)
+
+    core_tabs = st.tabs(
+        [
+            "Price Action",
+            "Support & Resistance",
+            "Volume",
+            "EMA / MACD / RSI",
+            "Feed Integrity",
+        ]
     )
-try:
-    if mark_trade:
-        trade_record = create_trade_record(
-            captured_at=snapshot.created_at,
-            decision=snapshot.decision,
-            trade_plan=snapshot.trade_plan,
-            execution_guard=snapshot.execution_guard,
-            lots=int(planned_lots),
-            lot_size=snapshot.risk_profile.lot_size,
-            spot=snapshot.nifty_quote.get("last_price"),
-        )
-        discipline_store.mark_trade(
-            session_date=snapshot.created_at.date(),
-            action=snapshot.decision.final_action,
-            trade_record=trade_record,
-        )
-        st.session_state.pop("snapshot", None)
-        st.rerun()
-    if mark_target:
-        discipline_store.mark_outcome(
-            session_date=snapshot.created_at.date(),
-            outcome="TARGET / MANUAL EXIT",
-            exit_debit_points=snapshot.position_guardian.current_debit_points,
-            realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
-            captured_at=snapshot.created_at,
-        )
-        st.session_state.pop("snapshot", None)
-        st.rerun()
-    if mark_sl:
-        discipline_store.mark_outcome(
-            session_date=snapshot.created_at.date(),
-            outcome="SL HIT",
-            exit_debit_points=snapshot.position_guardian.current_debit_points,
-            realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
-            captured_at=snapshot.created_at,
-        )
-        st.session_state.pop("snapshot", None)
-        st.rerun()
-except Exception as exc:
-    st.error(f"Discipline journal not updated: {exc}")
-st.caption(
-    "The journal is local to the current Streamlit deployment filesystem. It freezes "
-    "the manually marked protected setup for monitoring, but never places, modifies or "
-    "exits a broker order."
-)
+    with core_tabs[0]:
+        render_price_action(snapshot)
+    with core_tabs[1]:
+        render_levels(snapshot)
+    with core_tabs[2]:
+        render_volume(snapshot)
+    with core_tabs[3]:
+        render_indicators(snapshot)
+    with core_tabs[4]:
+        render_feed_status(snapshot)
 
-st.subheader("Core Market Evidence")
-render_core_evidence(snapshot)
+with st.expander("Detailed Options Intelligence", expanded=False):
+    st.subheader("Options Intelligence — Evidence Only")
+    render_option_intelligence(snapshot)
+    option_tabs = st.tabs(
+        [
+            "Premium + OI + Volume Flow",
+            "1m / 3m / 5m Movement",
+            "OI Walls, Clusters & PCR",
+            "Top-7 Weighted Contribution",
+            "VIX Context",
+            "FII/DII & Event Risk",
+        ]
+    )
+    with option_tabs[0]:
+        render_option_flow_matrix(snapshot)
+    with option_tabs[1]:
+        render_option_windows(snapshot)
+    with option_tabs[2]:
+        render_walls_and_pcr(snapshot)
+    with option_tabs[3]:
+        render_heavyweight_intelligence(snapshot)
+    with option_tabs[4]:
+        render_vix_context(snapshot)
+    with option_tabs[5]:
+        render_market_context(snapshot)
 
-core_tabs = st.tabs(
-    [
-        "Price Action",
-        "Support & Resistance",
-        "Volume",
-        "EMA / MACD / RSI",
-        "Feed Integrity",
-    ]
-)
-with core_tabs[0]:
-    render_price_action(snapshot)
-with core_tabs[1]:
-    render_levels(snapshot)
-with core_tabs[2]:
-    render_volume(snapshot)
-with core_tabs[3]:
-    render_indicators(snapshot)
-with core_tabs[4]:
-    render_feed_status(snapshot)
-
-st.subheader("Options Intelligence — Evidence Only")
-render_option_intelligence(snapshot)
-option_tabs = st.tabs(
-    [
-        "Premium + OI + Volume Flow",
-        "1m / 3m / 5m Movement",
-        "OI Walls, Clusters & PCR",
-        "Top-7 Weighted Contribution",
-        "VIX Context",
-        "FII/DII & Event Risk",
-    ]
-)
-with option_tabs[0]:
-    render_option_flow_matrix(snapshot)
-with option_tabs[1]:
-    render_option_windows(snapshot)
-with option_tabs[2]:
-    render_walls_and_pcr(snapshot)
-with option_tabs[3]:
-    render_heavyweight_intelligence(snapshot)
-with option_tabs[4]:
-    render_vix_context(snapshot)
-with option_tabs[5]:
-    render_market_context(snapshot)
-
-st.subheader("Raw Market Data")
-market_tabs = st.tabs(
-    [
-        "Candles & Futures Volume",
-        "Option Chain",
-        "Top-7 Quotes",
-        "VIX & Future",
-        "Snapshot JSON",
-    ]
-)
-with market_tabs[0]:
-    render_candles(snapshot)
-with market_tabs[1]:
-    render_option_chain(snapshot)
-with market_tabs[2]:
-    render_heavyweights(snapshot)
-with market_tabs[3]:
-    left, right = st.columns(2)
-    left.write("**India VIX quote**")
-    left.json(snapshot.vix_quote or {"status": "not resolved"})
-    right.write("**Nearest NIFTY future quote**")
-    right.json(snapshot.nifty_future_quote or {"status": "not resolved"})
-with market_tabs[4]:
-    st.json(snapshot.public_summary())
+with st.expander("Raw Market Data & Snapshot JSON", expanded=False):
+    market_tabs = st.tabs(
+        [
+            "Candles & Futures Volume",
+            "Option Chain",
+            "Top-7 Quotes",
+            "VIX & Future",
+            "Snapshot JSON",
+        ]
+    )
+    with market_tabs[0]:
+        render_candles(snapshot)
+    with market_tabs[1]:
+        render_option_chain(snapshot)
+    with market_tabs[2]:
+        render_heavyweights(snapshot)
+    with market_tabs[3]:
+        left, right = st.columns(2)
+        left.write("**India VIX quote**")
+        left.json(snapshot.vix_quote or {"status": "not resolved"})
+        right.write("**Nearest NIFTY future quote**")
+        right.json(snapshot.nifty_future_quote or {"status": "not resolved"})
+    with market_tabs[4]:
+        st.json(snapshot.public_summary())
 
 st.info(
     "Decision-support only. Strategy scores are independent suitability percentages; "

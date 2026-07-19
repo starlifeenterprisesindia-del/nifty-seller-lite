@@ -39,3 +39,13 @@ def test_vix_context_marks_high_gap_risk():
     assert result.regime == "HIGH"
     assert result.movement == "RISING FAST"
     assert result.seller_environment == "HIGH PREMIUM / HIGH GAP RISK"
+
+
+def test_zero_vix_is_unavailable_not_balanced():
+    result = calculate_vix_context(
+        {"last_price": 0, "ohlc": {"close": 0}},
+        datetime(2026, 7, 20, 10, 0, tzinfo=IST),
+    )
+    assert result.last_price is None
+    assert result.status == "INVALID / UNAVAILABLE"
+    assert result.seller_environment == "VIX DATA UNAVAILABLE"

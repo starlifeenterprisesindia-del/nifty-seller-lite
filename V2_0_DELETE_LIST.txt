@@ -1,0 +1,34 @@
+DELETE THESE OBSOLETE DOCUMENT FILES FROM THE GITHUB REPOSITORY AFTER V2.0 UPLOAD:
+
+DELETE_OLD_FILES_V0_5.txt
+DEPLOY_V1_5.txt
+V1_5_CHANGELOG.txt
+V1_5_DELETE_LIST.txt
+V1_5_TEST_REPORT.txt
+V1_5_UPLOAD_LIST.txt
+DEPLOY_V1_8.txt
+V1_8_CHANGELOG.txt
+V1_8_DELETE_LIST.txt
+V1_8_TEST_REPORT.txt
+V1_8_UPLOAD_LIST.txt
+
+DO NOT DELETE:
+analysis/
+services/
+tests/
+ui/
+data/
+.streamlit/
+.gitignore
+app.py
+config.py
+models.py
+requirements.txt
+requirements-dev.txt
+README.md
+ARCHITECTURE.md
+DEPLOY_V2_0.txt
+V2_0_UPLOAD_LIST.txt
+V2_0_DELETE_LIST.txt
+V2_0_CHANGELOG.txt
+V2_0_TEST_REPORT.txt

@@ -13,21 +13,21 @@ def calculate_vix_context(
     quote = quote or {}
     last = quote.get("last_price")
     previous_close = (quote.get("ohlc") or {}).get("close")
-    if last is None:
+    last_value = float(last) if last is not None else None
+    if last_value is None or last_value <= 0:
         return VixContext(
             as_of=captured_at,
             last_price=None,
-            previous_close=float(previous_close)
-            if previous_close is not None
-            else None,
+            previous_close=(
+                float(previous_close) if previous_close not in (None, 0) else None
+            ),
             change_pct=None,
             regime="UNAVAILABLE",
             movement="UNAVAILABLE",
-            seller_environment="UNAVAILABLE",
-            status="UNAVAILABLE",
+            seller_environment="VIX DATA UNAVAILABLE",
+            status="INVALID / UNAVAILABLE",
         )
 
-    last_value = float(last)
     previous_value = float(previous_close) if previous_close not in (None, 0) else None
     change = (
         (last_value - previous_value) / previous_value * 100.0
