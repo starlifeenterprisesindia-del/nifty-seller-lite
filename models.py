@@ -308,6 +308,73 @@ class FinalDecision:
     status: str
 
 
+@dataclass(frozen=True)
+class OptionLeg:
+    role: str
+    side: str
+    strike: float
+    last_price: float | None
+    delta: float | None
+    oi: float | None
+    volume: float | None
+    bid: float | None
+    ask: float | None
+    spread_pct: float | None
+    distance_points: float
+    liquidity_score: float
+    status: str
+
+
+@dataclass(frozen=True)
+class SetupPlan:
+    name: str
+    short_legs: tuple[OptionLeg, ...]
+    hedge_legs: tuple[OptionLeg, ...]
+    estimated_credit_points: float | None
+    width_points: float | None
+    max_risk_points: float | None
+    lower_breakeven: float | None
+    upper_breakeven: float | None
+    quality_score: float
+    status: str
+    reasons: tuple[str, ...]
+    blocker: str
+
+    @property
+    def available(self) -> bool:
+        return bool(self.short_legs and self.hedge_legs)
+
+    @classmethod
+    def unavailable(cls, name: str, blocker: str) -> "SetupPlan":
+        return cls(
+            name=name,
+            short_legs=(),
+            hedge_legs=(),
+            estimated_credit_points=None,
+            width_points=None,
+            max_risk_points=None,
+            lower_breakeven=None,
+            upper_breakeven=None,
+            quality_score=0.0,
+            status="UNAVAILABLE",
+            reasons=(),
+            blocker=blocker,
+        )
+
+
+@dataclass(frozen=True)
+class TradePlanBundle:
+    as_of: datetime
+    expiry: str | None
+    spot: float | None
+    ce_sell: SetupPlan
+    pe_sell: SetupPlan
+    iron_condor: SetupPlan
+    selected_setup: str
+    status: str
+    blocker: str
+
+
 @dataclass
 class MarketSnapshot:
     snapshot_id: str
@@ -334,6 +401,7 @@ class MarketSnapshot:
     institutional_context: InstitutionalContext
     event_risk: EventRiskContext
     decision: FinalDecision
+    trade_plan: TradePlanBundle
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
@@ -367,6 +435,7 @@ class MarketSnapshot:
             "institutional_context": asdict(self.institutional_context),
             "event_risk": asdict(self.event_risk),
             "decision": asdict(self.decision),
+            "trade_plan": asdict(self.trade_plan),
             "feeds": {
                 name: asdict(status) for name, status in self.feed_status.items()
             },

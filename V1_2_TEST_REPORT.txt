@@ -1,0 +1,20 @@
+NIFTY SELLER LITE V1.2 TEST REPORT
+
+Python compilation: PASS
+Ruff lint: PASS
+Ruff format check: PASS
+Automated tests: 54/54 PASS
+Streamlit headless startup: PASS
+One final decision brain integrity: PASS
+Trade planner wired only after final decision: PASS
+CE protected-spread candidate test: PASS
+PE protected-spread candidate test: PASS
+Iron Condor four-leg structure test: PASS
+WAIT execution-block test: PASS
+Reference-only market-block test: PASS
+Missing-hedge safe-failure test: PASS
+Upload-only patch overlay integrity: PASS (to be rechecked after packaging)
+
+Not performed in this environment:
+- Authenticated live DhanHQ market-hours execution, because user credentials are not available here.
+- Actual broker fill/slippage/margin validation. The app remains read-only.

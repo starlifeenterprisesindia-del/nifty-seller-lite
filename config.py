@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "1.0.0_FINAL_ONE_BRAIN"
+    version: str = "1.2.0_HEDGED_STRIKE_PLANNER"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5
@@ -56,7 +56,7 @@ class AppConfig:
         InstrumentRef("State Bank of India", "3045", "NSE_EQ", "EQUITY", "SBIN", 3.88),
         InstrumentRef("Axis Bank", "5900", "NSE_EQ", "EQUITY", "AXISBANK", 3.54),
     )
-    option_strikes_each_side: int = 5
+    option_strikes_each_side: int = 7
     candle_lookback_days: int = 7
     minimum_one_minute_candles: int = 30
     minimum_indicator_candles: int = 50
@@ -95,6 +95,19 @@ class AppConfig:
     decision_wait_block_threshold: float = 60.0
     decision_min_option_confidence: float = 58.0
     decision_min_core_confidence: float = 55.0
+
+    # Read-only strike-planner settings. This planner consumes the final one-brain
+    # action and cannot change strategy scores or place orders.
+    trade_target_abs_delta: float = 0.20
+    trade_min_abs_delta: float = 0.08
+    trade_max_abs_delta: float = 0.38
+    trade_target_distance_pct: float = 1.0
+    trade_distance_tolerance_pct: float = 0.9
+    trade_hedge_steps: int = 2
+    trade_min_option_premium: float = 3.0
+    trade_min_credit_points: float = 1.0
+    trade_min_plan_quality: float = 55.0
+    trade_level_clearance_points: float = 10.0
 
     @property
     def top7_symbols(self) -> tuple[str, ...]:

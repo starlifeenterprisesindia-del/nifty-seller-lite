@@ -21,6 +21,10 @@ def test_release_has_no_old_release_documents_or_backup_code():
         "DELETE_OLD_FILES_V0_8.txt",
         "V0_8_CHANGELOG.txt",
         "V0_8_TEST_REPORT.txt",
+        "V1_0_UPLOAD_LIST.txt",
+        "V1_0_DELETE_LIST.txt",
+        "V1_0_CHANGELOG.txt",
+        "V1_0_TEST_REPORT.txt",
         "app_old.py",
         "backup.py",
     }

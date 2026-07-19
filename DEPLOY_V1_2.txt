@@ -1,0 +1,13 @@
+NIFTY SELLER LITE V1.2 — UPLOAD-ONLY DEPLOYMENT
+
+1. Download and extract nifty-seller-lite-v1-2-upload-only-patch.zip.
+2. Open the existing GitHub repository nifty-seller-lite.
+3. Upload every file/folder INSIDE the extracted patch to the repository root.
+4. Allow matching files to replace the current V1.0 files.
+5. Do not upload any other V1.0/V0.8 files again.
+6. Commit message: V1.2 Hedged Strike Planner
+7. Do not delete/recreate the Streamlit app and do not change Streamlit Secrets.
+8. After deployment, delete only the old V1.0 release documents listed in V1_2_DELETE_LIST.txt.
+9. Open Streamlit, confirm version 1.2.0_HEDGED_STRIKE_PLANNER, then press Fetch Fresh Snapshot.
+
+The planner is read-only. It never places orders and it cannot override the final one-brain decision.

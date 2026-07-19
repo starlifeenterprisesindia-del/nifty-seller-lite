@@ -84,6 +84,66 @@ def render_decision(snapshot: MarketSnapshot) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def _leg_label(legs: tuple[Any, ...]) -> str:
+    if not legs:
+        return "—"
+    return " + ".join(f"{leg.strike:,.0f} {leg.side}" for leg in legs)
+
+
+def render_trade_plan(snapshot: MarketSnapshot) -> None:
+    bundle = snapshot.trade_plan
+    st.subheader("Protected Strike Planner")
+    st.caption(
+        "This planner does not make a second strategy decision. It converts the final "
+        "one-brain action into read-only short-strike and mandatory hedge candidates "
+        "from the same option-chain snapshot. Credit and risk are point estimates using "
+        "available bid/ask, with LTP only as fallback."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Selected Setup", bundle.selected_setup)
+    c2.metric("Planner Status", bundle.status)
+    c3.metric("Expiry", bundle.expiry or "—")
+    c4.metric("Spot", f"{bundle.spot:,.2f}" if bundle.spot is not None else "—")
+
+    plans = (bundle.ce_sell, bundle.pe_sell, bundle.iron_condor)
+    rows = []
+    for plan in plans:
+        breakeven = "—"
+        if plan.lower_breakeven is not None and plan.upper_breakeven is not None:
+            breakeven = f"{plan.lower_breakeven:,.2f} to {plan.upper_breakeven:,.2f}"
+        elif plan.lower_breakeven is not None:
+            breakeven = f"Lower {plan.lower_breakeven:,.2f}"
+        elif plan.upper_breakeven is not None:
+            breakeven = f"Upper {plan.upper_breakeven:,.2f}"
+        rows.append(
+            {
+                "Setup": plan.name,
+                "Sell leg(s)": _leg_label(plan.short_legs),
+                "Hedge leg(s)": _leg_label(plan.hedge_legs),
+                "Est. credit pts": plan.estimated_credit_points,
+                "Wing width pts": plan.width_points,
+                "Est. max risk pts": plan.max_risk_points,
+                "Breakeven": breakeven,
+                "Quality": plan.quality_score,
+                "Status": plan.status,
+                "Blocker": plan.blocker,
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    chosen = {
+        "CE SELL": bundle.ce_sell,
+        "PE SELL": bundle.pe_sell,
+        "IRON CONDOR": bundle.iron_condor,
+    }.get(bundle.selected_setup)
+    if chosen and chosen.available:
+        st.write("**Selected-plan evidence**")
+        for reason in chosen.reasons or ("No candidate reason available",):
+            st.write(f"• {reason}")
+    if bundle.blocker != "None":
+        st.warning(f"Planner blocker: {bundle.blocker}")
+
+
 def render_feed_status(snapshot: MarketSnapshot) -> None:
     rows = []
     for key, status in snapshot.feed_status.items():

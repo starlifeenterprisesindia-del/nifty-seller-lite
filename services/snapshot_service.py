@@ -24,6 +24,7 @@ from analysis.market_risk import calculate_vix_context
 from analysis.option_chain import option_chain_to_frame, select_atm_window
 from analysis.option_intelligence import calculate_option_intelligence
 from analysis.price_action import calculate_price_action_bundle
+from analysis.trade_plan import calculate_trade_plan
 from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
 from models import FeedStatus, MarketSnapshot
@@ -530,6 +531,16 @@ class SnapshotService:
             option_chain_live=statuses["option_chain"].use_state == "LIVE",
         )
 
+        trade_plan = calculate_trade_plan(
+            frame=option_frame,
+            spot=float(current_price) if current_price is not None else 0.0,
+            expiry=expiry,
+            levels=levels,
+            options=option_intelligence,
+            decision=decision,
+            market_session=market_session,
+        )
+
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
             "market_state": market_session.code,
@@ -578,6 +589,7 @@ class SnapshotService:
             institutional_context=institutional_context,
             event_risk=event_risk,
             decision=decision,
+            trade_plan=trade_plan,
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
@@ -597,5 +609,7 @@ class SnapshotService:
                 "top7_weight_date": CONFIG.top7_weight_date,
                 "strategy_scores_enabled": True,
                 "decision_engine": "analysis.decision.calculate_final_decision",
+                "trade_plan_engine": "analysis.trade_plan.calculate_trade_plan",
+                "trade_plan_status": trade_plan.status,
             },
         )

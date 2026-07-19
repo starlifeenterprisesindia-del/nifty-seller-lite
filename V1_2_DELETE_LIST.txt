@@ -1,0 +1,8 @@
+DELETE ONLY THESE OLD V1.0 RELEASE DOCUMENTS AFTER V1.2 IS COMMITTED
+
+V1_0_UPLOAD_LIST.txt
+V1_0_DELETE_LIST.txt
+V1_0_CHANGELOG.txt
+V1_0_TEST_REPORT.txt
+
+Do not delete app.py, config.py, models.py, analysis, services, tests, ui, data, .streamlit, requirements files, README.md or ARCHITECTURE.md.

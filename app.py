@@ -31,6 +31,7 @@ from ui.components import (
     render_option_intelligence,
     render_option_windows,
     render_price_action,
+    render_trade_plan,
     render_vix_context,
     render_volume,
     render_walls_and_pcr,
@@ -40,9 +41,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V1.0 Final One-Brain — one read-only decision engine combines core market evidence, "
-    "option flow, Top-7 contribution, VIX, optional FII/DII background and verified event "
-    "risk. No order placement. Hedge is mandatory for every actionable setup."
+    "V1.2 Hedged Strike Planner — the final one-brain decision now maps to protected "
+    "CE/PE/Condor strike candidates using the same option-chain snapshot. Read only, "
+    "no order placement, and every actionable setup keeps a mandatory hedge."
 )
 
 
@@ -157,6 +158,7 @@ render_market_session(snapshot)
 render_header(snapshot)
 
 render_decision(snapshot)
+render_trade_plan(snapshot)
 
 st.subheader("Core Market Evidence")
 render_core_evidence(snapshot)

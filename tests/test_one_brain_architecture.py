@@ -49,3 +49,21 @@ def test_only_snapshot_service_and_app_touch_state_stores():
             context_users.append(relative)
     assert set(option_users) == {"app.py", "services/snapshot_service.py"}
     assert set(context_users) == {"app.py", "services/snapshot_service.py"}
+
+
+def test_trade_planner_cannot_become_a_second_strategy_brain():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "analysis" / "trade_plan.py").read_text(encoding="utf-8")
+    assert "def calculate_final_decision(" not in text
+    assert "calculate_final_decision(" not in text
+    assert "PLACE_ORDER" not in text.upper()
+    assert "DhanClient(" not in text
+
+
+def test_trade_planner_is_wired_once_after_final_decision():
+    root = Path(__file__).resolve().parents[1]
+    service = (root / "services" / "snapshot_service.py").read_text(encoding="utf-8")
+    assert service.count("trade_plan = calculate_trade_plan(") == 1
+    assert service.index("decision = calculate_final_decision(") < service.index(
+        "trade_plan = calculate_trade_plan("
+    )
