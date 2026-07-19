@@ -1,0 +1,25 @@
+NIFTY SELLER LITE — MILESTONE 2 TEST REPORT
+
+Python compilation: PASS
+Automated tests: 17/17 PASS
+
+Covered:
+- 3-minute candle alignment at 09:15 IST
+- Dhan candle parsing and completion flags
+- Dhan quote request ID de-duplication
+- Option-chain flattening and ATM window
+- Weekend/reference market-state behaviour
+- Live-session freshness classification
+- Stale/open-clock fail-closed behaviour
+- EMA/MACD/RSI calculations on completed candles
+- Incomplete candle exclusion
+- Direct Top-7 security ID configuration
+- Direct India VIX reference
+- Full weekend snapshot marked REFERENCE
+- 7/7 heavyweight quote construction
+- One-snapshot/no-analysis-fetch architecture
+- No final decision engine or trading action in foundation
+
+Authenticated live DhanHQ validation must be done in the deployed app during market hours.
+Non-UI module imports: 9/9 PASS
+Local Streamlit UI import/runtime: NOT RUN in this container because Streamlit is not installed here; deployed Streamlit Cloud will perform the runtime validation.

@@ -1,0 +1,26 @@
+NIFTY SELLER LITE — MILESTONE 2 DEPLOYMENT
+
+1. Extract the ZIP.
+2. Open the existing GitHub repository: nifty-seller-lite.
+3. Upload everything inside the extracted folder to the repository root.
+4. Replace matching files. app.py must remain directly in the repository root.
+5. Upload folders including analysis, services, ui, tests, data and .streamlit.
+6. Do not upload __pycache__, .pytest_cache or *.pyc files.
+7. Commit message: Milestone 2 market integrity and indicators
+8. Streamlit should redeploy automatically.
+9. Keep the existing [dhan] secrets; do not put credentials in GitHub.
+10. After deployment, press Fetch Fresh Snapshot.
+
+EXPECTED CLOSED-MARKET RESULT
+- Banner: MARKET CLOSED — LAST AVAILABLE DATA
+- Quotes/candles/option chain Use status: REFERENCE
+- Top-7: 7/7 quotes expected
+- EMA/MACD/RSI: read-only values from completed historical candles
+
+EXPECTED LIVE-MARKET RESULT
+- Banner: MARKET OPEN — LIVE DATA
+- Quotes/candles/option chain Use status: LIVE
+- Top-7: 7/7 quotes expected
+- Indicators update from the same authoritative snapshot
+
+No CE/PE/IRON CONDOR/WAIT advice is included yet.

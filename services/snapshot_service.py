@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from analysis.candles import aggregate_candles, candles_from_dhan, mark_completed_candles
+from analysis.indicators import calculate_indicator_bundle
+from analysis.market_session import classify_market_session, feed_use_state
 from analysis.option_chain import option_chain_to_frame, select_atm_window
 from config import CONFIG, IST_TIMEZONE
 from models import FeedStatus, MarketSnapshot
@@ -63,17 +65,31 @@ class SnapshotService:
         except Exception:
             return None
 
-    def _resolve_instruments(
-        self,
-    ) -> tuple[list[ResolvedInstrument], ResolvedInstrument | None, ResolvedInstrument | None]:
+    def _resolve_future(self) -> ResolvedInstrument | None:
         try:
             raw_master = self.master.load()
-            equities = self.master.resolve_equities(CONFIG.top7_symbols, raw_master)
-            vix = self.master.resolve_index(("INDIA VIX", "VIX"), raw_master)
-            future = self.master.resolve_nearest_nifty_future(raw_master)
-            return equities, vix, future
+            return self.master.resolve_nearest_nifty_future(raw_master)
         except Exception:
-            return [], None, None
+            return None
+
+    @staticmethod
+    def _latest_candle_age_seconds(frame: pd.DataFrame, now: datetime) -> float | None:
+        if frame.empty:
+            return None
+        try:
+            latest = pd.Timestamp(frame.iloc[-1]["timestamp"])
+            current = pd.Timestamp(now)
+            if latest.tzinfo is None:
+                latest = latest.tz_localize(IST_TIMEZONE)
+            else:
+                latest = latest.tz_convert(IST_TIMEZONE)
+            if current.tzinfo is None:
+                current = current.tz_localize(IST_TIMEZONE)
+            else:
+                current = current.tz_convert(IST_TIMEZONE)
+            return max(0.0, (current - latest).total_seconds())
+        except Exception:
+            return None
 
     def build(self, now: datetime | None = None) -> MarketSnapshot:
         if now is None:
@@ -82,16 +98,16 @@ class SnapshotService:
             current = now.astimezone(IST)
         else:
             current = now.replace(tzinfo=IST)
-        statuses: dict[str, FeedStatus] = {}
 
-        heavyweights, vix_ref, future_ref = self._resolve_instruments()
-        grouped: dict[str, list[int]] = {"IDX_I": [int(CONFIG.nifty.security_id)]}
-        if vix_ref:
-            grouped.setdefault(vix_ref.exchange_segment, []).append(vix_ref.security_id)
+        future_ref = self._resolve_future()
+        grouped: dict[str, list[int]] = {
+            CONFIG.nifty.exchange_segment: [int(CONFIG.nifty.security_id)],
+            CONFIG.india_vix.exchange_segment: [int(CONFIG.india_vix.security_id)],
+        }
         if future_ref:
             grouped.setdefault(future_ref.exchange_segment, []).append(future_ref.security_id)
-        for item in heavyweights:
-            grouped.setdefault(item.exchange_segment, []).append(item.security_id)
+        for item in CONFIG.top7:
+            grouped.setdefault(item.exchange_segment, []).append(int(item.security_id))
 
         quote_response = self.client.market_quote(grouped)
         nifty_quote = self._extract_quote(
@@ -101,42 +117,39 @@ class SnapshotService:
         )
         if not nifty_quote:
             raise SnapshotBuildError("NIFTY quote missing from DhanHQ response")
-        statuses["quotes"] = FeedStatus(
-            name="quotes",
-            ok=True,
-            fetched_at=current,
-            age_seconds=self._quote_age_seconds(nifty_quote, current),
-            message="One grouped market-quote request",
-        )
 
-        vix_quote = (
-            self._extract_quote(quote_response, vix_ref.exchange_segment, vix_ref.security_id)
-            if vix_ref else None
+        vix_quote = self._extract_quote(
+            quote_response,
+            CONFIG.india_vix.exchange_segment,
+            CONFIG.india_vix.security_id,
         )
         future_quote = (
-            self._extract_quote(quote_response, future_ref.exchange_segment, future_ref.security_id)
-            if future_ref else None
+            self._extract_quote(
+                quote_response,
+                future_ref.exchange_segment,
+                future_ref.security_id,
+            )
+            if future_ref
+            else None
         )
+
         heavyweight_quotes: list[dict[str, Any]] = []
-        for item in heavyweights:
-            quote = self._extract_quote(quote_response, item.exchange_segment, item.security_id)
+        for item in CONFIG.top7:
+            quote = self._extract_quote(
+                quote_response,
+                item.exchange_segment,
+                item.security_id,
+            )
             if quote:
                 heavyweight_quotes.append(
                     {
                         "symbol": item.symbol,
-                        "display_name": item.display_name,
-                        "security_id": item.security_id,
+                        "display_name": item.name,
+                        "security_id": int(item.security_id),
                         "exchange_segment": item.exchange_segment,
                         **quote,
                     }
                 )
-        statuses["instruments"] = FeedStatus(
-            name="instruments",
-            ok=len(heavyweight_quotes) > 0,
-            fetched_at=current,
-            message=f"Resolved {len(heavyweight_quotes)}/{len(CONFIG.top7_symbols)} configured heavyweights",
-            source="Dhan instrument master",
-        )
 
         from_date = current - timedelta(days=CONFIG.candle_lookback_days)
         candles_1m_raw = self.client.intraday_candles(
@@ -162,12 +175,67 @@ class SnapshotService:
             current,
         )
         candles_15m = mark_completed_candles(candles_from_dhan(candles_15m_raw), 15, current)
-        candle_ok = len(candles_1m) >= CONFIG.minimum_one_minute_candles and not candles_15m.empty
+
+        quote_age = self._quote_age_seconds(nifty_quote, current)
+        latest_1m_age = self._latest_candle_age_seconds(candles_1m, current)
+        has_current_day_candle = (
+            not candles_1m.empty
+            and pd.Timestamp(candles_1m.iloc[-1]["timestamp"]).date() == current.date()
+        )
+        market_session = classify_market_session(
+            current,
+            quote_age_seconds=quote_age,
+            has_current_day_candle=has_current_day_candle,
+        )
+
+        statuses: dict[str, FeedStatus] = {}
+        statuses["quotes"] = FeedStatus(
+            name="quotes",
+            ok=True,
+            fetched_at=current,
+            age_seconds=quote_age,
+            message="One grouped market-quote request",
+            use_state=feed_use_state(
+                available=True,
+                market_session=market_session,
+                age_seconds=quote_age,
+                max_live_age_seconds=CONFIG.quote_max_age_seconds,
+            ),
+        )
+        statuses["instruments"] = FeedStatus(
+            name="instruments",
+            ok=len(heavyweight_quotes) == len(CONFIG.top7),
+            fetched_at=current,
+            message=(
+                f"Received {len(heavyweight_quotes)}/{len(CONFIG.top7)} configured "
+                "heavyweight quotes"
+            ),
+            source="Configured Dhan security IDs",
+            use_state=(
+                "READY"
+                if len(heavyweight_quotes) == len(CONFIG.top7)
+                else "CAUTION"
+            ),
+        )
+        candle_available = (
+            len(candles_1m) >= CONFIG.minimum_one_minute_candles
+            and not candles_15m.empty
+        )
         statuses["candles"] = FeedStatus(
             name="candles",
-            ok=candle_ok,
+            ok=candle_available,
             fetched_at=current,
-            message=f"1m={len(candles_1m)}, derived 3m={len(candles_3m)}, native 15m={len(candles_15m)}",
+            age_seconds=latest_1m_age,
+            message=(
+                f"1m={len(candles_1m)}, derived 3m={len(candles_3m)}, "
+                f"native 15m={len(candles_15m)}"
+            ),
+            use_state=feed_use_state(
+                available=candle_available,
+                market_session=market_session,
+                age_seconds=latest_1m_age,
+                max_live_age_seconds=CONFIG.candle_max_age_minutes * 60,
+            ),
         )
 
         expiry: str | None = None
@@ -177,7 +245,7 @@ class SnapshotService:
                 int(CONFIG.nifty.security_id),
                 CONFIG.nifty.exchange_segment,
             )
-            active_expiries = []
+            active_expiries: list[tuple[object, str]] = []
             for item in expiries:
                 try:
                     parsed_expiry = pd.Timestamp(item).date()
@@ -204,7 +272,11 @@ class SnapshotService:
                     ok=not option_frame.empty,
                     fetched_at=current,
                     age_seconds=0.0,
-                    message=f"Expiry {expiry}, {len(option_frame)} CE/PE rows in ATM window",
+                    message=(
+                        f"Expiry {expiry}, {len(option_frame)} CE/PE rows in ATM window; "
+                        "response age is not market-tick age"
+                    ),
+                    use_state=("LIVE" if market_session.is_live else "REFERENCE"),
                 )
             else:
                 statuses["option_chain"] = FeedStatus(
@@ -212,6 +284,7 @@ class SnapshotService:
                     ok=False,
                     fetched_at=current,
                     message="No active NIFTY expiry returned",
+                    use_state="UNAVAILABLE",
                 )
         except Exception as exc:
             statuses["option_chain"] = FeedStatus(
@@ -219,13 +292,20 @@ class SnapshotService:
                 ok=False,
                 fetched_at=current,
                 message=str(exc),
+                use_state="UNAVAILABLE",
             )
 
+        indicators = calculate_indicator_bundle(candles_3m, candles_15m)
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
+            "market_state": market_session.code,
             "nifty": nifty_quote.get("last_price"),
             "expiry": expiry,
-            "last_1m": candles_1m.iloc[-1]["timestamp"].isoformat() if not candles_1m.empty else None,
+            "last_1m": (
+                candles_1m.iloc[-1]["timestamp"].isoformat()
+                if not candles_1m.empty
+                else None
+            ),
             "option_rows": len(option_frame),
             "heavyweights": [
                 (item.get("symbol"), item.get("last_price"))
@@ -239,6 +319,7 @@ class SnapshotService:
         return MarketSnapshot(
             snapshot_id=f"SNAP-{snapshot_id}",
             created_at=current,
+            market_session=market_session,
             nifty_quote=nifty_quote,
             vix_quote=vix_quote,
             nifty_future_quote=future_quote,
@@ -246,14 +327,20 @@ class SnapshotService:
             candles_1m=candles_1m,
             candles_3m=candles_3m,
             candles_15m=candles_15m,
+            indicators=indicators,
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
             metadata={
                 "version": CONFIG.version,
                 "read_only": True,
+                "live_trading_ready": market_session.is_live
+                and all(
+                    item.use_state in {"LIVE", "READY"}
+                    for item in statuses.values()
+                ),
                 "top7_configured": list(CONFIG.top7_symbols),
-                "vix_resolved": bool(vix_ref),
-                "future_resolved": bool(future_ref),
+                "vix_resolved": bool(vix_quote),
+                "future_resolved": bool(future_quote),
             },
         )

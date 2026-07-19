@@ -1,18 +1,19 @@
-# Nifty Seller Lite — Milestone 1
+# Nifty Seller Lite — Milestone 2
 
-Fresh, read-only Streamlit foundation for one authoritative DhanHQ market snapshot.
+Fresh, read-only Streamlit foundation built around one authoritative DhanHQ snapshot.
 
 ## What this version does
 
-- Fetches NIFTY live quote in one grouped quote request.
+- Classifies the session as live, pre-market, closed, weekend, or stale/holiday-like.
+- Never labels last-available weekend/after-hours data as live.
+- Fetches NIFTY, India VIX and seven configured heavyweight quotes in one grouped request.
 - Fetches Dhan 1-minute and native 15-minute candles.
 - Builds 3-minute candles locally from 1-minute data, anchored at 09:15 IST.
-- Fetches the nearest NIFTY expiry and one option-chain snapshot.
-- Shows ATM ±5 strikes with LTP, OI, previous OI, day OI change and volume.
-- Resolves configurable Top-7 heavyweight symbols using Dhan instrument master.
-- Attempts to resolve India VIX and the nearest NIFTY future.
-- Produces one `MarketSnapshot` object used by the complete screen.
-- Contains no trading advice and no order APIs.
+- Calculates EMA20, EMA50, MACD (12,26,9) and RSI14 on completed 3m and 15m candles.
+- Fetches nearest NIFTY expiry and an ATM ±5-strike option-chain window.
+- Shows raw OI, day OI change, volume, IV and bid/ask as reference data.
+- Uses one `MarketSnapshot` object for the entire screen.
+- Contains no trading advice, final scorer or order-placement code.
 
 ## Secrets
 
@@ -37,4 +38,4 @@ pytest -q
 ruff check .
 ```
 
-Upload the contents of this folder to a NEW GitHub repository. Do not merge this code into the old heavy app.
+Upload the contents of this folder to the existing `nifty-seller-lite` repository and replace matching files. Do not merge it into the old heavy app.

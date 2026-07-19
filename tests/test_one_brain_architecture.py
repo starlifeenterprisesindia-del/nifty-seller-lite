@@ -12,4 +12,7 @@ def test_analysis_modules_do_not_fetch_data():
 def test_no_decision_engine_in_foundation():
     root = Path(__file__).resolve().parents[1]
     assert not (root / "decision_engine.py").exists()
-    assert "FINAL ACTION" not in (root / "app.py").read_text(encoding="utf-8")
+    app_text = (root / "app.py").read_text(encoding="utf-8")
+    assert "FINAL ACTION" not in app_text
+    assert "SELL CE" not in app_text
+    assert "SELL PE" not in app_text

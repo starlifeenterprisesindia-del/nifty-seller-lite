@@ -1,0 +1,21 @@
+NIFTY SELLER LITE 0.2.0 — CHANGELOG
+
+FIXED
+- Weekend and after-hours quote data is no longer shown as live OK data.
+- Added market-session states: LIVE, PRE_MARKET, CLOSED_WEEKEND, CLOSED_AFTER_HOURS, CLOSED_OR_STALE_SESSION.
+- Option-chain response age is no longer presented as market-tick freshness.
+- Top-7 equities now use direct configured Dhan security IDs instead of fragile company-name matching.
+- India VIX now uses a direct configured index reference.
+
+ADDED
+- EMA20 and EMA50 on completed 3-minute and 15-minute candles.
+- MACD 12/26/9 and histogram on completed 3-minute and 15-minute candles.
+- RSI14 using Wilder-style smoothing on completed 3-minute and 15-minute candles.
+- Read-only indicator table and indicator JSON.
+- Feed use states: LIVE, REFERENCE, STALE, READY, CAUTION, UNAVAILABLE.
+- Tests for market-session classification, indicators, configured instruments and full snapshot construction.
+
+ARCHITECTURE
+- One authoritative MarketSnapshot remains the sole data object for the UI.
+- No decision engine, trade score or order code has been added.
+- Removed unused equity/index instrument-master resolvers to avoid dead code.

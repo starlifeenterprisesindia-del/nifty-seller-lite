@@ -15,6 +15,8 @@ from ui.components import (
     render_feed_status,
     render_header,
     render_heavyweights,
+    render_indicators,
+    render_market_session,
     render_option_chain,
 )
 
@@ -22,7 +24,8 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "Milestone 1 — clean read-only DhanHQ snapshot foundation. No trading advice or order placement yet."
+    "Milestone 2 — market-session integrity, reliable Top-7 quotes and isolated "
+    "EMA/MACD/RSI calculations. No trading advice or order placement yet."
 )
 
 
@@ -47,7 +50,7 @@ with st.sidebar:
         st.success("Dhan credentials found")
     else:
         st.error("Dhan credentials missing")
-    st.caption("Set credentials in Streamlit Secrets under [dhan]. They are never written to files.")
+    st.caption("Credentials remain only in Streamlit Secrets under [dhan].")
     refresh = st.button("Fetch Fresh Snapshot", type="primary", use_container_width=True)
     clear_cache = st.button("Clear instrument cache", use_container_width=True)
     if clear_cache:
@@ -59,8 +62,8 @@ with st.sidebar:
 if not credentials_ready:
     example = (
         '[dhan]\n'
-        'client_id = \"YOUR_CLIENT_ID\"\n'
-        'access_token = \"YOUR_24_HOUR_ACCESS_TOKEN\"'
+        'client_id = "YOUR_CLIENT_ID"\n'
+        'access_token = "YOUR_24_HOUR_ACCESS_TOKEN"'
     )
     st.code(example, language="toml")
     st.stop()
@@ -80,10 +83,14 @@ if "snapshot" not in st.session_state or refresh:
         st.stop()
 
 snapshot = st.session_state.snapshot
+render_market_session(snapshot)
 render_header(snapshot)
 
 st.subheader("Feed Integrity")
 render_feed_status(snapshot)
+
+st.subheader("Read-Only Technical Calculations")
+render_indicators(snapshot)
 
 st.subheader("Raw Market Data")
 market_tabs = st.tabs(
@@ -105,5 +112,6 @@ with market_tabs[4]:
     st.json(snapshot.public_summary())
 
 st.info(
-    "Next milestone: verify raw values against the broker, then add EMA/MACD/RSI in an isolated tested module."
+    "Next milestone after live verification: Price Action and Support/Resistance as "
+    "evidence-only modules."
 )
