@@ -44,8 +44,17 @@ class DhanClient:
                 )
                 data = response.json() if response.content else {}
                 if response.status_code >= 400:
+                    nested = data.get("data") if isinstance(data, dict) else None
+                    nested_message = None
+                    if isinstance(nested, dict):
+                        nested_message = next(
+                            (str(value) for value in nested.values() if value), None
+                        )
                     message = (
-                        data.get("errorMessage") or data.get("message") or response.text
+                        data.get("errorMessage")
+                        or data.get("message")
+                        or nested_message
+                        or response.text
                     )
                     raise DhanAPIError(f"DhanHQ HTTP {response.status_code}: {message}")
                 if isinstance(data, dict) and data.get("status") not in (
@@ -61,6 +70,9 @@ class DhanClient:
                 return data
             except (requests.RequestException, ValueError, DhanAPIError) as exc:
                 last_error = exc
+                # Never amplify a Dhan rate-limit response with an immediate retry.
+                if isinstance(exc, DhanAPIError) and "HTTP 429" in str(exc):
+                    break
                 if attempt + 1 < attempts:
                     time.sleep(0.6)
                     continue
@@ -129,6 +141,7 @@ class DhanClient:
             "UnderlyingSeg": segment,
             "Expiry": expiry,
         }
-        response = self._post("/optionchain", payload)
+        # Record the attempt time even when Dhan rejects it. This prevents a failed
+        # request from being followed by another immediate request in the same client.
         self._last_option_chain_call = time.monotonic()
-        return response
+        return self._post("/optionchain", payload)

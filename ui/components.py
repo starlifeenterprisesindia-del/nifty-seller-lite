@@ -837,45 +837,56 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
     institutional = snapshot.institutional_context
     event = snapshot.event_risk
     st.caption(
-        "FII/DII is background evidence only. Missing values remain missing and never become zero. "
-        "Event risk affects the final brain only when medium/high risk is marked verified."
+        "FII/DII cash is the main background context. FII index futures is optional "
+        "short-term confirmation. Missing values remain missing and never become zero. "
+        "Only the latest 15 trading sessions are retained."
     )
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric(
-        "Latest FII ₹ cr",
+        "Latest FII cash ₹ cr",
         f"{institutional.latest_fii_net:,.1f}"
         if institutional.latest_fii_net is not None
         else "Missing",
     )
     c2.metric(
-        "Latest DII ₹ cr",
+        "Latest DII cash ₹ cr",
         f"{institutional.latest_dii_net:,.1f}"
         if institutional.latest_dii_net is not None
         else "Missing",
     )
-    c3.metric("Institutional State", institutional.state)
-    c4.metric("Verified Event Risk", event.level)
+    c3.metric(
+        "FII index futures ₹ cr",
+        f"{institutional.latest_fii_index_futures_net:,.1f}"
+        if institutional.latest_fii_index_futures_net is not None
+        else "Missing",
+    )
+    c4.metric("Institutional State", institutional.state)
+    c5.metric("Verified Event Risk", event.level)
     rows = [
         {
-            "Window": "5 days",
-            "FII net ₹ cr": institutional.fii_5d_net,
-            "DII net ₹ cr": institutional.dii_5d_net,
+            "Window": "5 sessions",
+            "FII cash net ₹ cr": institutional.fii_5d_net,
+            "DII cash net ₹ cr": institutional.dii_5d_net,
+            "FII index futures net ₹ cr": institutional.fii_index_futures_5d_net,
         },
         {
-            "Window": "10 days",
-            "FII net ₹ cr": institutional.fii_10d_net,
-            "DII net ₹ cr": institutional.dii_10d_net,
+            "Window": "10 sessions",
+            "FII cash net ₹ cr": institutional.fii_10d_net,
+            "DII cash net ₹ cr": institutional.dii_10d_net,
+            "FII index futures net ₹ cr": institutional.fii_index_futures_10d_net,
         },
         {
-            "Window": "15 days",
-            "FII net ₹ cr": institutional.fii_15d_net,
-            "DII net ₹ cr": institutional.dii_15d_net,
+            "Window": "15 sessions",
+            "FII cash net ₹ cr": institutional.fii_15d_net,
+            "DII cash net ₹ cr": institutional.dii_15d_net,
+            "FII index futures net ₹ cr": institutional.fii_index_futures_15d_net,
         },
     ]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     st.write(
         f"**Institutional status:** {institutional.status} | "
-        f"**Observations:** {institutional.observations} | "
+        f"**Observations:** {institutional.observations}/15 | "
+        f"**As of:** {institutional.as_of_date or '—'} | "
         f"**Confidence:** {institutional.confidence:.1f}%"
     )
     st.write(

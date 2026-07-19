@@ -45,3 +45,18 @@ def test_levels_include_previous_day_and_opening_range():
     assert result.immediate_resistance is not None
     assert result.upside_room is not None
     assert result.downside_room is not None
+
+
+def test_current_spot_inside_resistance_zone_is_testing_not_broken():
+    from analysis.levels import _level_status
+
+    last_candle = pd.Series({"close": 110.0, "high": 112.0, "low": 104.0})
+    status = _level_status(
+        "RESISTANCE",
+        lower=105.0,
+        upper=108.0,
+        current_price=106.5,
+        last_candle=last_candle,
+        width=3.0,
+    )
+    assert status == "TESTING / INSIDE ZONE"

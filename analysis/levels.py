@@ -134,22 +134,33 @@ def _level_status(
     last_candle: pd.Series | None,
     width: float,
 ) -> str:
+    # Current spot determines where price is now. Completed candles determine whether
+    # a break/rejection was confirmed. This prevents a stale completed close from
+    # labelling spot inside a zone as already broken.
+    if lower <= current_price <= upper:
+        return "TESTING / INSIDE ZONE"
+
     if last_candle is not None:
         close = float(last_candle["close"])
         high = float(last_candle["high"])
         low = float(last_candle["low"])
         if side == "SUPPORT":
-            if close < lower:
-                return "BROKEN"
+            if current_price < lower and close < lower:
+                return "BROKEN / ACCEPTED BELOW"
+            if current_price < lower:
+                return "BELOW ZONE / AWAITING CLOSE"
             if low <= upper and close > upper:
                 return "HOLDING / REJECTED LOWER"
         else:
-            if close > upper:
-                return "BROKEN"
+            if current_price > upper and close > upper:
+                return "BROKEN / ACCEPTED ABOVE"
+            if current_price > upper:
+                return "ABOVE ZONE / AWAITING CLOSE"
             if high >= lower and close < lower:
                 return "REJECTED"
         if lower <= close <= upper:
-            return "TESTING"
+            return "TESTING BY COMPLETED CANDLE"
+
     distance = lower - current_price if side == "RESISTANCE" else current_price - upper
     if distance <= width * 1.5:
         return "APPROACHING"

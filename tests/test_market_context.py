@@ -20,6 +20,7 @@ def test_context_builds_rolling_sums_and_verified_event():
                 "date": f"2026-07-{day:02d}",
                 "fii_cash_net": 100.0 * day,
                 "dii_cash_net": 50.0 * day,
+                "fii_index_futures_net": 25.0 * day,
                 "event_risk": "NONE",
                 "event_note": "",
                 "verified": False,
@@ -32,6 +33,8 @@ def test_context_builds_rolling_sums_and_verified_event():
     assert institutional.observations == 6
     assert institutional.fii_5d_net == 2000.0
     assert institutional.dii_5d_net == 1000.0
+    assert institutional.fii_index_futures_5d_net == 500.0
+    assert institutional.latest_fii_index_futures_net == 150.0
     assert institutional.status == "READY"
     assert event.level == "MEDIUM"
     assert event.verified is True

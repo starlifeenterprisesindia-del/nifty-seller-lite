@@ -53,9 +53,9 @@ def _institutional_scores(
     state = context.state.upper()
     if context.status == "MISSING":
         return 50.0, 50.0, 55.0, "FII/DII background is missing"
-    if "SUPPORT" in state or "FII BUYING" in state:
+    if "SUPPORT" in state or "FII BUYING" in state or "FUTURES LONG" in state:
         return 68.0, 32.0, 42.0, None
-    if "PRESSURE" in state or "FII SELLING" in state:
+    if "PRESSURE" in state or "FII SELLING" in state or "FUTURES SHORT" in state:
         return 32.0, 68.0, 42.0, None
     return 48.0, 48.0, 60.0, None
 
@@ -510,7 +510,10 @@ def _build_outlook(
     price_action: PriceActionBundle | None,
     levels: LevelBundle,
 ) -> MarketOutlook:
-    current_bull, current_bear, current_range = _normalized_triplet(pe, ce, condor)
+    if max(ce, pe, condor) <= 0:
+        current_bull, current_bear, current_range = 0.0, 0.0, 100.0
+    else:
+        current_bull, current_bear, current_range = _normalized_triplet(pe, ce, condor)
     historical = _history_distribution(history)
     if historical is None:
         bull, bear, range_score = current_bull, current_bear, current_range
@@ -648,6 +651,14 @@ def calculate_final_decision(
     pe = round(clamp(pe, 0, 100), 1)
     condor = round(clamp(condor, 0, 100), 1)
 
+    option_data_available = (
+        options.status != "UNAVAILABLE" and options.market_bias != "UNAVAILABLE"
+    )
+    if not option_data_available:
+        # Missing option data is not neutral/decay evidence. No seller setup can be
+        # scored from absent CE/PE premiums, OI and volume.
+        ce = pe = condor = 0.0
+
     wait = 10.0
     blockers: list[str] = []
     if not market_session.is_live:
@@ -711,36 +722,51 @@ def calculate_final_decision(
         pe_cautions.append(event_blocker)
         condor_cautions.append(event_blocker)
 
+    unavailable_reason = ("Option chain unavailable — seller setup not scored",)
     ce_eval = StrategyEvaluation(
         name="CE SELL",
         score=ce,
-        status=_status(ce, ce_cautions),
-        reasons=_top_reasons(
-            (f"Core bearish evidence {core.bearish_score:.1f}/100",),
-            (f"Bearish option flow {options.bearish_score:.1f}%",),
-            (f"Top-7 state: {heavyweights.state}",),
+        status="UNAVAILABLE" if not option_data_available else _status(ce, ce_cautions),
+        reasons=(
+            unavailable_reason
+            if not option_data_available
+            else _top_reasons(
+                (f"Core bearish evidence {core.bearish_score:.1f}/100",),
+                (f"Bearish option flow {options.bearish_score:.1f}%",),
+                (f"Top-7 state: {heavyweights.state}",),
+            )
         ),
         cautions=tuple(dict.fromkeys(ce_cautions))[:3],
     )
     pe_eval = StrategyEvaluation(
         name="PE SELL",
         score=pe,
-        status=_status(pe, pe_cautions),
-        reasons=_top_reasons(
-            (f"Core bullish evidence {core.bullish_score:.1f}/100",),
-            (f"Bullish option flow {options.bullish_score:.1f}%",),
-            (f"Top-7 state: {heavyweights.state}",),
+        status="UNAVAILABLE" if not option_data_available else _status(pe, pe_cautions),
+        reasons=(
+            unavailable_reason
+            if not option_data_available
+            else _top_reasons(
+                (f"Core bullish evidence {core.bullish_score:.1f}/100",),
+                (f"Bullish option flow {options.bullish_score:.1f}%",),
+                (f"Top-7 state: {heavyweights.state}",),
+            )
         ),
         cautions=tuple(dict.fromkeys(pe_cautions))[:3],
     )
     condor_eval = StrategyEvaluation(
         name="IRON CONDOR",
         score=condor,
-        status=_status(condor, condor_cautions),
-        reasons=_top_reasons(
-            (f"Core range/mixed evidence {core.range_score:.1f}/100",),
-            (f"Option decay/mixed evidence {options.range_score:.1f}%",),
-            (f"VIX environment: {vix.seller_environment}",),
+        status="UNAVAILABLE"
+        if not option_data_available
+        else _status(condor, condor_cautions),
+        reasons=(
+            unavailable_reason
+            if not option_data_available
+            else _top_reasons(
+                (f"Core range/mixed evidence {core.range_score:.1f}/100",),
+                (f"Option decay/mixed evidence {options.range_score:.1f}%",),
+                (f"VIX environment: {vix.seller_environment}",),
+            )
         ),
         cautions=tuple(dict.fromkeys(condor_cautions))[:3],
     )
@@ -752,7 +778,11 @@ def calculate_final_decision(
     )
     leader, leader_score = candidates[0]
     runner_up = candidates[1][1]
-    direction, _, _ = _direction_from_scores(ce, pe, condor)
+    direction, _, _ = (
+        _direction_from_scores(ce, pe, condor)
+        if option_data_available
+        else ("RANGE", 0.0, 0.0)
+    )
     score_gap = max(0.0, leader_score - runner_up)
 
     if wait >= CONFIG.decision_wait_block_threshold:
@@ -782,7 +812,7 @@ def calculate_final_decision(
         history=history,
         score_gap=score_gap,
     )
-    signal_state, memory_text, confirmed = _memory_confirmation(
+    signal_state, memory_text, _confirmed = _memory_confirmation(
         direction=direction,
         history=history,
         score_gap=score_gap,
@@ -791,6 +821,9 @@ def calculate_final_decision(
         options=options,
         market_session=market_session,
     )
+    if not option_data_available:
+        signal_state = "DATA UNAVAILABLE / WAIT"
+        memory_text = "Option chain unavailable"
 
     final_action = instant_action
     if instant_action != "WAIT":

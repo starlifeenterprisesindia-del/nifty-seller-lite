@@ -31,15 +31,21 @@ def calculate_market_context(
         and str(item.get("date", "")) <= current_date.isoformat()
     ]
     clean.sort(key=lambda item: str(item.get("date", "")))
+    clean = clean[-15:]
     latest = clean[-1] if clean else {}
+
     fii_values = [_number(item.get("fii_cash_net")) for item in clean]
     dii_values = [_number(item.get("dii_cash_net")) for item in clean]
+    futures_values = [_number(item.get("fii_index_futures_net")) for item in clean]
     latest_fii = _number(latest.get("fii_cash_net"))
     latest_dii = _number(latest.get("dii_cash_net"))
+    latest_futures = _number(latest.get("fii_index_futures_net"))
     observations = sum(
         1
-        for fii, dii in zip(fii_values, dii_values, strict=False)
-        if fii is not None or dii is not None
+        for fii, dii, futures in zip(
+            fii_values, dii_values, futures_values, strict=False
+        )
+        if fii is not None or dii is not None or futures is not None
     )
 
     fii_5 = _window_sum(fii_values, 5)
@@ -48,6 +54,9 @@ def calculate_market_context(
     dii_5 = _window_sum(dii_values, 5)
     dii_10 = _window_sum(dii_values, 10)
     dii_15 = _window_sum(dii_values, 15)
+    futures_5 = _window_sum(futures_values, 5)
+    futures_10 = _window_sum(futures_values, 10)
+    futures_15 = _window_sum(futures_values, 15)
 
     combined_latest = None
     if latest_fii is not None or latest_dii is not None:
@@ -73,6 +82,10 @@ def calculate_market_context(
             latest_fii is not None and latest_fii > 1000 and (latest_dii or 0.0) < -1000
         ):
             state = "FII BUYING / DII SELLING"
+        elif latest_futures is not None and latest_futures >= 1000:
+            state = "MIXED CASH / FII FUTURES LONG"
+        elif latest_futures is not None and latest_futures <= -1000:
+            state = "MIXED CASH / FII FUTURES SHORT"
         else:
             state = "MIXED / NEUTRAL"
         confidence = min(85.0, 35.0 + observations * 4.0)
@@ -82,12 +95,16 @@ def calculate_market_context(
         as_of_date=str(latest.get("date")) if latest else None,
         latest_fii_net=latest_fii,
         latest_dii_net=latest_dii,
+        latest_fii_index_futures_net=latest_futures,
         fii_5d_net=fii_5,
         fii_10d_net=fii_10,
         fii_15d_net=fii_15,
         dii_5d_net=dii_5,
         dii_10d_net=dii_10,
         dii_15d_net=dii_15,
+        fii_index_futures_5d_net=futures_5,
+        fii_index_futures_10d_net=futures_10,
+        fii_index_futures_15d_net=futures_15,
         observations=observations,
         state=state,
         confidence=round(confidence, 1),

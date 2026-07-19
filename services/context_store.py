@@ -16,7 +16,12 @@ except ImportError:  # pragma: no cover - Windows local fallback.
 
 
 class MarketContextStore:
-    """Small durable journal for optional FII/DII and verified event-risk context."""
+    """Bounded date-wise journal for institutional and verified event context.
+
+    One row is kept per trading date. Saving the same date updates that row; saving a
+    different date never overwrites another date. The journal is capped at the latest
+    configured trading-session records.
+    """
 
     SCHEMA_VERSION = 1
     ALLOWED_EVENT_RISK = {"NONE", "LOW", "MEDIUM", "HIGH"}
@@ -73,9 +78,25 @@ class MarketContextStore:
         )
         os.replace(temporary, self.path)
 
+    @staticmethod
+    def _sorted_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        clean = [
+            item for item in entries if isinstance(item, dict) and item.get("date")
+        ]
+        clean.sort(key=lambda item: str(item.get("date", "")))
+        return clean
+
     def load(self) -> list[dict[str, Any]]:
         with self._locked():
-            return list(self._read_unlocked()["entries"])
+            return list(self._sorted_entries(self._read_unlocked()["entries"]))
+
+    def get(self, session_date: date) -> dict[str, Any] | None:
+        target = session_date.isoformat()
+        with self._locked():
+            for item in self._read_unlocked()["entries"]:
+                if isinstance(item, dict) and item.get("date") == target:
+                    return dict(item)
+        return None
 
     def upsert(
         self,
@@ -83,6 +104,7 @@ class MarketContextStore:
         session_date: date,
         fii_cash_net: float | None,
         dii_cash_net: float | None,
+        fii_index_futures_net: float | None = None,
         event_risk: str,
         event_note: str = "",
         verified: bool = False,
@@ -96,9 +118,11 @@ class MarketContextStore:
             "date": session_date.isoformat(),
             "fii_cash_net": self._number(fii_cash_net),
             "dii_cash_net": self._number(dii_cash_net),
+            "fii_index_futures_net": self._number(fii_index_futures_net),
             "event_risk": level,
             "event_note": str(event_note or "").strip()[:280],
             "verified": bool(verified),
+            "source": "MANUAL",
             "updated_at": datetime.now().astimezone().isoformat(),
         }
         with self._locked():
@@ -109,11 +133,82 @@ class MarketContextStore:
                 if isinstance(item, dict) and item.get("date") != entry["date"]
             ]
             entries.append(entry)
-            entries.sort(key=lambda item: str(item.get("date", "")))
-            entries = entries[-CONFIG.market_context_max_entries :]
+            entries = self._sorted_entries(entries)[
+                -CONFIG.market_context_max_entries :
+            ]
             data["entries"] = entries
             self._write_unlocked(data)
             return list(entries)
+
+    def delete_date(self, session_date: date) -> list[dict[str, Any]]:
+        target = session_date.isoformat()
+        with self._locked():
+            data = self._read_unlocked()
+            data["entries"] = self._sorted_entries(
+                [
+                    item
+                    for item in data["entries"]
+                    if not (isinstance(item, dict) and item.get("date") == target)
+                ]
+            )
+            self._write_unlocked(data)
+            return list(data["entries"])
+
+    def export_bytes(self) -> bytes:
+        with self._locked():
+            data = self._read_unlocked()
+            data["entries"] = self._sorted_entries(data["entries"])[
+                -CONFIG.market_context_max_entries :
+            ]
+            return json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+
+    def import_bytes(self, payload: bytes) -> list[dict[str, Any]]:
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid context backup: {exc}") from None
+        if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+            raise ValueError("Invalid context backup structure")
+
+        validated: list[dict[str, Any]] = []
+        for raw in data["entries"]:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                session_date = date.fromisoformat(str(raw.get("date")))
+            except ValueError:
+                continue
+            level = str(raw.get("event_risk") or "NONE").upper()
+            verified = bool(raw.get("verified"))
+            if level not in self.ALLOWED_EVENT_RISK:
+                level = "NONE"
+            if level in {"MEDIUM", "HIGH"} and not verified:
+                level = "NONE"
+            validated.append(
+                {
+                    "date": session_date.isoformat(),
+                    "fii_cash_net": self._number(raw.get("fii_cash_net")),
+                    "dii_cash_net": self._number(raw.get("dii_cash_net")),
+                    "fii_index_futures_net": self._number(
+                        raw.get("fii_index_futures_net")
+                    ),
+                    "event_risk": level,
+                    "event_note": str(raw.get("event_note") or "").strip()[:280],
+                    "verified": verified,
+                    "source": str(raw.get("source") or "BACKUP")[:40],
+                    "updated_at": str(raw.get("updated_at") or ""),
+                }
+            )
+
+        deduped: dict[str, dict[str, Any]] = {
+            item["date"]: item for item in self._sorted_entries(validated)
+        }
+        entries = list(deduped.values())[-CONFIG.market_context_max_entries :]
+        with self._locked():
+            self._write_unlocked(
+                {"schema_version": self.SCHEMA_VERSION, "entries": entries}
+            )
+        return entries
 
     def clear(self) -> None:
         with self._locked():

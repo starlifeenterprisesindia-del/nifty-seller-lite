@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -116,12 +117,16 @@ def common_kwargs():
             as_of_date="2026-07-19",
             latest_fii_net=800,
             latest_dii_net=600,
+            latest_fii_index_futures_net=1200,
             fii_5d_net=2500,
             fii_10d_net=4000,
             fii_15d_net=5500,
             dii_5d_net=1500,
             dii_10d_net=2600,
             dii_15d_net=3500,
+            fii_index_futures_5d_net=3000,
+            fii_index_futures_10d_net=4500,
+            fii_index_futures_15d_net=6000,
             observations=15,
             state="NET INSTITUTIONAL SUPPORT",
             confidence=85,
@@ -377,3 +382,26 @@ def test_outlook_paths_are_normalized_to_one_hundred():
     )
     assert total == 100.0
     assert 0 <= result.outlook.fake_move_risk <= 100
+
+
+def test_unavailable_option_chain_zeroes_all_seller_setup_scores():
+    kwargs = common_kwargs()
+    unavailable = replace(
+        kwargs["options"],
+        bullish_score=0.0,
+        bearish_score=0.0,
+        range_score=100.0,
+        market_bias="UNAVAILABLE",
+        persistence="UNAVAILABLE",
+        confidence=0.0,
+        status="UNAVAILABLE",
+    )
+    kwargs.update(options=unavailable, option_chain_live=False)
+    result = calculate_final_decision(**kwargs)
+    assert result.ce_sell.score == 0.0
+    assert result.pe_sell.score == 0.0
+    assert result.iron_condor.score == 0.0
+    assert result.ce_sell.status == "UNAVAILABLE"
+    assert result.iron_condor.status == "UNAVAILABLE"
+    assert result.final_action == "WAIT"
+    assert result.outlook.range_path_pct == 100.0

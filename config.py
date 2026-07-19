@@ -21,8 +21,9 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.6.0_MARKET_MEMORY_FULL_AUDIT_PDF"
+    version: str = "2.7.0_INSTITUTIONAL_JOURNAL_INTEGRITY"
     request_timeout_seconds: int = 12
+    snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
     context_quote_max_age_seconds: int = 60
     candle_max_age_minutes: int = 5
@@ -98,7 +99,7 @@ class AppConfig:
 
     # Durable background context and final one-brain decision settings.
     market_context_path: str = "data/market_context.json"
-    market_context_max_entries: int = 120
+    market_context_max_entries: int = 15
     decision_minimum_score: float = 62.0
     decision_minimum_margin: float = 8.0
     decision_wait_block_threshold: float = 60.0

@@ -1,0 +1,36 @@
+NIFTY SELLER LITE V2.7 — CHANGELOG
+
+Institutional journal
+- Fixed the selected-date overwrite/display bug.
+- Each trading date now has its own record.
+- Saving the same date updates only that date.
+- Date selection reloads that date's saved values.
+- Journal is capped at the latest 15 trading sessions.
+- Added optional FII index-futures net field as secondary confirmation.
+- Added selected-date delete control.
+- Added visible saved-record table.
+- Added JSON backup download and restore.
+- Missing values remain missing and never become zero.
+
+Decision integrity
+- Missing option-chain data no longer becomes 100% decay/range evidence.
+- When option data is unavailable, CE Sell, PE Sell and Iron Condor are 0 and UNAVAILABLE.
+- Final action remains WAIT and the outlook becomes range/data-unavailable.
+- FII index futures can support the institutional background only as secondary confirmation.
+- Exactly one strategy brain remains analysis/decision.py.
+
+Level integrity
+- Current spot determines whether price is inside/above/below a zone.
+- Completed candles determine confirmed break/rejection.
+- Spot inside a resistance/support zone is TESTING / INSIDE ZONE, not falsely BROKEN.
+
+Dhan request safety
+- Added a 5-second manual snapshot-refresh cooldown.
+- HTTP 429 responses are not retried immediately.
+- Failed option-chain attempts are time-stamped in the client cooldown.
+
+PDF audit
+- Added exact capital, risk percentage and rupee risk budget to the cover.
+- Added FII index-futures latest and 5/10/15-session values.
+
+No order placement, order modification or broker exit code was added.

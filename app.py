@@ -48,9 +48,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.6 Market Memory + Full Live Audit PDF — one canonical strategy brain uses "
-    "bounded same-session signal memory, anti-flip confirmation, a conditional 5–15 "
-    "minute outlook and an immutable PDF audit of the same snapshot. Read only; no order placement."
+    "V2.7 Institutional Journal Integrity — one canonical strategy brain, bounded "
+    "market memory, full audit PDF and a date-wise 15-trading-session FII/DII journal. "
+    "Read only; no order placement."
 )
 
 
@@ -87,7 +87,18 @@ with st.sidebar:
     else:
         st.error("Dhan credentials missing")
     st.caption("Credentials remain only in Streamlit Secrets under [dhan].")
-    refresh = st.button("Fetch Fresh Snapshot", type="primary", width="stretch")
+    refresh_requested = st.button(
+        "Fetch Fresh Snapshot", type="primary", width="stretch"
+    )
+    refresh = False
+    if refresh_requested:
+        now_tick = datetime.now().timestamp()
+        last_tick = float(st.session_state.get("last_snapshot_fetch_ts", 0.0))
+        remaining = CONFIG.snapshot_min_refresh_seconds - (now_tick - last_tick)
+        if remaining > 0:
+            st.warning(f"Please wait {remaining:.1f}s before another Dhan snapshot.")
+        else:
+            refresh = True
     clear_instrument_cache = st.button("Clear instrument cache", width="stretch")
     clear_option_state = st.button("Clear today's option history", width="stretch")
     with st.expander("Risk & one-trade discipline", expanded=True):
@@ -146,36 +157,155 @@ with st.sidebar:
             "Defaults enforce one trade/day, one-lot cap and a conservative 0.5% "
             "risk budget. Lot size remains editable because exchange contracts can change."
         )
-    with st.expander("FII/DII & verified event context"):
+    with st.expander("FII/DII — 15-session journal"):
         context_date = st.date_input(
-            "Session date", datetime.now(ZoneInfo(IST_TIMEZONE)).date()
+            "Trading session date",
+            datetime.now(ZoneInfo(IST_TIMEZONE)).date(),
+            key="context_session_date",
         )
-        fii_raw = st.text_input("FII cash net ₹ crore (optional)", value="")
-        dii_raw = st.text_input("DII cash net ₹ crore (optional)", value="")
+        context_key = context_date.isoformat()
+        saved_context = context_store.get(context_date) or {}
+
+        def context_text(value: object) -> str:
+            return "" if value is None else str(value)
+
+        fii_raw = st.text_input(
+            "FII cash net ₹ crore",
+            value=context_text(saved_context.get("fii_cash_net")),
+            key=f"fii_cash_{context_key}",
+        )
+        dii_raw = st.text_input(
+            "DII cash net ₹ crore",
+            value=context_text(saved_context.get("dii_cash_net")),
+            key=f"dii_cash_{context_key}",
+        )
+        fii_futures_raw = st.text_input(
+            "FII index futures net ₹ crore (optional)",
+            value=context_text(saved_context.get("fii_index_futures_net")),
+            key=f"fii_futures_{context_key}",
+        )
+        event_options = ["NONE", "LOW", "MEDIUM", "HIGH"]
+        saved_level = str(saved_context.get("event_risk") or "NONE").upper()
         event_level = st.selectbox(
-            "Verified market event risk", ["NONE", "LOW", "MEDIUM", "HIGH"]
+            "Verified market event risk",
+            event_options,
+            index=event_options.index(saved_level)
+            if saved_level in event_options
+            else 0,
+            key=f"event_level_{context_key}",
         )
-        event_verified = st.checkbox("Risk/news personally verified", value=False)
-        event_note = st.text_input("Short event note (optional)", value="")
-        save_context = st.button("Save market context", width="stretch")
+        event_verified = st.checkbox(
+            "Risk/news personally verified",
+            value=bool(saved_context.get("verified", False)),
+            key=f"event_verified_{context_key}",
+        )
+        event_note = st.text_input(
+            "Short event note (optional)",
+            value=str(saved_context.get("event_note") or ""),
+            key=f"event_note_{context_key}",
+        )
+        save_context = st.button(
+            "Save / update selected date",
+            width="stretch",
+            key=f"save_context_{context_key}",
+        )
+        delete_context = st.button(
+            "Delete selected date",
+            width="stretch",
+            disabled=not bool(saved_context),
+            key=f"delete_context_{context_key}",
+        )
         st.caption(
-            "Missing FII/DII is kept as missing, never converted to zero. "
-            "Medium/high event risk is accepted only when verified."
+            "One row per trading date. Same date updates only that row; a new date adds "
+            "a row. Only the latest 15 trading sessions are kept. Missing stays missing, "
+            "never zero."
         )
+
+        saved_rows = list(reversed(context_store.load()))
+        if saved_rows:
+            st.dataframe(
+                [
+                    {
+                        "Date": row.get("date"),
+                        "FII cash": row.get("fii_cash_net"),
+                        "DII cash": row.get("dii_cash_net"),
+                        "FII futures": row.get("fii_index_futures_net"),
+                        "Event": row.get("event_risk", "NONE"),
+                    }
+                    for row in saved_rows
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+        st.download_button(
+            "Download 15-session backup JSON",
+            data=context_store.export_bytes(),
+            file_name="nifty_seller_lite_fii_dii_15_sessions.json",
+            mime="application/json",
+            width="stretch",
+        )
+        context_backup = st.file_uploader(
+            "Restore journal backup (JSON)",
+            type=["json"],
+            key="context_backup_upload",
+        )
+        restore_context = st.button(
+            "Restore uploaded backup",
+            width="stretch",
+            disabled=context_backup is None,
+        )
+
     if save_context:
         try:
             context_store.upsert(
                 session_date=context_date,
                 fii_cash_net=optional_number(fii_raw),
                 dii_cash_net=optional_number(dii_raw),
+                fii_index_futures_net=optional_number(fii_futures_raw),
                 event_risk=event_level,
                 event_note=event_note,
                 verified=event_verified,
             )
             st.session_state.pop("snapshot", None)
-            st.success("Market context saved")
+            st.success(f"Institutional context saved for {context_date.isoformat()}")
+            st.rerun()
         except Exception as exc:
             st.error(f"Context not saved: {exc}")
+    if delete_context:
+        context_store.delete_date(context_date)
+        for prefix in (
+            "fii_cash_",
+            "dii_cash_",
+            "fii_futures_",
+            "event_level_",
+            "event_verified_",
+            "event_note_",
+        ):
+            st.session_state.pop(f"{prefix}{context_key}", None)
+        st.session_state.pop("snapshot", None)
+        st.success(f"Deleted institutional context for {context_key}")
+        st.rerun()
+    if restore_context and context_backup is not None:
+        try:
+            context_store.import_bytes(context_backup.getvalue())
+            for key in list(st.session_state):
+                if key.startswith(
+                    (
+                        "fii_cash_",
+                        "dii_cash_",
+                        "fii_futures_",
+                        "event_level_",
+                        "event_verified_",
+                        "event_note_",
+                    )
+                ):
+                    st.session_state.pop(key, None)
+            st.session_state.pop("snapshot", None)
+            st.success("15-session institutional journal restored")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Backup not restored: {exc}")
     if clear_instrument_cache:
         cache = Path("data/instrument_master.csv")
         if cache.exists():
@@ -237,6 +367,7 @@ if "snapshot" not in st.session_state or refresh:
                 discipline_store,
             )
             st.session_state.snapshot = service.build(risk_profile=risk_profile)
+            st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
     except Exception as exc:
         st.error(f"Snapshot failed safely: {exc}")
         st.stop()

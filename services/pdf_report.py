@@ -331,6 +331,12 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
             "Final brain",
             "analysis/decision.py (single canonical brain)",
         ],
+        [
+            "Risk profile",
+            f"₹{snapshot.risk_profile.capital_rupees:,.0f} at {snapshot.risk_profile.risk_pct:.2f}%",
+            "Risk budget",
+            f"₹{snapshot.risk_profile.risk_budget_rupees:,.2f}",
+        ],
     ]
     story.append(
         _table(
@@ -1110,6 +1116,16 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
                     inst.state,
                     f"{inst.confidence:.1f}% / {inst.status}",
                     f"As of {inst.as_of_date or '-'}",
+                ],
+                [
+                    "FII index futures net",
+                    inst.latest_fii_index_futures_net,
+                    inst.fii_index_futures_5d_net,
+                    inst.fii_index_futures_10d_net,
+                    inst.fii_index_futures_15d_net,
+                    "SECONDARY CONFIRMATION",
+                    f"{inst.confidence:.1f}% / {inst.status}",
+                    "Optional; cash data remains primary",
                 ],
                 [
                     "Verified event risk",

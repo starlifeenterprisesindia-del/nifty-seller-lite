@@ -1,45 +1,53 @@
-# Nifty Seller Lite — V2.6 Market Memory & Full Live Audit PDF
+# Nifty Seller Lite — V2.7 Institutional Journal Integrity
 
 A read-only Streamlit decision-support app built around one authoritative DhanHQ
 `MarketSnapshot` and exactly one canonical strategy brain:
 `analysis/decision.py::calculate_final_decision`.
 
-## What V2.6 includes
+## What V2.7 adds
 
-- All V2.5 market-memory, anti-flip and fake-move-filter functionality.
-- Bounded same-session memory of the latest five fresh signal snapshots.
-- Developing, Confirmed, Transition / Wait and rapid-reversal signal states.
-- Conditional `Next 5–15 Min Market Outlook` with bullish, range and bearish paths,
-  fake-move risk, signal memory and invalidation.
-- A `Generate Full Live Audit PDF` button near the top of the app.
-- The PDF freezes the exact current `MarketSnapshot`; it performs no API request and
-  does not recalculate CE Sell, PE Sell, Iron Condor, WAIT or the outlook.
-- Full report sections for feed freshness, compact evidence, final one-brain decision,
-  support/resistance, indicators, NIFTY-futures volume, OI/option flow, PCR, walls,
-  Top-7, VIX, FII/DII, events, strike plans, execution guard and position guardian.
-- Raw active option-chain rows and recent completed NIFTY/futures candles.
-- A 5-minute and 15-minute outcome-verification worksheet plus canonical snapshot JSON.
+- Date-wise FII/DII journal: each trading date has its own row.
+- Saving the same date updates that date only; another date is never overwritten.
+- The journal keeps the latest 15 trading sessions, not 15 calendar days.
+- Manual fields: FII cash net, DII cash net and optional FII index-futures net.
+- Date selection reloads the saved values for that exact date.
+- JSON backup download and restore for Streamlit restart/redeploy safety.
+- Missing institutional values remain missing and never become zero.
+- FII index futures is secondary confirmation; cash data remains primary.
+- Missing option-chain data can no longer create a false Iron Condor/decay score.
+- Current spot and completed-candle confirmation are separated for support/resistance status.
+- Dhan HTTP 429 is not retried immediately, and app refreshes have a short cooldown.
+- The audit PDF prints the exact capital, risk percentage and rupee risk budget used by the snapshot.
+
+## Existing V2.6 functionality retained
+
+- Bounded market memory, anti-flip confirmation and fake-move filter.
+- Conditional 5–15 minute market outlook.
+- Compact all-features evidence matrix.
+- CE Sell, PE Sell, Iron Condor and WAIT One-Brain decision.
+- Protected strike planner, execution guard and position guardian.
+- Full immutable live-audit PDF generated from the same snapshot.
 
 ## One-brain workflow
 
 1. One authoritative DhanHQ snapshot.
 2. Price action, levels, EMA/MACD/RSI and NIFTY-futures volume.
 3. Premium + OI + option-volume intelligence, movement windows, walls and contextual PCR.
-4. Top-7, India VIX and optional FII/DII/event context.
-5. One final brain calculates CE Sell, PE Sell, Iron Condor, WAIT, signal memory,
-   fake-move risk and the conditional outlook.
-6. Protected strike planner consumes the final action only.
-7. Execution Guard applies freshness, confirmation, risk budget and one-trade rules.
-8. Position Guardian monitors a manually marked trade; it never places or exits orders.
-9. PDF Report reads the completed snapshot only and creates an immutable audit record.
+4. Top-7, India VIX and optional 15-session FII/DII/event context.
+5. One final brain calculates strategy scores, WAIT, signal memory, fake-move risk and outlook.
+6. Downstream planner/guards consume that decision and cannot select another strategy.
+7. PDF reporting reads the completed snapshot only and performs no API request.
 
-## Live testing workflow
+## Institutional data workflow
 
-1. Fetch a fresh snapshot.
-2. Generate and download the audit PDF.
-3. Repeat at important checkpoints or after 5 and 15 minutes.
-4. Compare snapshot IDs, times, NIFTY price, outlook, invalidation and later movement.
-5. Classify the result as Correct, Partial, Wrong or Fake Move Avoided.
+1. Select the trading date.
+2. Enter FII cash net and DII cash net.
+3. Optionally enter FII index-futures net.
+4. Save/update the selected date.
+5. Download the JSON backup after completing the journal.
+
+The app automatically calculates 5-, 10- and 15-session sums. NIFTY price, OI, VIX,
+price action, Top-7 and candles are fetched automatically and should not be manually saved.
 
 ## Streamlit secrets
 

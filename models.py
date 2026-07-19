@@ -275,12 +275,16 @@ class InstitutionalContext:
     as_of_date: str | None
     latest_fii_net: float | None
     latest_dii_net: float | None
+    latest_fii_index_futures_net: float | None
     fii_5d_net: float | None
     fii_10d_net: float | None
     fii_15d_net: float | None
     dii_5d_net: float | None
     dii_10d_net: float | None
     dii_15d_net: float | None
+    fii_index_futures_5d_net: float | None
+    fii_index_futures_10d_net: float | None
+    fii_index_futures_15d_net: float | None
     observations: int
     state: str
     confidence: float
