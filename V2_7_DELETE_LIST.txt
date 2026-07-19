@@ -1,9 +1,0 @@
-After V2.7 is deployed successfully, delete only these obsolete V2.6 release-document files from the repository root:
-
-DEPLOY_V2_6.txt
-V2_6_CHANGELOG.txt
-V2_6_DELETE_LIST.txt
-V2_6_TEST_REPORT.txt
-V2_6_UPLOAD_LIST.txt
-
-Do not delete app code, folders, Streamlit Secrets, runtime data, README.md or ARCHITECTURE.md.
