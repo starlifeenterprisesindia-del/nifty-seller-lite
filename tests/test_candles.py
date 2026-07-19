@@ -3,7 +3,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from analysis.candles import aggregate_candles, candles_from_dhan, mark_completed_candles
+from analysis.candles import (
+    aggregate_candles,
+    candles_from_dhan,
+    mark_completed_candles,
+)
 
 
 IST = ZoneInfo("Asia/Kolkata")

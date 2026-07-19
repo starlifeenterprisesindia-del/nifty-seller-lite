@@ -13,7 +13,9 @@ from services.errors import DhanAPIError
 
 class DhanClient:
     # Read-only client. There are intentionally no order methods here.
-    def __init__(self, credentials: Credentials, session: requests.Session | None = None):
+    def __init__(
+        self, credentials: Credentials, session: requests.Session | None = None
+    ):
         credentials.validate()
         self.credentials = credentials
         self.session = session or requests.Session()
@@ -29,19 +31,30 @@ class DhanClient:
             "client-id": self.credentials.client_id,
         }
 
-    def _post(self, path: str, payload: dict[str, Any], *, retry_once: bool = True) -> dict[str, Any]:
+    def _post(
+        self, path: str, payload: dict[str, Any], *, retry_once: bool = True
+    ) -> dict[str, Any]:
         url = f"{DHAN_BASE_URL}{path}"
         attempts = 2 if retry_once else 1
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
-                response = self.session.post(url, headers=self.headers, json=payload, timeout=self.timeout)
+                response = self.session.post(
+                    url, headers=self.headers, json=payload, timeout=self.timeout
+                )
                 data = response.json() if response.content else {}
                 if response.status_code >= 400:
-                    message = data.get("errorMessage") or data.get("message") or response.text
+                    message = (
+                        data.get("errorMessage") or data.get("message") or response.text
+                    )
                     raise DhanAPIError(f"DhanHQ HTTP {response.status_code}: {message}")
-                if isinstance(data, dict) and data.get("status") not in (None, "success"):
-                    message = data.get("errorMessage") or data.get("message") or str(data)
+                if isinstance(data, dict) and data.get("status") not in (
+                    None,
+                    "success",
+                ):
+                    message = (
+                        data.get("errorMessage") or data.get("message") or str(data)
+                    )
                     raise DhanAPIError(f"DhanHQ unsuccessful response: {message}")
                 if not isinstance(data, dict):
                     raise DhanAPIError("DhanHQ returned non-object JSON")
@@ -88,8 +101,13 @@ class DhanClient:
         }
         return self._post("/charts/intraday", payload)
 
-    def expiry_list(self, underlying_security_id: int = 13, segment: str = "IDX_I") -> list[str]:
-        payload = {"UnderlyingScrip": int(underlying_security_id), "UnderlyingSeg": segment}
+    def expiry_list(
+        self, underlying_security_id: int = 13, segment: str = "IDX_I"
+    ) -> list[str]:
+        payload = {
+            "UnderlyingScrip": int(underlying_security_id),
+            "UnderlyingSeg": segment,
+        }
         response = self._post("/optionchain/expirylist", payload)
         data = response.get("data", [])
         if not isinstance(data, list):

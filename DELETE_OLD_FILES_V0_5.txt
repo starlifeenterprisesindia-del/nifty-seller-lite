@@ -1,0 +1,33 @@
+DELETE THESE FROM THE GITHUB REPOSITORY IF PRESENT
+
+DEPLOY_MILESTONE_1.txt
+MILESTONE_1_TEST_REPORT.txt
+DEPLOY_MILESTONE_2.txt
+MILESTONE_2_CHANGELOG.txt
+MILESTONE_2_TEST_REPORT.txt
+DEPLOY_V0_2_1.txt
+V0_2_1_CHANGELOG.txt
+V0_2_1_TEST_REPORT.txt
+.pytest_cache/          (entire folder)
+__pycache__/            (any occurrence)
+*.pyc                   (any occurrence)
+
+DO NOT DELETE
+
+app.py
+config.py
+models.py
+requirements.txt
+requirements-dev.txt
+.streamlit/
+analysis/
+data/
+services/
+tests/
+ui/
+README.md
+ARCHITECTURE.md
+DEPLOY_V0_5.txt
+DELETE_OLD_FILES_V0_5.txt
+V0_5_CHANGELOG.txt
+V0_5_TEST_REPORT.txt

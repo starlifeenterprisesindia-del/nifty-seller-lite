@@ -49,7 +49,9 @@ class InstrumentMaster:
         return None
 
     def download(self) -> pd.DataFrame:
-        response = requests.get(INSTRUMENT_MASTER_URL, timeout=CONFIG.request_timeout_seconds)
+        response = requests.get(
+            INSTRUMENT_MASTER_URL, timeout=CONFIG.request_timeout_seconds
+        )
         response.raise_for_status()
         df = pd.read_csv(StringIO(response.text), low_memory=False)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 
 from config import CONFIG
@@ -99,10 +97,13 @@ def calculate_timeframe_indicators(
 
     ema20_series = close.ewm(span=20, adjust=False).mean()
     ema50_series = close.ewm(span=50, adjust=False).mean()
-    macd_series = close.ewm(span=12, adjust=False).mean() - close.ewm(
-        span=26,
-        adjust=False,
-    ).mean()
+    macd_series = (
+        close.ewm(span=12, adjust=False).mean()
+        - close.ewm(
+            span=26,
+            adjust=False,
+        ).mean()
+    )
     signal_series = macd_series.ewm(span=9, adjust=False).mean()
     histogram_series = macd_series - signal_series
     rsi_series = _rsi_wilder(close, 14)

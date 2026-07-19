@@ -8,10 +8,18 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from analysis.candles import aggregate_candles, candles_from_dhan, mark_completed_candles
+from analysis.candles import (
+    aggregate_candles,
+    candles_from_dhan,
+    mark_completed_candles,
+)
+from analysis.core_market import calculate_core_market_evidence
 from analysis.indicators import calculate_indicator_bundle
+from analysis.levels import calculate_levels
 from analysis.market_session import classify_market_session, feed_use_state
 from analysis.option_chain import option_chain_to_frame, select_atm_window
+from analysis.price_action import calculate_price_action_bundle
+from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
 from models import FeedStatus, MarketSnapshot
 from services.dhan_client import DhanClient
@@ -54,7 +62,9 @@ class SnapshotService:
         try:
             if isinstance(raw, (int, float)):
                 unit = "ms" if float(raw) > 10_000_000_000 else "s"
-                parsed = pd.to_datetime(raw, unit=unit, utc=True).tz_convert(IST_TIMEZONE)
+                parsed = pd.to_datetime(raw, unit=unit, utc=True).tz_convert(
+                    IST_TIMEZONE
+                )
             else:
                 parsed = pd.to_datetime(raw)
             if parsed.tzinfo is None:
@@ -62,13 +72,6 @@ class SnapshotService:
             else:
                 parsed = parsed.tz_convert(IST_TIMEZONE)
             return max(0.0, (pd.Timestamp(now) - parsed).total_seconds())
-        except Exception:
-            return None
-
-    def _resolve_future(self) -> ResolvedInstrument | None:
-        try:
-            raw_master = self.master.load()
-            return self.master.resolve_nearest_nifty_future(raw_master)
         except Exception:
             return None
 
@@ -91,6 +94,52 @@ class SnapshotService:
         except Exception:
             return None
 
+    def _resolve_future(self) -> ResolvedInstrument | None:
+        try:
+            raw_master = self.master.load()
+            return self.master.resolve_nearest_nifty_future(raw_master)
+        except Exception:
+            return None
+
+    def _fetch_candles(
+        self,
+        *,
+        security_id: str | int,
+        exchange_segment: str,
+        instrument: str,
+        from_date: datetime,
+        current: datetime,
+        include_oi: bool = False,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        raw_1m = self.client.intraday_candles(
+            security_id=str(security_id),
+            exchange_segment=exchange_segment,
+            instrument=instrument,
+            interval=1,
+            from_date=from_date,
+            to_date=current,
+            include_oi=include_oi,
+        )
+        raw_15m = self.client.intraday_candles(
+            security_id=str(security_id),
+            exchange_segment=exchange_segment,
+            instrument=instrument,
+            interval=15,
+            from_date=from_date,
+            to_date=current,
+            include_oi=include_oi,
+        )
+        candles_1m = mark_completed_candles(candles_from_dhan(raw_1m), 1, current)
+        candles_3m = mark_completed_candles(
+            aggregate_candles(
+                candles_1m.drop(columns=["is_complete"], errors="ignore"), 3
+            ),
+            3,
+            current,
+        )
+        candles_15m = mark_completed_candles(candles_from_dhan(raw_15m), 15, current)
+        return candles_1m, candles_3m, candles_15m
+
     def build(self, now: datetime | None = None) -> MarketSnapshot:
         if now is None:
             current = datetime.now(IST)
@@ -100,9 +149,8 @@ class SnapshotService:
             current = now.replace(tzinfo=IST)
 
         future_ref = self._resolve_future()
-        # NIFTY and INDIA VIX share the same IDX_I segment. Build the request
-        # incrementally so one instrument cannot overwrite the other in a dict
-        # literal with duplicate keys.
+        # NIFTY and INDIA VIX share IDX_I. Incremental construction prevents
+        # duplicate dictionary keys from overwriting an instrument.
         grouped: dict[str, list[int]] = {}
         grouped.setdefault(CONFIG.nifty.exchange_segment, []).append(
             int(CONFIG.nifty.security_id)
@@ -111,7 +159,9 @@ class SnapshotService:
             int(CONFIG.india_vix.security_id)
         )
         if future_ref:
-            grouped.setdefault(future_ref.exchange_segment, []).append(future_ref.security_id)
+            grouped.setdefault(future_ref.exchange_segment, []).append(
+                future_ref.security_id
+            )
         for item in CONFIG.top7:
             grouped.setdefault(item.exchange_segment, []).append(int(item.security_id))
 
@@ -123,7 +173,6 @@ class SnapshotService:
         )
         if not nifty_quote:
             raise SnapshotBuildError("NIFTY quote missing from DhanHQ response")
-
         vix_quote = self._extract_quote(
             quote_response,
             CONFIG.india_vix.exchange_segment,
@@ -131,9 +180,7 @@ class SnapshotService:
         )
         future_quote = (
             self._extract_quote(
-                quote_response,
-                future_ref.exchange_segment,
-                future_ref.security_id,
+                quote_response, future_ref.exchange_segment, future_ref.security_id
             )
             if future_ref
             else None
@@ -142,9 +189,7 @@ class SnapshotService:
         heavyweight_quotes: list[dict[str, Any]] = []
         for item in CONFIG.top7:
             quote = self._extract_quote(
-                quote_response,
-                item.exchange_segment,
-                item.security_id,
+                quote_response, item.exchange_segment, item.security_id
             )
             if quote:
                 heavyweight_quotes.append(
@@ -158,29 +203,34 @@ class SnapshotService:
                 )
 
         from_date = current - timedelta(days=CONFIG.candle_lookback_days)
-        candles_1m_raw = self.client.intraday_candles(
+        candles_1m, candles_3m, candles_15m = self._fetch_candles(
             security_id=CONFIG.nifty.security_id,
             exchange_segment=CONFIG.nifty.exchange_segment,
             instrument=CONFIG.nifty.instrument,
-            interval=1,
             from_date=from_date,
-            to_date=current,
+            current=current,
         )
-        candles_15m_raw = self.client.intraday_candles(
-            security_id=CONFIG.nifty.security_id,
-            exchange_segment=CONFIG.nifty.exchange_segment,
-            instrument=CONFIG.nifty.instrument,
-            interval=15,
-            from_date=from_date,
-            to_date=current,
-        )
-        candles_1m = mark_completed_candles(candles_from_dhan(candles_1m_raw), 1, current)
-        candles_3m = mark_completed_candles(
-            aggregate_candles(candles_1m.drop(columns=["is_complete"], errors="ignore"), 3),
-            3,
-            current,
-        )
-        candles_15m = mark_completed_candles(candles_from_dhan(candles_15m_raw), 15, current)
+
+        future_candles_1m = pd.DataFrame()
+        future_candles_3m = pd.DataFrame()
+        future_candles_15m = pd.DataFrame()
+        future_candle_error: str | None = None
+        if future_ref:
+            try:
+                (
+                    future_candles_1m,
+                    future_candles_3m,
+                    future_candles_15m,
+                ) = self._fetch_candles(
+                    security_id=future_ref.security_id,
+                    exchange_segment=future_ref.exchange_segment,
+                    instrument=future_ref.instrument,
+                    from_date=from_date,
+                    current=current,
+                    include_oi=True,
+                )
+            except Exception as exc:
+                future_candle_error = str(exc)
 
         quote_age = self._quote_age_seconds(nifty_quote, current)
         latest_1m_age = self._latest_candle_age_seconds(candles_1m, current)
@@ -212,16 +262,11 @@ class SnapshotService:
             name="instruments",
             ok=len(heavyweight_quotes) == len(CONFIG.top7),
             fetched_at=current,
-            message=(
-                f"Received {len(heavyweight_quotes)}/{len(CONFIG.top7)} configured "
-                "heavyweight quotes"
-            ),
+            message=f"Received {len(heavyweight_quotes)}/{len(CONFIG.top7)} configured heavyweight quotes",
             source="Configured Dhan security IDs",
-            use_state=(
-                "READY"
-                if len(heavyweight_quotes) == len(CONFIG.top7)
-                else "CAUTION"
-            ),
+            use_state="READY"
+            if len(heavyweight_quotes) == len(CONFIG.top7)
+            else "CAUTION",
         )
         candle_available = (
             len(candles_1m) >= CONFIG.minimum_one_minute_candles
@@ -232,15 +277,39 @@ class SnapshotService:
             ok=candle_available,
             fetched_at=current,
             age_seconds=latest_1m_age,
-            message=(
-                f"1m={len(candles_1m)}, derived 3m={len(candles_3m)}, "
-                f"native 15m={len(candles_15m)}"
-            ),
+            message=f"NIFTY 1m={len(candles_1m)}, derived 3m={len(candles_3m)}, native 15m={len(candles_15m)}",
             use_state=feed_use_state(
                 available=candle_available,
                 market_session=market_session,
                 age_seconds=latest_1m_age,
                 max_live_age_seconds=CONFIG.candle_max_age_minutes * 60,
+            ),
+        )
+        future_candle_available = (
+            not future_candles_3m.empty and not future_candles_15m.empty
+        )
+        statuses["future_volume"] = FeedStatus(
+            name="future_volume",
+            ok=future_candle_available,
+            fetched_at=current,
+            age_seconds=self._latest_candle_age_seconds(future_candles_1m, current),
+            message=(
+                f"NIFTY future 1m={len(future_candles_1m)}, 3m={len(future_candles_3m)}, 15m={len(future_candles_15m)}"
+                if future_candle_available
+                else future_candle_error or "Nearest NIFTY future unavailable"
+            ),
+            source="DhanHQ NIFTY FUTIDX candles",
+            use_state=(
+                feed_use_state(
+                    available=True,
+                    market_session=market_session,
+                    age_seconds=self._latest_candle_age_seconds(
+                        future_candles_1m, current
+                    ),
+                    max_live_age_seconds=CONFIG.candle_max_age_minutes * 60,
+                )
+                if future_candle_available
+                else "UNAVAILABLE"
             ),
         )
 
@@ -259,7 +328,11 @@ class SnapshotService:
                     continue
                 if parsed_expiry >= current.date():
                     active_expiries.append((parsed_expiry, item))
-            expiry = min(active_expiries, key=lambda pair: pair[0])[1] if active_expiries else None
+            expiry = (
+                min(active_expiries, key=lambda pair: pair[0])[1]
+                if active_expiries
+                else None
+            )
             if expiry:
                 response = self.client.option_chain(
                     expiry=expiry,
@@ -269,20 +342,15 @@ class SnapshotService:
                 option_spot, full_chain = option_chain_to_frame(response)
                 spot = option_spot or float(nifty_quote.get("last_price"))
                 option_frame = select_atm_window(
-                    full_chain,
-                    spot,
-                    CONFIG.option_strikes_each_side,
+                    full_chain, spot, CONFIG.option_strikes_each_side
                 )
                 statuses["option_chain"] = FeedStatus(
                     name="option_chain",
                     ok=not option_frame.empty,
                     fetched_at=current,
                     age_seconds=0.0,
-                    message=(
-                        f"Expiry {expiry}, {len(option_frame)} CE/PE rows in ATM window; "
-                        "response age is not market-tick age"
-                    ),
-                    use_state=("LIVE" if market_session.is_live else "REFERENCE"),
+                    message=f"Expiry {expiry}, {len(option_frame)} CE/PE rows in ATM window; response age is not market-tick age",
+                    use_state="LIVE" if market_session.is_live else "REFERENCE",
                 )
             else:
                 statuses["option_chain"] = FeedStatus(
@@ -302,14 +370,34 @@ class SnapshotService:
             )
 
         indicators = calculate_indicator_bundle(candles_3m, candles_15m)
+        price_action = calculate_price_action_bundle(candles_3m, candles_15m)
+        current_price = nifty_quote.get("last_price")
+        levels = calculate_levels(candles_3m, candles_15m, indicators, current_price)
+        volume = calculate_volume_bundle(
+            future_candles_3m,
+            future_candles_15m,
+            candles_3m,
+            candles_15m,
+        )
+        core_evidence = calculate_core_market_evidence(
+            price_action,
+            indicators,
+            levels,
+            volume,
+            market_session,
+        )
+
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
             "market_state": market_session.code,
             "nifty": nifty_quote.get("last_price"),
             "expiry": expiry,
-            "last_1m": (
-                candles_1m.iloc[-1]["timestamp"].isoformat()
-                if not candles_1m.empty
+            "last_1m": candles_1m.iloc[-1]["timestamp"].isoformat()
+            if not candles_1m.empty
+            else None,
+            "last_future_1m": (
+                future_candles_1m.iloc[-1]["timestamp"].isoformat()
+                if not future_candles_1m.empty
                 else None
             ),
             "option_rows": len(option_frame),
@@ -333,20 +421,27 @@ class SnapshotService:
             candles_1m=candles_1m,
             candles_3m=candles_3m,
             candles_15m=candles_15m,
+            future_candles_1m=future_candles_1m,
+            future_candles_3m=future_candles_3m,
+            future_candles_15m=future_candles_15m,
             indicators=indicators,
+            price_action=price_action,
+            levels=levels,
+            volume=volume,
+            core_evidence=core_evidence,
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
             metadata={
                 "version": CONFIG.version,
                 "read_only": True,
+                "strategy_scores_enabled": False,
                 "live_trading_ready": market_session.is_live
-                and all(
-                    item.use_state in {"LIVE", "READY"}
-                    for item in statuses.values()
-                ),
+                and statuses["quotes"].use_state == "LIVE"
+                and statuses["candles"].use_state == "LIVE",
                 "top7_configured": list(CONFIG.top7_symbols),
                 "vix_resolved": bool(vix_quote),
                 "future_resolved": bool(future_quote),
+                "future_volume_resolved": future_candle_available,
             },
         )

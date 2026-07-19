@@ -61,6 +61,107 @@ class IndicatorBundle:
     fifteen_minute: TimeframeIndicators
 
 
+@dataclass(frozen=True)
+class TimeframePriceAction:
+    timeframe: str
+    as_of: datetime | None
+    structure: str
+    event: str
+    move_stage: str
+    last_swing_high: float | None
+    prior_swing_high: float | None
+    last_swing_low: float | None
+    prior_swing_low: float | None
+    invalidation_level: float | None
+    atr14: float | None
+    bullish_score: float
+    bearish_score: float
+    range_score: float
+    confidence: float
+    reasons: tuple[str, ...]
+    status: str
+
+
+@dataclass(frozen=True)
+class PriceActionBundle:
+    three_minute: TimeframePriceAction
+    fifteen_minute: TimeframePriceAction
+    relationship: str
+    combined_state: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class MarketLevel:
+    label: str
+    side: str
+    lower: float
+    upper: float
+    midpoint: float
+    strength: float
+    status: str
+    distance_points: float
+    sources: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LevelBundle:
+    as_of: datetime | None
+    current_price: float | None
+    immediate_support: MarketLevel | None
+    strong_support: MarketLevel | None
+    immediate_resistance: MarketLevel | None
+    strong_resistance: MarketLevel | None
+    previous_day_high: float | None
+    previous_day_low: float | None
+    opening_range_high: float | None
+    opening_range_low: float | None
+    upside_room: float | None
+    downside_room: float | None
+    current_position: str
+    zone_width: float | None
+    status: str
+
+
+@dataclass(frozen=True)
+class TimeframeVolume:
+    timeframe: str
+    as_of: datetime | None
+    current_volume: float | None
+    baseline_volume: float | None
+    relative_volume: float | None
+    volume_state: str
+    volume_trend: str
+    price_direction: str
+    move_support: str
+    baseline_samples: int
+    confidence: float
+    status: str
+
+
+@dataclass(frozen=True)
+class VolumeBundle:
+    source: str
+    three_minute: TimeframeVolume
+    fifteen_minute: TimeframeVolume
+    overall_view: str
+    confidence: float
+    status: str
+
+
+@dataclass(frozen=True)
+class CoreMarketEvidence:
+    bullish_score: float
+    bearish_score: float
+    range_score: float
+    confidence: float
+    market_state: str
+    move_stage: str
+    status: str
+    reasons: tuple[str, ...]
+    blockers: tuple[str, ...]
+
+
 @dataclass
 class MarketSnapshot:
     snapshot_id: str
@@ -73,7 +174,14 @@ class MarketSnapshot:
     candles_1m: pd.DataFrame
     candles_3m: pd.DataFrame
     candles_15m: pd.DataFrame
+    future_candles_1m: pd.DataFrame
+    future_candles_3m: pd.DataFrame
+    future_candles_15m: pd.DataFrame
     indicators: IndicatorBundle
+    price_action: PriceActionBundle
+    levels: LevelBundle
+    volume: VolumeBundle
+    core_evidence: CoreMarketEvidence
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
@@ -90,9 +198,18 @@ class MarketSnapshot:
             "candles_1m": int(len(self.candles_1m)),
             "candles_3m": int(len(self.candles_3m)),
             "candles_15m": int(len(self.candles_15m)),
+            "future_candles_1m": int(len(self.future_candles_1m)),
+            "future_candles_3m": int(len(self.future_candles_3m)),
+            "future_candles_15m": int(len(self.future_candles_15m)),
             "indicators": {
                 "3m": asdict(self.indicators.three_minute),
                 "15m": asdict(self.indicators.fifteen_minute),
             },
-            "feeds": {name: asdict(status) for name, status in self.feed_status.items()},
+            "price_action": asdict(self.price_action),
+            "levels": asdict(self.levels),
+            "volume": asdict(self.volume),
+            "core_evidence": asdict(self.core_evidence),
+            "feeds": {
+                name: asdict(status) for name, status in self.feed_status.items()
+            },
         }

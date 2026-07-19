@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from config import CONFIG
 from services.snapshot_service import SnapshotService
+from services.instrument_master import ResolvedInstrument
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -118,3 +119,48 @@ def test_weekend_snapshot_is_reference_and_top7_are_present():
     assert snapshot.feed_status["instruments"].use_state == "READY"
     assert snapshot.indicators.three_minute.status == "READY"
     assert snapshot.indicators.fifteen_minute.status == "READY"
+
+
+class StubFutureMaster:
+    def load(self):
+        return None
+
+    def resolve_nearest_nifty_future(self, raw):
+        return ResolvedInstrument(
+            symbol="NIFTY_FUT",
+            security_id=999,
+            exchange_segment="NSE_FNO",
+            instrument="FUTIDX",
+            display_name="NIFTY JUL FUT",
+            expiry="2026-07-30",
+        )
+
+
+class StubFutureClient(StubClient):
+    def market_quote(self, grouped):
+        assert grouped["NSE_FNO"] == [999]
+        response = super().market_quote(
+            {key: value for key, value in grouped.items() if key != "NSE_FNO"}
+        )
+        response["data"]["NSE_FNO"] = {
+            "999": {
+                "last_price": 24370.0,
+                "last_trade_time": int(
+                    datetime(2026, 7, 17, 15, 29, tzinfo=IST).timestamp()
+                ),
+                "ohlc": {"open": 24220, "high": 24420, "low": 24180, "close": 24310},
+                "volume": 200000,
+            }
+        }
+        return response
+
+
+def test_snapshot_connects_nifty_future_volume_to_core_engine():
+    service = SnapshotService(StubFutureClient(), StubFutureMaster())
+    snapshot = service.build(datetime(2026, 7, 19, 13, 37, tzinfo=IST))
+    assert snapshot.nifty_future_quote is not None
+    assert not snapshot.future_candles_3m.empty
+    assert not snapshot.future_candles_15m.empty
+    assert snapshot.feed_status["future_volume"].ok
+    assert snapshot.volume.source == "NIFTY FUTURES"
+    assert snapshot.core_evidence.status == "REFERENCE ONLY"

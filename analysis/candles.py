@@ -15,17 +15,33 @@ def candles_from_dhan(payload: dict[str, Any]) -> pd.DataFrame:
     lengths = [len(payload.get(name, [])) for name in REQUIRED_ARRAYS]
     if not lengths or min(lengths, default=0) == 0:
         return pd.DataFrame(
-            columns=["timestamp", "open", "high", "low", "close", "volume", "open_interest"]
+            columns=[
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "open_interest",
+            ]
         )
     size = min(lengths)
-    frame = pd.DataFrame({name: payload.get(name, [])[:size] for name in REQUIRED_ARRAYS})
+    frame = pd.DataFrame(
+        {name: payload.get(name, [])[:size] for name in REQUIRED_ARRAYS}
+    )
     oi = payload.get("open_interest", [])
     frame["open_interest"] = list(oi[:size]) + [None] * max(0, size - len(oi))
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="s", utc=True).dt.tz_convert(IST_TIMEZONE)
+    frame["timestamp"] = pd.to_datetime(
+        frame["timestamp"], unit="s", utc=True
+    ).dt.tz_convert(IST_TIMEZONE)
     for col in ("open", "high", "low", "close", "volume", "open_interest"):
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
-    frame = frame.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
-    return frame.drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    frame = frame.dropna(
+        subset=["timestamp", "open", "high", "low", "close"]
+    ).sort_values("timestamp")
+    return frame.drop_duplicates(subset=["timestamp"], keep="last").reset_index(
+        drop=True
+    )
 
 
 def aggregate_candles(frame: pd.DataFrame, minutes: int) -> pd.DataFrame:
@@ -55,7 +71,9 @@ def aggregate_candles(frame: pd.DataFrame, minutes: int) -> pd.DataFrame:
         output.append(resampled.dropna(subset=["open", "high", "low", "close"]))
     if not output:
         return pd.DataFrame(columns=frame.columns)
-    return pd.concat(output).reset_index().sort_values("timestamp").reset_index(drop=True)
+    return (
+        pd.concat(output).reset_index().sort_values("timestamp").reset_index(drop=True)
+    )
 
 
 def mark_completed_candles(

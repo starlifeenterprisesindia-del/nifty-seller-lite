@@ -20,7 +20,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "0.2.1_NIFTY_QUOTE_HOTFIX"
+    version: str = "0.5.0_CORE_MARKET_ENGINE"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5
@@ -50,9 +50,26 @@ class AppConfig:
         InstrumentRef("Tata Consultancy Services", "11536", "NSE_EQ", "EQUITY", "TCS"),
     )
     option_strikes_each_side: int = 5
-    candle_lookback_days: int = 5
+    candle_lookback_days: int = 7
     minimum_one_minute_candles: int = 30
     minimum_indicator_candles: int = 50
+
+    # Core-market-engine settings. These values live in one central config so
+    # price action, levels and volume cannot quietly drift apart.
+    swing_left_bars: int = 2
+    swing_right_bars: int = 2
+    minimum_structure_swings: int = 2
+    atr_period: int = 14
+    breakout_atr_tolerance: float = 0.08
+    level_zone_atr_fraction: float = 0.20
+    minimum_level_zone_points: float = 3.0
+    maximum_level_zone_points: float = 15.0
+    opening_range_minutes: int = 15
+    volume_baseline_sessions: int = 5
+    volume_recent_fallback_bars: int = 20
+    volume_low_ratio: float = 0.70
+    volume_high_ratio: float = 1.20
+    volume_surge_ratio: float = 1.80
 
     @property
     def top7_symbols(self) -> tuple[str, ...]:

@@ -1,0 +1,27 @@
+V0.5 CORE MARKET ENGINE — CHANGELOG
+
+ADDED
+- Canonical technical utility module for completed candles, ATR and confirmed swings.
+- 3m/15m Price Action structure, event, move stage, invalidation and evidence scores.
+- Confluence-based Support/Resistance zones with source strength and remaining room.
+- NIFTY Futures 1m/3m/15m candles and time-normalized relative-volume analysis.
+- Evidence-only Core Market integration with Bullish/Bearish/Range scores.
+- Mobile-friendly tabs for Price Action, Levels, Volume, Indicators and feed integrity.
+- New tests for price action, levels, futures volume, core integration and release hygiene.
+
+CHANGED
+- Candle lookback increased from 5 to 7 days for stronger time-slot volume baselines.
+- MarketSnapshot now carries all core-market outputs and futures volume candles.
+- Raw candle view now separates NIFTY prices from NIFTY futures volume.
+- Version updated to 0.5.0_CORE_MARKET_ENGINE.
+
+REMOVED / NOT CARRIED FORWARD
+- All previous milestone/deployment/changelog/test-report files.
+- Any pytest cache, Python cache or compiled bytecode.
+- No duplicate or legacy price-action, level or volume classifier exists.
+
+INTENTIONALLY NOT ADDED
+- CE Sell / PE Sell / Iron Condor / WAIT scores.
+- Strategy or strike selection.
+- Order placement.
+- Intraday OI-flow inference before persistent snapshots exist.

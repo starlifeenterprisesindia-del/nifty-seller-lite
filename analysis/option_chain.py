@@ -19,7 +19,9 @@ OPTION_FIELDS = (
 )
 
 
-def _flatten_side(strike: float, side: str, data: dict[str, Any] | None) -> dict[str, Any]:
+def _flatten_side(
+    strike: float, side: str, data: dict[str, Any] | None
+) -> dict[str, Any]:
     data = data or {}
     row: dict[str, Any] = {"strike": strike, "side": side.upper()}
     for field in OPTION_FIELDS:
@@ -30,7 +32,9 @@ def _flatten_side(strike: float, side: str, data: dict[str, Any] | None) -> dict
     return row
 
 
-def option_chain_to_frame(response: dict[str, Any]) -> tuple[float | None, pd.DataFrame]:
+def option_chain_to_frame(
+    response: dict[str, Any],
+) -> tuple[float | None, pd.DataFrame]:
     data = response.get("data") or {}
     spot = data.get("last_price")
     oc = data.get("oc") or {}

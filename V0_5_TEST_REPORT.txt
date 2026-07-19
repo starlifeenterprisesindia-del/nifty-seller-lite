@@ -1,0 +1,50 @@
+NIFTY SELLER LITE V0.5 — TEST REPORT
+
+VERSION
+0.5.0_CORE_MARKET_ENGINE
+
+TEST ENVIRONMENT
+Python 3.13.5
+Streamlit 1.59.1
+pandas 2.3.3
+requests 2.32.3
+pytest 8.3.5
+ruff 0.11.2
+
+RESULTS
+- Python compilation: PASS (35 Python files)
+- Ruff formatting check: PASS
+- Ruff static lint check: PASS
+- Automated tests: 28/28 PASS
+- Non-app module imports: 16/16 PASS
+- Streamlit AppTest startup without credentials: PASS
+- Streamlit Uvicorn server startup: PASS
+- One-snapshot architecture test: PASS
+- Analysis modules have no network/API fetches: PASS
+- No strategy/decision engine exists: PASS
+- No CE Sell / PE Sell / Iron Condor / Final Action logic exists: PASS
+- Price Action bullish/bearish/cross-timeframe tests: PASS
+- Support/Resistance previous-day/opening-range tests: PASS
+- NIFTY Futures time-normalized volume tests: PASS
+- Snapshot integration with nearest NIFTY FUTIDX volume: PASS
+- Market-closed/reference-only safety: PASS
+- Old-release file hygiene test: PASS
+
+LIVE VALIDATION STATUS
+Authenticated DhanHQ live-market validation was not possible in the local build
+environment because the user's Streamlit Secrets are not available here. The existing
+Dhan connection and V0.2.1 foundation have already been live-deployed by the user, but
+V0.5 must still be verified after deployment for:
+- nearest NIFTY futures candle availability
+- 3m/15m futures relative-volume values
+- price-action structure versus the broker chart
+- support/resistance zones versus visible chart levels
+- market-open freshness states
+
+SAFE LIMITATIONS
+- This release is evidence-only and does not produce trading advice.
+- Intraday option OI flow is not inferred from day-change OI.
+- Top-7 weighted contribution, PCR intelligence, VIX scoring, FII/DII and news risk are
+  reserved for the next large milestone.
+- If confirmed swing evidence is insufficient, Price Action returns UNAVAILABLE rather
+  than inventing a structure.

@@ -1,6 +1,9 @@
 import pandas as pd
 
-from analysis.indicators import calculate_indicator_bundle, calculate_timeframe_indicators
+from analysis.indicators import (
+    calculate_indicator_bundle,
+    calculate_timeframe_indicators,
+)
 
 
 def candle_frame(periods: int = 80, rising: bool = True) -> pd.DataFrame:

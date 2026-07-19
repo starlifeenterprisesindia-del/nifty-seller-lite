@@ -12,20 +12,25 @@ from services.instrument_master import InstrumentMaster
 from services.snapshot_service import SnapshotService
 from ui.components import (
     render_candles,
+    render_core_evidence,
     render_feed_status,
     render_header,
     render_heavyweights,
     render_indicators,
+    render_levels,
     render_market_session,
     render_option_chain,
+    render_price_action,
+    render_volume,
 )
 
 
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "Milestone 2 — market-session integrity, reliable Top-7 quotes and isolated "
-    "EMA/MACD/RSI calculations. No trading advice or order placement yet."
+    "V0.5 Core Market Engine — Price Action, Support/Resistance, NIFTY Futures "
+    "Volume and existing EMA/MACD/RSI connected through one snapshot. No strategy "
+    "score or order placement yet."
 )
 
 
@@ -51,7 +56,9 @@ with st.sidebar:
     else:
         st.error("Dhan credentials missing")
     st.caption("Credentials remain only in Streamlit Secrets under [dhan].")
-    refresh = st.button("Fetch Fresh Snapshot", type="primary", use_container_width=True)
+    refresh = st.button(
+        "Fetch Fresh Snapshot", type="primary", use_container_width=True
+    )
     clear_cache = st.button("Clear instrument cache", use_container_width=True)
     if clear_cache:
         cache = Path("data/instrument_master.csv")
@@ -60,22 +67,21 @@ with st.sidebar:
         st.success("Instrument cache cleared")
 
 if not credentials_ready:
-    example = (
-        '[dhan]\n'
-        'client_id = "YOUR_CLIENT_ID"\n'
-        'access_token = "YOUR_24_HOUR_ACCESS_TOKEN"'
+    st.code(
+        '[dhan]\nclient_id = "YOUR_CLIENT_ID"\naccess_token = "YOUR_24_HOUR_ACCESS_TOKEN"',
+        language="toml",
     )
-    st.code(example, language="toml")
     st.stop()
 
 if "snapshot" not in st.session_state or refresh:
     try:
-        with st.spinner("Building one authoritative DhanHQ snapshot..."):
+        with st.spinner(
+            "Building one authoritative DhanHQ snapshot and core evidence..."
+        ):
             credentials = Credentials(client_id=client_id, access_token=access_token)
             client = DhanClient(credentials)
             service = SnapshotService(
-                client,
-                InstrumentMaster(Path("data/instrument_master.csv")),
+                client, InstrumentMaster(Path("data/instrument_master.csv"))
             )
             st.session_state.snapshot = service.build()
     except Exception as exc:
@@ -86,15 +92,38 @@ snapshot = st.session_state.snapshot
 render_market_session(snapshot)
 render_header(snapshot)
 
-st.subheader("Feed Integrity")
-render_feed_status(snapshot)
+st.subheader("Core Market Evidence — No Strategy Decision Yet")
+render_core_evidence(snapshot)
 
-st.subheader("Read-Only Technical Calculations")
-render_indicators(snapshot)
+core_tabs = st.tabs(
+    [
+        "Price Action",
+        "Support & Resistance",
+        "Volume",
+        "EMA / MACD / RSI",
+        "Feed Integrity",
+    ]
+)
+with core_tabs[0]:
+    render_price_action(snapshot)
+with core_tabs[1]:
+    render_levels(snapshot)
+with core_tabs[2]:
+    render_volume(snapshot)
+with core_tabs[3]:
+    render_indicators(snapshot)
+with core_tabs[4]:
+    render_feed_status(snapshot)
 
 st.subheader("Raw Market Data")
 market_tabs = st.tabs(
-    ["Candles", "Option Chain", "Top-7 Quotes", "VIX & Future", "Snapshot JSON"]
+    [
+        "Candles & Futures Volume",
+        "Option Chain",
+        "Top-7 Quotes",
+        "VIX & Future",
+        "Snapshot JSON",
+    ]
 )
 with market_tabs[0]:
     render_candles(snapshot)
@@ -112,6 +141,6 @@ with market_tabs[4]:
     st.json(snapshot.public_summary())
 
 st.info(
-    "Next milestone after live verification: Price Action and Support/Resistance as "
-    "evidence-only modules."
+    "Next big milestone: Options Intelligence — persistent intraday OI change, "
+    "premium + OI + option volume flow, PCR, wall migration and Top-7 weighted contribution."
 )

@@ -1,0 +1,20 @@
+NIFTY SELLER LITE V0.5 — DEPLOYMENT
+
+1. Download and extract the V0.5 ZIP.
+2. Do NOT upload the outer ZIP folder itself.
+3. Upload every item inside the extracted folder to the ROOT of the existing
+   GitHub repository: nifty-seller-lite
+4. Allow current files/folders to be replaced.
+5. Do NOT upload __pycache__, .pytest_cache, .ruff_cache or *.pyc files.
+6. Commit message:
+   V0.5 Core Market Engine
+7. Streamlit will redeploy automatically. Do not delete the Streamlit app and do
+   not re-enter Dhan secrets.
+8. After deployment, confirm the version shown is:
+   0.5.0_CORE_MARKET_ENGINE
+9. Press Fetch Fresh Snapshot.
+10. Verify Price Action, Support & Resistance, Volume, Indicators and Feed Integrity.
+
+IMPORTANT CLEANUP
+Delete every old file listed in DELETE_OLD_FILES_V0_5.txt from GitHub after the
+V0.5 upload. GitHub upload replaces matching files but does not delete obsolete files.
