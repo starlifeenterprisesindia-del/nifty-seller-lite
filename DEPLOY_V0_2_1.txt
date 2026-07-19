@@ -1,0 +1,12 @@
+NIFTY SELLER LITE V0.2.1 — NIFTY QUOTE HOTFIX
+
+1. Extract the ZIP.
+2. Open the existing GitHub repository: nifty-seller-lite.
+3. Upload all files/folders from inside the extracted folder to the repository root.
+4. Allow existing files to be replaced.
+5. Commit message: V0.2.1 fix NIFTY quote request
+6. Streamlit will redeploy automatically. Secrets do not need to be entered again.
+7. After redeploy, press Fetch Fresh Snapshot.
+
+Cause fixed:
+NIFTY (security 13) and INDIA VIX (security 21) both use IDX_I. A duplicate-key dict literal kept only VIX, so NIFTY was omitted from the grouped quote request. The request is now built incrementally and a regression test verifies that both IDs are sent.

@@ -100,10 +100,16 @@ class SnapshotService:
             current = now.replace(tzinfo=IST)
 
         future_ref = self._resolve_future()
-        grouped: dict[str, list[int]] = {
-            CONFIG.nifty.exchange_segment: [int(CONFIG.nifty.security_id)],
-            CONFIG.india_vix.exchange_segment: [int(CONFIG.india_vix.security_id)],
-        }
+        # NIFTY and INDIA VIX share the same IDX_I segment. Build the request
+        # incrementally so one instrument cannot overwrite the other in a dict
+        # literal with duplicate keys.
+        grouped: dict[str, list[int]] = {}
+        grouped.setdefault(CONFIG.nifty.exchange_segment, []).append(
+            int(CONFIG.nifty.security_id)
+        )
+        grouped.setdefault(CONFIG.india_vix.exchange_segment, []).append(
+            int(CONFIG.india_vix.security_id)
+        )
         if future_ref:
             grouped.setdefault(future_ref.exchange_segment, []).append(future_ref.security_id)
         for item in CONFIG.top7:

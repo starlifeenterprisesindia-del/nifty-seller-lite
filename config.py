@@ -20,7 +20,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "0.2.0_FOUNDATION_INDICATORS"
+    version: str = "0.2.1_NIFTY_QUOTE_HOTFIX"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5

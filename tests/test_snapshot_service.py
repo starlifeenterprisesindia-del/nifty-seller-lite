@@ -18,6 +18,10 @@ class StubMaster:
 
 class StubClient:
     def market_quote(self, grouped):
+        assert set(grouped["IDX_I"]) == {
+            int(CONFIG.nifty.security_id),
+            int(CONFIG.india_vix.security_id),
+        }
         assert set(grouped["NSE_EQ"]) == {int(item.security_id) for item in CONFIG.top7}
         quote_time = int(datetime(2026, 7, 17, 15, 29, tzinfo=IST).timestamp())
         equities = {
