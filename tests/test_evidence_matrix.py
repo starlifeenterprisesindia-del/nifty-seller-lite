@@ -96,6 +96,21 @@ def test_compact_matrix_has_six_rows_and_normalized_directional_scores():
     assert len(rows) == 6
     for row in rows[:5]:
         total = row["Bullish %"] + row["Bearish %"] + row["Neutral %"]
-        assert 99.8 <= total <= 100.2
+        assert round(total, 1) == 100.0
     assert rows[-1]["Bullish %"] is None
     assert "VIX DATA UNAVAILABLE" in rows[-1]["Result"]
+
+
+def test_directional_rounding_always_totals_exactly_100():
+    from analysis.evidence_matrix import _normalise
+
+    samples = [
+        (1, 1, 1),
+        (2, 3, 7),
+        (0.1, 0.2, 0.3),
+        (99, 0.2, 0.8),
+        (0, 5, 2),
+    ]
+    for values in samples:
+        result = _normalise(*values)
+        assert round(sum(result), 1) == 100.0

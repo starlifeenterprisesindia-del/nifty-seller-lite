@@ -111,6 +111,61 @@ class SnapshotService:
         except Exception:
             return None
 
+    @staticmethod
+    def _positive_number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not pd.notna(number) or number <= 0:
+            return None
+        return number
+
+    @staticmethod
+    def _option_chain_integrity(
+        frame: pd.DataFrame,
+        *,
+        option_spot: float | None,
+        nifty_price: float,
+    ) -> tuple[bool, str]:
+        if frame.empty:
+            return False, "Option-chain ATM window is empty"
+        required = {"strike", "side", "last_price", "oi", "volume", "is_atm"}
+        missing = sorted(required.difference(frame.columns))
+        if missing:
+            return False, f"Option-chain fields missing: {', '.join(missing)}"
+        if len(frame) < CONFIG.option_min_integrity_rows:
+            return False, f"Only {len(frame)} option rows returned"
+
+        sides = set(frame["side"].astype(str).str.upper())
+        if not {"CE", "PE"}.issubset(sides):
+            return False, "Both CE and PE rows are required"
+        atm_sides = set(
+            frame.loc[frame["is_atm"].fillna(False), "side"].astype(str).str.upper()
+        )
+        if not {"CE", "PE"}.issubset(atm_sides):
+            return False, "ATM CE/PE pair is incomplete"
+
+        positive_prices = pd.to_numeric(frame["last_price"], errors="coerce").fillna(
+            0.0
+        )
+        if int((positive_prices > 0).sum()) < min(4, len(frame)):
+            return False, "Too few positive option premiums"
+
+        if option_spot is None or option_spot <= 0:
+            return False, "Option-chain underlying spot is invalid"
+        tolerance = max(
+            CONFIG.option_spot_max_divergence_points,
+            nifty_price * CONFIG.option_spot_max_divergence_pct / 100.0,
+        )
+        divergence = abs(option_spot - nifty_price)
+        if divergence > tolerance:
+            return (
+                False,
+                f"Option-chain spot differs from NIFTY by {divergence:.1f} points",
+            )
+        return True, "CE/PE structure, ATM pair, premiums and spot alignment verified"
+
     def _resolve_market_references(
         self,
     ) -> tuple[ResolvedInstrument | None, ResolvedInstrument]:
@@ -216,6 +271,9 @@ class SnapshotService:
         )
         if not nifty_quote:
             raise SnapshotBuildError("NIFTY quote missing from DhanHQ response")
+        nifty_price = self._positive_number(nifty_quote.get("last_price"))
+        if nifty_price is None:
+            raise SnapshotBuildError("NIFTY quote has an invalid last price")
         vix_quote = self._extract_quote(
             quote_response,
             vix_ref.exchange_segment,
@@ -285,6 +343,18 @@ class SnapshotService:
             current,
             quote_age_seconds=quote_age,
             has_current_day_candle=has_current_day_candle,
+            candle_age_seconds=latest_1m_age,
+        )
+
+        vix_age = self._quote_age_seconds(vix_quote, current)
+        fresh_heavyweight_quotes = [
+            quote
+            for quote in heavyweight_quotes
+            if (age := self._quote_age_seconds(quote, current)) is not None
+            and age <= CONFIG.context_quote_max_age_seconds
+        ]
+        analysis_heavyweight_quotes = (
+            fresh_heavyweight_quotes if market_session.is_live else heavyweight_quotes
         )
 
         statuses: dict[str, FeedStatus] = {}
@@ -311,6 +381,39 @@ class SnapshotService:
             if len(heavyweight_quotes) == len(CONFIG.top7)
             else "CAUTION",
         )
+        statuses["heavyweights"] = FeedStatus(
+            name="heavyweights",
+            ok=len(analysis_heavyweight_quotes) == len(CONFIG.top7),
+            fetched_at=current,
+            message=(
+                f"Usable Top-7 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top7)}"
+            ),
+            source="Grouped Dhan market quote",
+            use_state=(
+                "LIVE"
+                if market_session.is_live
+                and len(analysis_heavyweight_quotes) == len(CONFIG.top7)
+                else "CAUTION"
+                if market_session.is_live
+                else "REFERENCE"
+            ),
+        )
+        statuses["vix"] = FeedStatus(
+            name="vix",
+            ok=self._positive_number((vix_quote or {}).get("last_price")) is not None,
+            fetched_at=current,
+            age_seconds=vix_age,
+            message="India VIX grouped quote",
+            source="DhanHQ",
+            use_state=feed_use_state(
+                available=self._positive_number((vix_quote or {}).get("last_price"))
+                is not None,
+                market_session=market_session,
+                age_seconds=vix_age,
+                max_live_age_seconds=CONFIG.context_quote_max_age_seconds,
+            ),
+        )
+
         candle_available = (
             len(candles_1m) >= CONFIG.minimum_one_minute_candles
             and not candles_15m.empty
@@ -358,7 +461,11 @@ class SnapshotService:
 
         expiry: str | None = None
         option_frame = pd.DataFrame()
+        validated_option_frame = pd.DataFrame()
         full_option_frame = pd.DataFrame()
+        option_spot: float | None = None
+        option_integrity_ok = False
+        option_integrity_message = "Option chain unavailable"
         try:
             expiries = self.client.expiry_list(
                 int(CONFIG.nifty.security_id),
@@ -385,17 +492,35 @@ class SnapshotService:
                 )
                 option_spot, full_chain = option_chain_to_frame(response)
                 full_option_frame = full_chain.copy()
-                spot = option_spot or float(nifty_quote.get("last_price"))
+                spot = option_spot or nifty_price
                 option_frame = select_atm_window(
                     full_chain, spot, CONFIG.option_strikes_each_side
                 )
+                option_integrity_ok, option_integrity_message = (
+                    self._option_chain_integrity(
+                        option_frame,
+                        option_spot=option_spot,
+                        nifty_price=nifty_price,
+                    )
+                )
+                if option_integrity_ok:
+                    validated_option_frame = option_frame.copy()
                 statuses["option_chain"] = FeedStatus(
                     name="option_chain",
-                    ok=not option_frame.empty,
+                    ok=option_integrity_ok,
                     fetched_at=current,
-                    age_seconds=0.0,
-                    message=f"Expiry {expiry}, {len(option_frame)} CE/PE rows in ATM window; response age is not market-tick age",
-                    use_state="LIVE" if market_session.is_live else "REFERENCE",
+                    age_seconds=None,
+                    message=(
+                        f"Expiry {expiry}, {len(option_frame)} CE/PE rows; "
+                        f"{option_integrity_message}. Request-time freshness only."
+                    ),
+                    use_state=(
+                        "LIVE"
+                        if option_integrity_ok and market_session.is_live
+                        else "REFERENCE"
+                        if option_integrity_ok
+                        else "UNAVAILABLE"
+                    ),
                 )
             else:
                 statuses["option_chain"] = FeedStatus(
@@ -416,7 +541,7 @@ class SnapshotService:
 
         indicators = calculate_indicator_bundle(candles_3m, candles_15m)
         price_action = calculate_price_action_bundle(candles_3m, candles_15m)
-        current_price = nifty_quote.get("last_price")
+        current_price = nifty_price
         levels = calculate_levels(candles_3m, candles_15m, indicators, current_price)
         volume = calculate_volume_bundle(
             future_candles_3m,
@@ -430,9 +555,17 @@ class SnapshotService:
             levels,
             volume,
             market_session,
+            future_volume_live=statuses["future_volume"].use_state == "LIVE",
         )
-        heavyweights = calculate_heavyweight_bundle(heavyweight_quotes, current)
-        vix_context = calculate_vix_context(vix_quote, current)
+        heavyweights = calculate_heavyweight_bundle(
+            analysis_heavyweight_quotes, current
+        )
+        vix_for_analysis = (
+            vix_quote
+            if not market_session.is_live or statuses["vix"].use_state == "LIVE"
+            else None
+        )
+        vix_context = calculate_vix_context(vix_for_analysis, current)
 
         option_history: list[dict[str, Any]] = []
         option_state_snapshot: dict[str, Any] = {
@@ -443,7 +576,7 @@ class SnapshotService:
             "rows": [],
         }
         option_state_error: str | None = None
-        if expiry and not option_frame.empty:
+        if expiry and not validated_option_frame.empty:
             try:
                 option_history = self.option_state_store.load_session(
                     captured_at=current, expiry=expiry
@@ -452,14 +585,14 @@ class SnapshotService:
                     captured_at=current,
                     expiry=expiry,
                     spot=float(current_price) if current_price is not None else None,
-                    frame=option_frame,
+                    frame=validated_option_frame,
                 )
             except Exception as exc:
                 option_state_error = str(exc)
                 option_history = []
 
         option_intelligence = calculate_option_intelligence(
-            current_frame=option_frame,
+            current_frame=validated_option_frame,
             spot=float(current_price) if current_price is not None else 0.0,
             expiry=expiry,
             captured_at=current,
@@ -471,7 +604,8 @@ class SnapshotService:
         if (
             market_session.is_live
             and expiry
-            and not option_frame.empty
+            and statuses["option_chain"].use_state == "LIVE"
+            and not validated_option_frame.empty
             and option_state_error is None
         ):
             try:
@@ -480,7 +614,7 @@ class SnapshotService:
                 )
                 if state_appended:
                     option_intelligence = calculate_option_intelligence(
-                        current_frame=option_frame,
+                        current_frame=validated_option_frame,
                         spot=float(current_price) if current_price is not None else 0.0,
                         expiry=expiry,
                         captured_at=current,
@@ -493,20 +627,30 @@ class SnapshotService:
 
         statuses["option_state"] = FeedStatus(
             name="option_state",
-            ok=option_state_error is None and bool(expiry) and not option_frame.empty,
+            ok=(
+                option_state_error is None
+                and bool(expiry)
+                and not validated_option_frame.empty
+            ),
             fetched_at=current,
             message=(
                 f"Same-day bounded history: {len(option_history)} prior snapshot(s); "
                 f"current {'stored' if state_appended else 'not stored'}"
-                if option_state_error is None and expiry and not option_frame.empty
+                if option_state_error is None
+                and expiry
+                and not validated_option_frame.empty
                 else option_state_error or "Option state unavailable"
             ),
             source="Local atomic option-state file",
             use_state=(
                 "READY"
-                if market_session.is_live and option_state_error is None
+                if market_session.is_live
+                and option_state_error is None
+                and not validated_option_frame.empty
                 else "REFERENCE"
-                if not market_session.is_live and option_state_error is None
+                if not market_session.is_live
+                and option_state_error is None
+                and not validated_option_frame.empty
                 else "UNAVAILABLE"
             ),
         )
@@ -555,7 +699,7 @@ class SnapshotService:
         )
 
         trade_plan = calculate_trade_plan(
-            frame=option_frame,
+            frame=validated_option_frame,
             spot=float(current_price) if current_price is not None else 0.0,
             expiry=expiry,
             levels=levels,
@@ -712,7 +856,8 @@ class SnapshotService:
                 "read_only": True,
                 "live_trading_ready": market_session.is_live
                 and statuses["quotes"].use_state == "LIVE"
-                and statuses["candles"].use_state == "LIVE",
+                and statuses["candles"].use_state == "LIVE"
+                and statuses["option_chain"].use_state == "LIVE",
                 "top7_configured": list(CONFIG.top7_symbols),
                 "vix_resolved": bool(vix_quote),
                 "vix_security_id": vix_ref.security_id,

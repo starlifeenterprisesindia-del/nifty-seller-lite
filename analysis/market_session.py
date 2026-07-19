@@ -11,8 +11,14 @@ def classify_market_session(
     *,
     quote_age_seconds: float | None,
     has_current_day_candle: bool,
+    candle_age_seconds: float | None,
 ) -> MarketSession:
-    """Classify whether current data is live or only last-available reference data."""
+    """Classify whether current data is live or last-available reference data.
+
+    A fresh quote alone is not enough. During cash-market hours the latest completed
+    one-minute candle must also belong to the current session and remain within the
+    configured candle-age guard.
+    """
     if now.weekday() >= 5:
         return MarketSession(
             code="CLOSED_WEEKEND",
@@ -41,20 +47,33 @@ def classify_market_session(
         quote_age_seconds is not None
         and quote_age_seconds <= CONFIG.quote_max_age_seconds
     )
-    if quote_is_fresh and has_current_day_candle:
+    candle_is_fresh = (
+        has_current_day_candle
+        and candle_age_seconds is not None
+        and candle_age_seconds <= CONFIG.candle_max_age_minutes * 60
+    )
+    if quote_is_fresh and candle_is_fresh:
         return MarketSession(
             code="LIVE",
             label="MARKET OPEN — LIVE DATA",
             is_live=True,
-            message="Quote and current-session candle evidence are fresh.",
+            message="Quote and current-session completed candle evidence are fresh.",
         )
 
+    missing: list[str] = []
+    if not quote_is_fresh:
+        missing.append("fresh NIFTY quote")
+    if not has_current_day_candle:
+        missing.append("current-session candle")
+    elif not candle_is_fresh:
+        missing.append("fresh completed candle")
+    reason = " and ".join(missing) or "fresh market evidence"
     return MarketSession(
         code="CLOSED_OR_STALE_SESSION",
         label="LIVE SESSION NOT CONFIRMED — REFERENCE DATA",
         is_live=False,
         message=(
-            "Market-time clock is open, but fresh quote/current-session candles are missing. "
+            f"Market-time clock is open, but {reason} is missing. "
             "This may be a holiday, feed delay, or stale session."
         ),
     )

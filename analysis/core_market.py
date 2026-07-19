@@ -83,6 +83,8 @@ def calculate_core_market_evidence(
     levels: LevelBundle,
     volume: VolumeBundle,
     market_session: MarketSession,
+    *,
+    future_volume_live: bool = True,
 ) -> CoreMarketEvidence:
     pa3 = price_action.three_minute
     pa15 = price_action.fifteen_minute
@@ -96,7 +98,15 @@ def calculate_core_market_evidence(
     pa_range = (pa15.range_score * 0.65 + pa3.range_score * 0.35) if pa_ready else 60.0
 
     ind_bull, ind_bear, ind_range, ind_reasons = _indicator_scores(indicators)
-    vol_bull, vol_bear, vol_range, vol_reasons = _volume_scores(volume)
+    if market_session.is_live and not future_volume_live:
+        vol_bull, vol_bear, vol_range, vol_reasons = (
+            0.0,
+            0.0,
+            100.0,
+            ["NIFTY futures volume is not confirmed live"],
+        )
+    else:
+        vol_bull, vol_bear, vol_range, vol_reasons = _volume_scores(volume)
 
     # Core engine weights are internal evidence weights, not final strategy weights.
     bullish = pa_bull * 0.45 + ind_bull * 0.35 + vol_bull * 0.20
@@ -123,6 +133,9 @@ def calculate_core_market_evidence(
             bearish -= 5
     else:
         blockers.append("Support/resistance evidence unavailable")
+
+    if market_session.is_live and not future_volume_live:
+        blockers.append("NIFTY futures volume is not confirmed live")
 
     if price_action.relationship in {"TIMEFRAMES MIXED", "TREND / RANGE CONFLICT"}:
         range_score += 10

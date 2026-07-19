@@ -85,11 +85,9 @@ def create_trade_record(
         "entry_spot": float(spot) if spot is not None else None,
         "lots": int(lots),
         "lot_size": int(lot_size),
-        "entry_credit_points": execution_guard.target_exit_debit_points
-        + execution_guard.target_capture_points
-        if execution_guard.target_exit_debit_points is not None
-        and execution_guard.target_capture_points is not None
-        else plan.estimated_credit_points,
+        # Freeze the planner's exact conservative entry-credit estimate instead of
+        # reconstructing it from rounded target fields.
+        "entry_credit_points": plan.estimated_credit_points,
         "max_risk_points": plan.max_risk_points,
         "target_capture_points": execution_guard.target_capture_points,
         "target_exit_debit_points": execution_guard.target_exit_debit_points,

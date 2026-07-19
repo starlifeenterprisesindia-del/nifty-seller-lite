@@ -192,3 +192,38 @@ def test_unavailable_vix_adds_wait_and_caution():
     result = calculate_final_decision(**kwargs)
     assert result.wait_need.score >= 16
     assert "India VIX data is unavailable" in result.pe_sell.cautions
+
+
+def test_level_cautions_are_strategy_specific():
+    kwargs = common_kwargs()
+    kwargs["levels"] = LevelBundle(
+        as_of=NOW,
+        current_price=24350,
+        immediate_support=None,
+        strong_support=None,
+        immediate_resistance=None,
+        strong_resistance=None,
+        previous_day_high=24450,
+        previous_day_low=24200,
+        opening_range_high=24380,
+        opening_range_low=24300,
+        upside_room=5,
+        downside_room=5,
+        current_position="BETWEEN SUPPORT AND RESISTANCE",
+        zone_width=5,
+        status="READY",
+    )
+    result = calculate_final_decision(**kwargs)
+    assert "CE sell has limited downside room before support" in result.ce_sell.cautions
+    assert (
+        "PE sell has limited upside room before resistance"
+        not in result.ce_sell.cautions
+    )
+    assert (
+        "PE sell has limited upside room before resistance" in result.pe_sell.cautions
+    )
+    assert (
+        "CE sell has limited downside room before support"
+        not in result.pe_sell.cautions
+    )
+    assert any("balanced room" in item for item in result.iron_condor.cautions)

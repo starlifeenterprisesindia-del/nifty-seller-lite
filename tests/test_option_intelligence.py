@@ -166,3 +166,58 @@ def test_intraday_flow_windows_and_classification(tmp_path):
     assert result.ce_wall.strike == 24350.0
     assert result.pe_wall.strike == 24350.0
     assert result.pcr.near_atm_oi_pcr is not None
+
+
+def test_stale_previous_snapshot_resets_intraday_continuity(tmp_path):
+    now = datetime(2026, 7, 20, 11, 0, tzinfo=IST)
+    store = OptionStateStore(tmp_path / "state.json")
+    old = store.make_snapshot(
+        captured_at=now - timedelta(minutes=30),
+        expiry="2026-07-21",
+        spot=24340,
+        frame=chain(),
+    )
+    current = chain(4)
+    current_state = store.make_snapshot(
+        captured_at=now,
+        expiry="2026-07-21",
+        spot=24340,
+        frame=current,
+    )
+    result = calculate_option_intelligence(
+        current_frame=current,
+        spot=24340,
+        expiry="2026-07-21",
+        captured_at=now,
+        history=[old],
+        current_snapshot=current_state,
+        is_live=True,
+    )
+    assert result.basis == "DAY CHANGE — CONTINUITY RESET"
+    assert result.status == "WARMING UP"
+    assert result.confidence == 38.0
+    assert "continuity reset" in " ".join(result.blockers).lower()
+
+
+def test_pcr_never_overrides_opposite_premium_oi_volume_flow():
+    from analysis.option_intelligence import _normalized_scores
+    from models import PCRBundle
+
+    bearish_flow = pd.DataFrame(
+        [
+            {"flow_strength": 2.0, "directional_bias": "BEARISH"},
+            {"flow_strength": 1.5, "directional_bias": "BEARISH"},
+        ]
+    )
+    pe_dominant_pcr = PCRBundle(
+        near_atm_oi_pcr=1.8,
+        day_addition_pcr=2.0,
+        intraday_addition_pcr=2.2,
+        volume_pcr=1.7,
+        state="PE OI DOMINANT",
+        status="READY",
+    )
+    bullish, bearish, neutral, bias = _normalized_scores(bearish_flow, pe_dominant_pcr)
+    assert bearish > bullish
+    assert bias == "BEARISH"
+    assert round(bullish + bearish + neutral, 1) == 100.0

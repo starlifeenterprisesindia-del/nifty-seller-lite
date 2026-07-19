@@ -12,6 +12,7 @@ def test_weekend_is_reference_only():
         datetime(2026, 7, 19, 13, 37, tzinfo=IST),
         quote_age_seconds=153000,
         has_current_day_candle=False,
+        candle_age_seconds=None,
     )
     assert session.code == "CLOSED_WEEKEND"
     assert not session.is_live
@@ -23,6 +24,7 @@ def test_live_requires_fresh_quote_and_current_candle():
         datetime(2026, 7, 20, 10, 0, tzinfo=IST),
         quote_age_seconds=2,
         has_current_day_candle=True,
+        candle_age_seconds=30,
     )
     assert session.code == "LIVE"
     assert session.is_live
@@ -42,6 +44,19 @@ def test_open_clock_with_stale_data_is_not_live():
         datetime(2026, 7, 20, 10, 0, tzinfo=IST),
         quote_age_seconds=600,
         has_current_day_candle=False,
+        candle_age_seconds=600,
     )
     assert session.code == "CLOSED_OR_STALE_SESSION"
     assert not session.is_live
+
+
+def test_open_clock_with_fresh_quote_but_stale_candle_is_not_live():
+    session = classify_market_session(
+        datetime(2026, 7, 20, 14, 0, tzinfo=IST),
+        quote_age_seconds=2,
+        has_current_day_candle=True,
+        candle_age_seconds=1200,
+    )
+    assert session.code == "CLOSED_OR_STALE_SESSION"
+    assert not session.is_live
+    assert "fresh completed candle" in session.message

@@ -21,9 +21,10 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.0.0_COMPACT_EVIDENCE_INTEGRITY"
+    version: str = "2.1.0_PREMARKET_INTEGRITY_AUDIT"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
+    context_quote_max_age_seconds: int = 60
     candle_max_age_minutes: int = 5
     market_open: time = time(9, 15)
     market_close: time = time(15, 30)
@@ -86,6 +87,14 @@ class AppConfig:
     option_min_oi_move_pct: float = 0.20
     option_window_tolerance_ratio: float = 0.55
     option_persistence_lookback: int = 5
+    option_max_comparison_age_seconds: int = 600
+    option_min_integrity_rows: int = 6
+    option_spot_max_divergence_pct: float = 0.35
+    option_spot_max_divergence_points: float = 50.0
+
+    # Instrument master cache is refreshed daily; a stale cache remains a safe
+    # fallback when the remote master is temporarily unavailable.
+    instrument_master_cache_max_age_hours: int = 24
 
     # Durable background context and final one-brain decision settings.
     market_context_path: str = "data/market_context.json"

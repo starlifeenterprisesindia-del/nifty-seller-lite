@@ -1,0 +1,34 @@
+NIFTY SELLER LITE — V2.1 PRE-MARKET INTEGRITY AUDIT
+
+ARCHITECTURE
+- Verified exactly one final strategy brain exists in analysis/decision.py.
+- Verified SnapshotService calls the final brain exactly once.
+- The compact evidence table remains display-only and cannot feed the decision.
+- Planner, Execution Guard and Position Guardian remain downstream read-only modules.
+
+FRESHNESS AND FEED INTEGRITY
+- LIVE session now requires both a fresh NIFTY quote and a fresh completed
+  current-session 1-minute candle.
+- Adds separate live-age handling for India VIX and Top-7 quotes.
+- Stale live NIFTY-futures volume is neutralized inside core evidence.
+- NIFTY last price must be positive and finite.
+- Option-chain integrity requires CE and PE rows, a complete ATM CE/PE pair,
+  enough positive premiums and bounded option-spot/NIFTY divergence.
+- Invalid option structure blocks option intelligence, strike planning and execution.
+
+OPTIONS CALCULATION
+- Intraday option comparison only uses a recent prior snapshot.
+- A continuity gap resets to DAY CHANGE — CONTINUITY RESET / WARMING UP.
+- Persistence cannot bridge a stale snapshot gap.
+- PCR is context only; it cannot create standalone bullish/bearish direction or
+  double-count OI already represented by premium+OI+volume flow.
+
+DECISION AND DISPLAY
+- CE, PE and Iron Condor receive only strategy-relevant level cautions.
+- Compact evidence rounding uses a largest-remainder method so displayed
+  directional rows total 100.0 at one-decimal precision.
+- Position Guardian freezes the planner's exact entry-credit estimate.
+- Instrument master cache refreshes after 24 hours and safely falls back to an
+  existing cache during a temporary download failure.
+
+No auto order placement, broker modification or automatic exit was added.

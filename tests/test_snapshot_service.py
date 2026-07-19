@@ -79,33 +79,31 @@ class StubClient:
         return ["2026-07-21"]
 
     def option_chain(self, **kwargs):
+        oc = {}
+        for index, strike in enumerate((24300, 24350, 24400), start=1):
+            oc[f"{strike:.6f}"] = {
+                "ce": {
+                    "last_price": 120 - index * 10,
+                    "oi": 900 + index * 100,
+                    "previous_oi": 800 + index * 90,
+                    "volume": 100 + index * 10,
+                    "previous_volume": 50,
+                    "previous_close_price": 125 - index * 10,
+                    "security_id": index * 2 - 1,
+                },
+                "pe": {
+                    "last_price": 90 + index * 10,
+                    "oi": 1000 + index * 120,
+                    "previous_oi": 900 + index * 100,
+                    "volume": 120 + index * 10,
+                    "previous_volume": 60,
+                    "previous_close_price": 95 + index * 10,
+                    "security_id": index * 2,
+                },
+            }
         return {
             "status": "success",
-            "data": {
-                "last_price": 24334.3,
-                "oc": {
-                    "24350.000000": {
-                        "ce": {
-                            "last_price": 100,
-                            "oi": 1000,
-                            "previous_oi": 900,
-                            "volume": 100,
-                            "previous_volume": 50,
-                            "previous_close_price": 90,
-                            "security_id": 1,
-                        },
-                        "pe": {
-                            "last_price": 110,
-                            "oi": 1200,
-                            "previous_oi": 1000,
-                            "volume": 120,
-                            "previous_volume": 60,
-                            "previous_close_price": 120,
-                            "security_id": 2,
-                        },
-                    }
-                },
-            },
+            "data": {"last_price": 24334.3, "oc": oc},
         }
 
 
@@ -164,3 +162,74 @@ def test_snapshot_connects_nifty_future_volume_to_core_engine():
     assert snapshot.feed_status["future_volume"].ok
     assert snapshot.volume.source == "NIFTY FUTURES"
     assert snapshot.core_evidence.status == "REFERENCE ONLY"
+
+
+def test_option_chain_integrity_rejects_spot_mismatch():
+    import pandas as pd
+
+    rows = []
+    for strike in (24300, 24350, 24400):
+        for side in ("CE", "PE"):
+            rows.append(
+                {
+                    "strike": strike,
+                    "side": side,
+                    "last_price": 100,
+                    "oi": 1000,
+                    "volume": 100,
+                    "is_atm": strike == 24350,
+                }
+            )
+    ok, message = SnapshotService._option_chain_integrity(
+        pd.DataFrame(rows), option_spot=25000, nifty_price=24350
+    )
+    assert not ok
+    assert "differs from NIFTY" in message
+
+
+def test_positive_nifty_validation_rejects_zero():
+    assert SnapshotService._positive_number(0) is None
+    assert SnapshotService._positive_number(-1) is None
+    assert SnapshotService._positive_number(24350) == 24350
+
+
+class LiveStaleVixClient(StubClient):
+    def market_quote(self, grouped):
+        response = super().market_quote(grouped)
+        fresh_time = int(datetime(2026, 7, 20, 9, 59, 50, tzinfo=IST).timestamp())
+        stale_vix_time = int(datetime(2026, 7, 20, 9, 0, tzinfo=IST).timestamp())
+        response["data"]["IDX_I"][CONFIG.nifty.security_id]["last_trade_time"] = (
+            fresh_time
+        )
+        response["data"]["IDX_I"][CONFIG.india_vix.security_id]["last_trade_time"] = (
+            stale_vix_time
+        )
+        for quote in response["data"]["NSE_EQ"].values():
+            quote["last_trade_time"] = fresh_time
+        return response
+
+    def intraday_candles(self, **kwargs):
+        interval = int(kwargs["interval"])
+        count = 45 if interval == 1 else 4
+        step = timedelta(minutes=interval)
+        start = datetime(2026, 7, 20, 9, 15, tzinfo=IST)
+        timestamps = [int((start + step * index).timestamp()) for index in range(count)]
+        closes = [24300 + index for index in range(count)]
+        return {
+            "open": closes,
+            "high": [item + 2 for item in closes],
+            "low": [item - 2 for item in closes],
+            "close": closes,
+            "volume": [1000] * count,
+            "timestamp": timestamps,
+            "open_interest": [0] * count,
+        }
+
+
+def test_stale_live_vix_is_not_used_as_fresh_context():
+    service = SnapshotService(LiveStaleVixClient(), StubMaster())
+    snapshot = service.build(datetime(2026, 7, 20, 10, 0, tzinfo=IST))
+    assert snapshot.market_session.is_live
+    assert snapshot.feed_status["vix"].use_state == "STALE"
+    assert snapshot.vix_context.status == "INVALID / UNAVAILABLE"
+    assert snapshot.vix_context.seller_environment == "VIX DATA UNAVAILABLE"

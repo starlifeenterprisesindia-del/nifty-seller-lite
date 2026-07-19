@@ -46,9 +46,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.0 Compact Evidence & Integrity — every active feature is summarized in one "
-    "six-row table above the Final One-Brain Decision. Detailed engines stay available "
-    "inside compact expanders. Read only; no order placement."
+    "V2.1 Pre-Market Integrity Audit — one canonical strategy brain with strict "
+    "quote/candle/option continuity guards. Detailed engines stay inside compact "
+    "expanders. Read only; no order placement."
 )
 
 

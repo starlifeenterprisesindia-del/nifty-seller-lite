@@ -175,6 +175,39 @@ def _merge_flow(
     ), basis
 
 
+def _snapshot_time(item: dict[str, Any]) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(item["captured_at"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _comparison_age_seconds(
+    newer: dict[str, Any], older: dict[str, Any]
+) -> float | None:
+    newer_time = _snapshot_time(newer)
+    older_time = _snapshot_time(older)
+    if newer_time is None or older_time is None:
+        return None
+    return (newer_time - older_time).total_seconds()
+
+
+def _latest_recent_snapshot(
+    history: list[dict[str, Any]], current_time: datetime
+) -> dict[str, Any] | None:
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for item in history:
+        captured_at = _snapshot_time(item)
+        if captured_at is None:
+            continue
+        age = (current_time - captured_at).total_seconds()
+        if 0 < age <= CONFIG.option_max_comparison_age_seconds:
+            candidates.append((age, item))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda pair: pair[0])[1]
+
+
 def _choose_history_sample(
     history: list[dict[str, Any]],
     current_time: datetime,
@@ -185,9 +218,8 @@ def _choose_history_sample(
     maximum_age = target_seconds + tolerance
     candidates: list[tuple[float, dict[str, Any]]] = []
     for item in history:
-        try:
-            captured_at = datetime.fromisoformat(str(item["captured_at"]))
-        except (KeyError, TypeError, ValueError):
+        captured_at = _snapshot_time(item)
+        if captured_at is None:
             continue
         age = (current_time - captured_at).total_seconds()
         if minimum_age <= age <= maximum_age:
@@ -195,9 +227,10 @@ def _choose_history_sample(
     if not candidates:
         return None, None
     _, chosen = min(candidates, key=lambda pair: pair[0])
-    actual = (
-        current_time - datetime.fromisoformat(str(chosen["captured_at"]))
-    ).total_seconds()
+    chosen_time = _snapshot_time(chosen)
+    actual = (current_time - chosen_time).total_seconds() if chosen_time else None
+    if actual is None:
+        return None, None
     return chosen, round(actual, 1)
 
 
@@ -368,17 +401,20 @@ def _persistence(
 ) -> str:
     sequence = [*history, current_snapshot]
     pair_biases: list[str] = []
-    for index in range(
-        max(1, len(sequence) - CONFIG.option_persistence_lookback), len(sequence)
-    ):
+    start_index = max(1, len(sequence) - CONFIG.option_persistence_lookback)
+    for index in range(start_index, len(sequence)):
         if index <= 0:
             continue
+        gap = _comparison_age_seconds(sequence[index], sequence[index - 1])
+        if gap is None or gap <= 0 or gap > CONFIG.option_max_comparison_age_seconds:
+            pair_biases.append("CONTINUITY GAP")
+            continue
         pair_biases.append(_snapshot_bias(sequence[index], sequence[index - 1]))
-    usable = [item for item in pair_biases if item in {"BULLISH", "BEARISH", "MIXED"}]
-    if not usable:
-        return "WARMING UP"
+
     trailing = 0
-    for item in reversed(usable):
+    for item in reversed(pair_biases):
+        if item == "CONTINUITY GAP":
+            break
         if item == current_bias:
             trailing += 1
         else:
@@ -387,6 +423,9 @@ def _persistence(
         return f"{current_bias} PERSISTENT ×{trailing}"
     if current_bias in {"BULLISH", "BEARISH"} and trailing >= 2:
         return f"{current_bias} DEVELOPING ×{trailing}"
+    usable = [item for item in pair_biases if item in {"BULLISH", "BEARISH", "MIXED"}]
+    if not usable:
+        return "WARMING UP"
     return "MIXED / NOT PERSISTENT"
 
 
@@ -405,14 +444,22 @@ def _normalized_scores(
             bearish += strength
         else:
             neutral += max(0.25, strength * 0.25)
-    pcr_value = pcr.intraday_addition_pcr or pcr.day_addition_pcr or pcr.near_atm_oi_pcr
-    if pcr_value is not None:
-        if pcr_value >= 1.20:
-            bullish += min(2.0, (pcr_value - 1.0) * 2.0)
-        elif pcr_value <= 0.80:
-            bearish += min(2.0, (1.0 - pcr_value) * 2.0)
+
+    # PCR is context, never a standalone direction vote. It may reinforce an
+    # already matching premium+OI+volume flow, otherwise it adds uncertainty.
+    if pcr.state == "PE OI DOMINANT":
+        if bullish > bearish:
+            bullish += 0.35
         else:
-            neutral += 0.5
+            neutral += 0.50
+    elif pcr.state == "CE OI DOMINANT":
+        if bearish > bullish:
+            bearish += 0.35
+        else:
+            neutral += 0.50
+    else:
+        neutral += 0.50
+
     total = bullish + bearish + neutral
     if total <= 0:
         return 0.0, 0.0, 100.0, "MIXED"
@@ -483,13 +530,16 @@ def calculate_option_intelligence(
     for column in NUMERIC_COLUMNS:
         if column in current.columns:
             current[column] = pd.to_numeric(current[column], errors="coerce")
-    previous_snapshot = history[-1] if history else None
+    previous_snapshot = _latest_recent_snapshot(history, captured_at)
+    continuity_reset = bool(history) and previous_snapshot is None
     previous_frame = (
         _rows_to_frame(previous_snapshot.get("rows") or [])
         if previous_snapshot
         else None
     )
     flow, basis = _merge_flow(current, previous_frame, spot)
+    if continuity_reset:
+        basis = "DAY CHANGE — CONTINUITY RESET"
     pcr = _pcr(current, flow)
     ce_wall = _wall("CE", current, previous_frame)
     pe_wall = _wall("PE", current, previous_frame)
@@ -523,7 +573,11 @@ def calculate_option_intelligence(
         reasons.append(f"CE wall {ce_wall.strike:.0f} / PE wall {pe_wall.strike:.0f}")
     blockers: list[str] = []
     if previous_snapshot is None:
-        blockers.append("First snapshot: intraday delta is warming up")
+        blockers.append(
+            "Previous snapshot too old; continuity reset"
+            if continuity_reset
+            else "First snapshot: intraday delta is warming up"
+        )
     if ready_windows < 3:
         blockers.append(f"Movement windows ready {ready_windows}/3")
     if not is_live:

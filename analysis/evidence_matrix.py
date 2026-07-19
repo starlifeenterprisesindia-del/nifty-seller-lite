@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import floor
 from typing import Any
 
 from analysis.technical_utils import clamp
@@ -17,7 +18,20 @@ def _normalise(
     total = sum(values)
     if total <= 0:
         return 0.0, 0.0, 0.0
-    return tuple(round(value / total * 100.0, 1) for value in values)  # type: ignore[return-value]
+
+    # Largest-remainder allocation in tenths guarantees that every directional
+    # row displays exactly 100.0 after rounding.
+    scaled = [value / total * 1000.0 for value in values]
+    tenths = [floor(value) for value in scaled]
+    remainder = 1000 - sum(tenths)
+    order = sorted(
+        range(len(scaled)),
+        key=lambda index: scaled[index] - tenths[index],
+        reverse=True,
+    )
+    for index in order[:remainder]:
+        tenths[index] += 1
+    return tuple(value / 10.0 for value in tenths)  # type: ignore[return-value]
 
 
 def _dominant_label(bullish: float, bearish: float, neutral: float) -> str:

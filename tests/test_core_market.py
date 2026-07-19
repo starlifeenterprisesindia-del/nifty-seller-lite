@@ -115,3 +115,45 @@ def test_core_market_combines_modules_without_strategy_action():
     assert result.bullish_score > result.bearish_score
     assert result.market_state == "BULLISH"
     assert result.status == "READY"
+
+
+def test_live_core_does_not_use_stale_futures_volume_direction():
+    result = calculate_core_market_evidence(
+        PriceActionBundle(
+            price_action("3 Minute"),
+            price_action("15 Minute"),
+            "TIMEFRAMES ALIGNED",
+            "BULLISH HH/HL",
+            85,
+        ),
+        IndicatorBundle(indicators("3 Minute"), indicators("15 Minute")),
+        LevelBundle(
+            NOW,
+            110,
+            None,
+            None,
+            None,
+            None,
+            120,
+            100,
+            115,
+            105,
+            20,
+            20,
+            "BETWEEN SUPPORT AND RESISTANCE",
+            5,
+            "READY",
+        ),
+        VolumeBundle(
+            "NIFTY FUTURES",
+            volume("3 Minute"),
+            volume("15 Minute"),
+            "BULLISH PARTICIPATION",
+            85,
+            "READY",
+        ),
+        MarketSession("LIVE", "MARKET OPEN — LIVE DATA", True, "fresh"),
+        future_volume_live=False,
+    )
+    assert "NIFTY futures volume is not confirmed live" in result.blockers
+    assert result.confidence < 85

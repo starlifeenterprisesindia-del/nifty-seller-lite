@@ -1,0 +1,10 @@
+DELETE THESE OBSOLETE V2.0 RELEASE DOCUMENTS AFTER THE V2.1 COMMIT:
+
+DEPLOY_V2_0.txt
+V2_0_UPLOAD_LIST.txt
+V2_0_DELETE_LIST.txt
+V2_0_CHANGELOG.txt
+V2_0_TEST_REPORT.txt
+
+Do not delete application modules, tests, README.md, ARCHITECTURE.md, Streamlit
+Secrets, runtime state buttons or the deployed Streamlit app.

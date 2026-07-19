@@ -110,3 +110,12 @@ def test_position_guardian_is_wired_after_execution_guard():
     assert service.index(
         "execution_guard = calculate_execution_guard("
     ) < service.index("position_guardian = calculate_position_guardian(")
+
+
+def test_final_brain_is_called_once_and_display_matrix_cannot_feed_it():
+    root = Path(__file__).resolve().parents[1]
+    service = (root / "services" / "snapshot_service.py").read_text(encoding="utf-8")
+    decision = (root / "analysis" / "decision.py").read_text(encoding="utf-8")
+    assert service.count("decision = calculate_final_decision(") == 1
+    assert "evidence_matrix" not in decision
+    assert "build_compact_evidence_matrix" not in decision

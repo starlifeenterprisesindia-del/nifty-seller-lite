@@ -58,29 +58,43 @@ def _seller_environment_score(vix: VixContext) -> float:
     return 55.0
 
 
-def _level_adjustments(levels: LevelBundle) -> tuple[float, float, float, list[str]]:
+def _level_adjustments(
+    levels: LevelBundle,
+) -> tuple[
+    float,
+    float,
+    float,
+    list[str],
+    list[str],
+    list[str],
+]:
     ce_adjust = pe_adjust = condor_adjust = 0.0
-    cautions: list[str] = []
+    ce_cautions: list[str] = []
+    pe_cautions: list[str] = []
+    condor_cautions: list[str] = []
     if levels.status != "READY":
-        return -8.0, -8.0, -12.0, ["Support/resistance evidence unavailable"]
+        common = ["Support/resistance evidence unavailable"]
+        return -8.0, -8.0, -12.0, common.copy(), common.copy(), common.copy()
 
     if levels.downside_room is not None:
         if levels.downside_room < 10:
             ce_adjust -= 18
-            cautions.append("CE sell has limited downside room before support")
+            ce_cautions.append("CE sell has limited downside room before support")
         elif levels.downside_room >= 25:
             ce_adjust += 7
     if levels.upside_room is not None:
         if levels.upside_room < 10:
             pe_adjust -= 18
-            cautions.append("PE sell has limited upside room before resistance")
+            pe_cautions.append("PE sell has limited upside room before resistance")
         elif levels.upside_room >= 25:
             pe_adjust += 7
 
     if levels.current_position == "NEAR SUPPORT":
         ce_adjust -= 10
+        ce_cautions.append("Current price is near support")
     elif levels.current_position == "NEAR RESISTANCE":
         pe_adjust -= 10
+        pe_cautions.append("Current price is near resistance")
 
     rooms = [
         value
@@ -91,8 +105,15 @@ def _level_adjustments(levels: LevelBundle) -> tuple[float, float, float, list[s
         condor_adjust += 8
     elif len(rooms) < 2 or min(rooms) < 10:
         condor_adjust -= 16
-        cautions.append("Iron Condor does not have balanced room on both sides")
-    return ce_adjust, pe_adjust, condor_adjust, cautions
+        condor_cautions.append("Iron Condor does not have balanced room on both sides")
+    return (
+        ce_adjust,
+        pe_adjust,
+        condor_adjust,
+        ce_cautions,
+        pe_cautions,
+        condor_cautions,
+    )
 
 
 def _event_adjustment(event: EventRiskContext) -> tuple[float, str | None]:
@@ -172,7 +193,14 @@ def calculate_final_decision(
         + (seller_score * 0.65 + inst_range * 0.35) * 0.15
     )
 
-    ce_adjust, pe_adjust, condor_adjust, level_cautions = _level_adjustments(levels)
+    (
+        ce_adjust,
+        pe_adjust,
+        condor_adjust,
+        ce_level_cautions,
+        pe_level_cautions,
+        condor_level_cautions,
+    ) = _level_adjustments(levels)
     ce += ce_adjust
     pe += pe_adjust
     condor += condor_adjust
@@ -244,9 +272,9 @@ def calculate_final_decision(
 
     wait = round(clamp(wait, 0, 100), 1)
 
-    ce_cautions = list(level_cautions)
-    pe_cautions = list(level_cautions)
-    condor_cautions = list(level_cautions)
+    ce_cautions = list(ce_level_cautions)
+    pe_cautions = list(pe_level_cautions)
+    condor_cautions = list(condor_level_cautions)
     if options.confidence < CONFIG.decision_min_option_confidence:
         warning = "Option-flow continuity is not mature"
         ce_cautions.append(warning)

@@ -258,3 +258,21 @@ def test_no_manual_trade_returns_idle_guardian():
     result = calculate(None, pd.DataFrame())
     assert result.status == "IDLE"
     assert result.instruction == "NO OPEN TRADE"
+
+
+def test_entry_credit_uses_exact_plan_value_not_rounded_target_reconstruction():
+    from dataclasses import replace
+
+    rounded_guard = replace(
+        guard(), target_capture_points=4.2, target_exit_debit_points=7.79
+    )
+    record = create_trade_record(
+        captured_at=NOW,
+        decision=decision(),
+        trade_plan=bundle(),
+        execution_guard=rounded_guard,
+        lots=1,
+        lot_size=65,
+        spot=24350,
+    )
+    assert record["entry_credit_points"] == pytest.approx(12.0)

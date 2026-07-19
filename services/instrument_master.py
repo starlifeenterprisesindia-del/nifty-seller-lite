@@ -59,15 +59,33 @@ class InstrumentMaster:
         return df
 
     def load(self, *, allow_download: bool = True) -> pd.DataFrame:
+        cached: pd.DataFrame | None = None
+        cache_is_fresh = False
         if self.cache_path.exists():
             try:
                 cached = pd.read_csv(self.cache_path, low_memory=False)
-                if not cached.empty:
-                    return cached
+                age_seconds = max(
+                    0.0, datetime.now().timestamp() - self.cache_path.stat().st_mtime
+                )
+                cache_is_fresh = (
+                    age_seconds <= CONFIG.instrument_master_cache_max_age_hours * 3600
+                )
+                if cached.empty:
+                    cached = None
             except Exception:
-                pass
+                cached = None
+
+        if cached is not None and cache_is_fresh:
+            return cached
         if allow_download:
-            return self.download()
+            try:
+                return self.download()
+            except Exception:
+                if cached is not None:
+                    return cached
+                raise
+        if cached is not None:
+            return cached
         raise SnapshotBuildError("Dhan instrument master is unavailable")
 
     def normalize(self, df: pd.DataFrame) -> pd.DataFrame:
