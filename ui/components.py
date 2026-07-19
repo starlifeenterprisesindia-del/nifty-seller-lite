@@ -38,6 +38,52 @@ def render_header(snapshot: MarketSnapshot) -> None:
     c4.metric("Created", snapshot.created_at.strftime("%H:%M:%S IST"))
 
 
+def render_decision(snapshot: MarketSnapshot) -> None:
+    item = snapshot.decision
+    st.subheader("Final One-Brain Decision")
+    st.caption(
+        "CE Sell, PE Sell and Iron Condor are independent suitability percentages. "
+        "WAIT is a separate uncertainty/risk need, so the four values do not add to 100."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("CE Sell", f"{item.ce_sell.score:.1f}%")
+    c2.metric("PE Sell", f"{item.pe_sell.score:.1f}%")
+    c3.metric("Iron Condor", f"{item.iron_condor.score:.1f}%")
+    c4.metric("WAIT Need", f"{item.wait_need.score:.1f}%")
+
+    message = (
+        f"FINAL ACTION: {item.final_action} | Execution: {item.execution_status} | "
+        f"Decision confidence: {item.decision_confidence:.1f}% | "
+        f"Hedge required: {'YES' if item.hedge_required else 'NO'}"
+    )
+    if item.final_action == "WAIT":
+        st.warning(message)
+    else:
+        st.success(message)
+
+    left, right = st.columns(2)
+    with left:
+        st.write("**Top reasons**")
+        for reason in item.reasons or ("No decisive evidence",):
+            st.write(f"• {reason}")
+    with right:
+        st.write("**Main blocker**")
+        st.write(f"• {item.blocker}")
+
+    rows = []
+    for strategy in (item.ce_sell, item.pe_sell, item.iron_condor, item.wait_need):
+        rows.append(
+            {
+                "Setup": strategy.name,
+                "Score / Need %": strategy.score,
+                "Status": strategy.status,
+                "Main evidence": " | ".join(strategy.reasons),
+                "Cautions": " | ".join(strategy.cautions),
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def render_feed_status(snapshot: MarketSnapshot) -> None:
     rows = []
     for key, status in snapshot.feed_status.items():
@@ -57,7 +103,7 @@ def render_feed_status(snapshot: MarketSnapshot) -> None:
 def render_core_evidence(snapshot: MarketSnapshot) -> None:
     item = snapshot.core_evidence
     st.caption(
-        "Core Market Evidence is not a CE/PE/Condor decision. It combines only the "
+        "Core Market Evidence is one input to the final brain. It combines only the "
         "completed-candle price, indicator, level and NIFTY-futures-volume modules."
     )
     c1, c2, c3, c4 = st.columns(4)
@@ -348,7 +394,7 @@ def render_option_intelligence(snapshot: MarketSnapshot) -> None:
     item = snapshot.option_intelligence
     st.caption(
         "Options Intelligence compares the current ATM±5 chain with bounded same-day "
-        "snapshots. These are normalized market-evidence percentages, not CE/PE/Condor advice."
+        "snapshots. These are normalized option-evidence percentages consumed by the final brain."
     )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Bullish Option Flow", f"{item.bullish_score:.1f}%")
@@ -468,6 +514,57 @@ def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
     )
     rows = [asdict(row) for row in item.rows]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_market_context(snapshot: MarketSnapshot) -> None:
+    institutional = snapshot.institutional_context
+    event = snapshot.event_risk
+    st.caption(
+        "FII/DII is background evidence only. Missing values remain missing and never become zero. "
+        "Event risk affects the final brain only when medium/high risk is marked verified."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Latest FII ₹ cr",
+        f"{institutional.latest_fii_net:,.1f}"
+        if institutional.latest_fii_net is not None
+        else "Missing",
+    )
+    c2.metric(
+        "Latest DII ₹ cr",
+        f"{institutional.latest_dii_net:,.1f}"
+        if institutional.latest_dii_net is not None
+        else "Missing",
+    )
+    c3.metric("Institutional State", institutional.state)
+    c4.metric("Verified Event Risk", event.level)
+    rows = [
+        {
+            "Window": "5 days",
+            "FII net ₹ cr": institutional.fii_5d_net,
+            "DII net ₹ cr": institutional.dii_5d_net,
+        },
+        {
+            "Window": "10 days",
+            "FII net ₹ cr": institutional.fii_10d_net,
+            "DII net ₹ cr": institutional.dii_10d_net,
+        },
+        {
+            "Window": "15 days",
+            "FII net ₹ cr": institutional.fii_15d_net,
+            "DII net ₹ cr": institutional.dii_15d_net,
+        },
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.write(
+        f"**Institutional status:** {institutional.status} | "
+        f"**Observations:** {institutional.observations} | "
+        f"**Confidence:** {institutional.confidence:.1f}%"
+    )
+    st.write(
+        f"**Event status:** {event.status} | **Verified:** {'YES' if event.verified else 'NO'} | "
+        f"**Note:** {event.note or 'None'}"
+    )
 
 
 def render_vix_context(snapshot: MarketSnapshot) -> None:

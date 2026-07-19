@@ -258,6 +258,56 @@ class VixContext:
     status: str
 
 
+@dataclass(frozen=True)
+class InstitutionalContext:
+    as_of_date: str | None
+    latest_fii_net: float | None
+    latest_dii_net: float | None
+    fii_5d_net: float | None
+    fii_10d_net: float | None
+    fii_15d_net: float | None
+    dii_5d_net: float | None
+    dii_10d_net: float | None
+    dii_15d_net: float | None
+    observations: int
+    state: str
+    confidence: float
+    status: str
+
+
+@dataclass(frozen=True)
+class EventRiskContext:
+    as_of_date: str | None
+    level: str
+    note: str
+    verified: bool
+    status: str
+
+
+@dataclass(frozen=True)
+class StrategyEvaluation:
+    name: str
+    score: float
+    status: str
+    reasons: tuple[str, ...]
+    cautions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FinalDecision:
+    ce_sell: StrategyEvaluation
+    pe_sell: StrategyEvaluation
+    iron_condor: StrategyEvaluation
+    wait_need: StrategyEvaluation
+    final_action: str
+    execution_status: str
+    decision_confidence: float
+    hedge_required: bool
+    reasons: tuple[str, ...]
+    blocker: str
+    status: str
+
+
 @dataclass
 class MarketSnapshot:
     snapshot_id: str
@@ -281,6 +331,9 @@ class MarketSnapshot:
     option_intelligence: OptionIntelligence
     heavyweights: HeavyweightBundle
     vix_context: VixContext
+    institutional_context: InstitutionalContext
+    event_risk: EventRiskContext
+    decision: FinalDecision
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
@@ -311,6 +364,9 @@ class MarketSnapshot:
             "option_intelligence": asdict(self.option_intelligence),
             "heavyweights": asdict(self.heavyweights),
             "vix_context": asdict(self.vix_context),
+            "institutional_context": asdict(self.institutional_context),
+            "event_risk": asdict(self.event_risk),
+            "decision": asdict(self.decision),
             "feeds": {
                 name: asdict(status) for name, status in self.feed_status.items()
             },

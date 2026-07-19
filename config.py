@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "0.8.0_OPTIONS_INTELLIGENCE"
+    version: str = "1.0.0_FINAL_ONE_BRAIN"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5
@@ -86,6 +86,15 @@ class AppConfig:
     option_min_oi_move_pct: float = 0.20
     option_window_tolerance_ratio: float = 0.55
     option_persistence_lookback: int = 5
+
+    # Durable background context and final one-brain decision settings.
+    market_context_path: str = "data/market_context.json"
+    market_context_max_entries: int = 120
+    decision_minimum_score: float = 62.0
+    decision_minimum_margin: float = 8.0
+    decision_wait_block_threshold: float = 60.0
+    decision_min_option_confidence: float = 58.0
+    decision_min_core_confidence: float = 55.0
 
     @property
     def top7_symbols(self) -> tuple[str, ...]:

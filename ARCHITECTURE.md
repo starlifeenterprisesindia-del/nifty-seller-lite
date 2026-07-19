@@ -1,61 +1,57 @@
-# Architecture — V0.8 Options Intelligence
+# Architecture — V1.0 Final One-Brain
 
-## Single data authority
+## Single market-data authority
 
 Only `services/snapshot_service.py` orchestrates DhanHQ reads and creates one
-`MarketSnapshot` containing:
+`MarketSnapshot`. Analysis modules do not fetch data.
 
-- NIFTY quote and completed 1m/3m/15m candles
+The snapshot contains:
+
+- NIFTY, India VIX and Top-7 quotes
+- completed NIFTY 1m/3m/15m candles
 - nearest NIFTY futures quote and volume/OI candles
-- dynamically resolved India VIX quote with a configured fallback
-- official-weight Top-7 stock quotes
 - nearest-expiry ATM±5 option chain
-- Core Market Evidence
-- Options Intelligence, Top-7 contribution and VIX context
-- feed integrity, state integrity and session status
+- canonical technical, level, volume and option-flow evidence
+- optional institutional/event context
+- one final read-only decision object
+- feed/session integrity
 
-No file under `analysis/` imports `requests`, `DhanClient`, or performs network I/O.
+## Canonical modules
 
-## Canonical calculation modules
-
-- `analysis/technical_utils.py`: completed-candle sanitation, ATR and confirmed swings
 - `analysis/indicators.py`: EMA20/50, MACD 12/26/9 and RSI14
-- `analysis/price_action.py`: structure, current event, invalidation and move stage
+- `analysis/price_action.py`: structure, event, invalidation and move stage
 - `analysis/levels.py`: confluence zones and remaining room
-- `analysis/volume.py`: time-normalized NIFTY futures participation
-- `analysis/core_market.py`: core evidence-only integration
-- `analysis/option_intelligence.py`: one canonical Premium/OI/Volume flow engine,
-  movement windows, persistence, walls, clusters and PCR
-- `analysis/heavyweights.py`: official-weight Top-7 contribution and breadth
+- `analysis/volume.py`: NIFTY-futures participation
+- `analysis/core_market.py`: completed-candle core evidence
+- `analysis/option_intelligence.py`: Premium/OI/Volume flow, movement windows,
+  persistence, walls, clusters and PCR
+- `analysis/heavyweights.py`: official-weight Top-7 contribution
 - `analysis/market_risk.py`: India VIX context
+- `analysis/market_context.py`: optional FII/DII rolling context and verified
+  event risk
+- `analysis/decision.py`: the only final strategy brain
 
-Every concept has one active implementation. Replaced logic is deleted rather than kept
-beside the current code.
+There is no second classifier, duplicate decision function or order module.
 
-## Bounded option state
+## Final strategy brain
 
-`services/option_state_store.py` is the only persistence implementation.
+The single brain consumes only canonical snapshot evidence. The architecture
+weights are:
 
-- JSON schema version 1
-- atomic temporary-file replacement
-- process lock where supported
-- current trading date only
-- current expiry isolated by session key
-- maximum 180 snapshots
-- no credentials, tokens, orders or arbitrary session state
-- no snapshots saved when the market session is not confirmed live
-- 1m/3m/5m comparisons reject distant samples outside tolerance
+- Core price/trend/levels: 35%
+- Options flow/PCR: 35%
+- Top-7 heavyweights: 15%
+- VIX/session/institutional/event background: 15%
 
-The store does not fetch data and does not make decisions. It only preserves sanitized
-comparison evidence received from `SnapshotService`.
+CE Sell, PE Sell and Iron Condor are independent suitability percentages.
+WAIT is a separate risk/uncertainty need and is not normalized against them.
+Reference-only sessions force WAIT. Actionable output always includes
+`WITH HEDGE`.
 
-## Top-7 basket
+## Bounded local state
 
-The active basket follows the NIFTY 50 factsheet dated 30-Jun-2026:
-HDFC Bank, ICICI Bank, Reliance Industries, Bharti Airtel, Larsen & Toubro,
-State Bank of India and Axis Bank. Combined covered index weight is 45.20%.
+- `services/option_state_store.py`: same-day bounded option-flow snapshots
+- `services/context_store.py`: maximum 120 dated FII/DII/event-context entries
 
-## No final strategy brain yet
-
-V0.8 has no strategy-decision or order module. The future V1.0 single brain may consume
-only the canonical evidence objects after live option-state continuity has been verified.
+Both use atomic replacement and lock files. Credentials and orders are never
+stored. Runtime files are gitignored.

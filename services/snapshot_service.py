@@ -14,10 +14,12 @@ from analysis.candles import (
     mark_completed_candles,
 )
 from analysis.core_market import calculate_core_market_evidence
+from analysis.decision import calculate_final_decision
 from analysis.heavyweights import calculate_heavyweight_bundle
 from analysis.indicators import calculate_indicator_bundle
 from analysis.levels import calculate_levels
 from analysis.market_session import classify_market_session, feed_use_state
+from analysis.market_context import calculate_market_context
 from analysis.market_risk import calculate_vix_context
 from analysis.option_chain import option_chain_to_frame, select_atm_window
 from analysis.option_intelligence import calculate_option_intelligence
@@ -27,6 +29,7 @@ from config import CONFIG, IST_TIMEZONE
 from models import FeedStatus, MarketSnapshot
 from services.dhan_client import DhanClient
 from services.errors import SnapshotBuildError
+from services.context_store import MarketContextStore
 from services.instrument_master import InstrumentMaster, ResolvedInstrument
 from services.option_state_store import OptionStateStore
 
@@ -40,10 +43,12 @@ class SnapshotService:
         client: DhanClient,
         instrument_master: InstrumentMaster | None = None,
         option_state_store: OptionStateStore | None = None,
+        context_store: MarketContextStore | None = None,
     ):
         self.client = client
         self.master = instrument_master or InstrumentMaster()
         self.option_state_store = option_state_store or OptionStateStore()
+        self.context_store = context_store or MarketContextStore()
 
     @staticmethod
     def _extract_quote(
@@ -482,6 +487,49 @@ class SnapshotService:
             ),
         )
 
+        context_error: str | None = None
+        try:
+            context_entries = self.context_store.load()
+        except Exception as exc:
+            context_entries = []
+            context_error = str(exc)
+        institutional_context, event_risk = calculate_market_context(
+            context_entries, current.date()
+        )
+        statuses["market_context"] = FeedStatus(
+            name="market_context",
+            ok=context_error is None,
+            fetched_at=current,
+            message=(
+                f"FII/DII observations={institutional_context.observations}; "
+                f"event risk={event_risk.level}"
+                if context_error is None
+                else context_error
+            ),
+            source="Local bounded market-context journal",
+            use_state=(
+                "READY"
+                if context_error is None and institutional_context.status != "MISSING"
+                else "OPTIONAL / MISSING"
+                if context_error is None
+                else "UNAVAILABLE"
+            ),
+        )
+
+        decision = calculate_final_decision(
+            core=core_evidence,
+            options=option_intelligence,
+            heavyweights=heavyweights,
+            vix=vix_context,
+            levels=levels,
+            institutional=institutional_context,
+            event_risk=event_risk,
+            market_session=market_session,
+            quote_live=statuses["quotes"].use_state == "LIVE",
+            candles_live=statuses["candles"].use_state == "LIVE",
+            option_chain_live=statuses["option_chain"].use_state == "LIVE",
+        )
+
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
             "market_state": market_session.code,
@@ -527,6 +575,9 @@ class SnapshotService:
             option_intelligence=option_intelligence,
             heavyweights=heavyweights,
             vix_context=vix_context,
+            institutional_context=institutional_context,
+            event_risk=event_risk,
+            decision=decision,
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
@@ -544,6 +595,7 @@ class SnapshotService:
                 "option_state_prior_snapshots": len(option_history),
                 "option_state_current_stored": state_appended,
                 "top7_weight_date": CONFIG.top7_weight_date,
-                "strategy_scores_enabled": False,
+                "strategy_scores_enabled": True,
+                "decision_engine": "analysis.decision.calculate_final_decision",
             },
         )

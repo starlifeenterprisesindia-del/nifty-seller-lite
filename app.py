@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from config import CONFIG
+from config import CONFIG, IST_TIMEZONE
 from models import Credentials
+from services.context_store import MarketContextStore
 from services.dhan_client import DhanClient
 from services.instrument_master import InstrumentMaster
 from services.option_state_store import OptionStateStore
 from services.snapshot_service import SnapshotService
 from ui.components import (
     render_candles,
+    render_decision,
     render_core_evidence,
     render_feed_status,
     render_header,
@@ -20,6 +24,7 @@ from ui.components import (
     render_heavyweights,
     render_indicators,
     render_levels,
+    render_market_context,
     render_market_session,
     render_option_chain,
     render_option_flow_matrix,
@@ -35,9 +40,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V0.8 Options Intelligence — persistent intraday option flow, OI walls, PCR, "
-    "Top-7 weighted contribution and VIX context connected to the existing core market "
-    "engine through one authoritative snapshot. No CE/PE/Condor strategy decision yet."
+    "V1.0 Final One-Brain — one read-only decision engine combines core market evidence, "
+    "option flow, Top-7 contribution, VIX, optional FII/DII background and verified event "
+    "risk. No order placement. Hedge is mandatory for every actionable setup."
 )
 
 
@@ -53,6 +58,15 @@ def secret_value(name: str) -> str:
 client_id = secret_value("client_id")
 access_token = secret_value("access_token")
 state_store = OptionStateStore(Path(CONFIG.option_state_path))
+context_store = MarketContextStore(Path(CONFIG.market_context_path))
+
+
+def optional_number(raw: str) -> float | None:
+    value = str(raw or "").strip().replace(",", "")
+    if not value:
+        return None
+    return float(value)
+
 
 with st.sidebar:
     st.subheader("Connection")
@@ -73,6 +87,36 @@ with st.sidebar:
     clear_option_state = st.button(
         "Clear today's option history", use_container_width=True
     )
+    with st.expander("FII/DII & verified event context"):
+        context_date = st.date_input(
+            "Session date", datetime.now(ZoneInfo(IST_TIMEZONE)).date()
+        )
+        fii_raw = st.text_input("FII cash net ₹ crore (optional)", value="")
+        dii_raw = st.text_input("DII cash net ₹ crore (optional)", value="")
+        event_level = st.selectbox(
+            "Verified market event risk", ["NONE", "LOW", "MEDIUM", "HIGH"]
+        )
+        event_verified = st.checkbox("Risk/news personally verified", value=False)
+        event_note = st.text_input("Short event note (optional)", value="")
+        save_context = st.button("Save market context", use_container_width=True)
+        st.caption(
+            "Missing FII/DII is kept as missing, never converted to zero. "
+            "Medium/high event risk is accepted only when verified."
+        )
+    if save_context:
+        try:
+            context_store.upsert(
+                session_date=context_date,
+                fii_cash_net=optional_number(fii_raw),
+                dii_cash_net=optional_number(dii_raw),
+                event_risk=event_level,
+                event_note=event_note,
+                verified=event_verified,
+            )
+            st.session_state.pop("snapshot", None)
+            st.success("Market context saved")
+        except Exception as exc:
+            st.error(f"Context not saved: {exc}")
     if clear_instrument_cache:
         cache = Path("data/instrument_master.csv")
         if cache.exists():
@@ -101,6 +145,7 @@ if "snapshot" not in st.session_state or refresh:
                 client,
                 InstrumentMaster(Path("data/instrument_master.csv")),
                 state_store,
+                context_store,
             )
             st.session_state.snapshot = service.build()
     except Exception as exc:
@@ -111,7 +156,9 @@ snapshot = st.session_state.snapshot
 render_market_session(snapshot)
 render_header(snapshot)
 
-st.subheader("Core Market Evidence — No Strategy Decision Yet")
+render_decision(snapshot)
+
+st.subheader("Core Market Evidence")
 render_core_evidence(snapshot)
 
 core_tabs = st.tabs(
@@ -143,6 +190,7 @@ option_tabs = st.tabs(
         "OI Walls, Clusters & PCR",
         "Top-7 Weighted Contribution",
         "VIX Context",
+        "FII/DII & Event Risk",
     ]
 )
 with option_tabs[0]:
@@ -155,6 +203,8 @@ with option_tabs[3]:
     render_heavyweight_intelligence(snapshot)
 with option_tabs[4]:
     render_vix_context(snapshot)
+with option_tabs[5]:
+    render_market_context(snapshot)
 
 st.subheader("Raw Market Data")
 market_tabs = st.tabs(
@@ -182,6 +232,7 @@ with market_tabs[4]:
     st.json(snapshot.public_summary())
 
 st.info(
-    "Next big milestone: V1.0 Final One-Brain Decision — normalized CE Sell, PE Sell, "
-    "Iron Condor and WAIT need scores only after live Options Intelligence continuity is verified."
+    "Decision-support only. Strategy scores are independent suitability percentages; "
+    "WAIT is a separate uncertainty/risk need. Verify broker prices, spreads, margin, "
+    "liquidity and hedge before any trade. The app never places orders."
 )

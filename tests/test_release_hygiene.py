@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_release_has_no_old_milestone_documents_or_backup_code():
+def test_release_has_no_old_release_documents_or_backup_code():
     root = Path(__file__).resolve().parents[1]
     names = {path.name for path in root.iterdir()}
     forbidden = {
@@ -17,15 +17,20 @@ def test_release_has_no_old_milestone_documents_or_backup_code():
         "DELETE_OLD_FILES_V0_5.txt",
         "V0_5_CHANGELOG.txt",
         "V0_5_TEST_REPORT.txt",
+        "DEPLOY_V0_8.txt",
+        "DELETE_OLD_FILES_V0_8.txt",
+        "V0_8_CHANGELOG.txt",
+        "V0_8_TEST_REPORT.txt",
         "app_old.py",
         "backup.py",
     }
     assert not names.intersection(forbidden)
 
 
-def test_only_one_snapshot_service_and_no_strategy_engine():
+def test_only_one_snapshot_service_and_one_strategy_brain():
     root = Path(__file__).resolve().parents[1]
     assert len(list(root.glob("services/snapshot_service.py"))) == 1
+    assert len(list(root.glob("analysis/decision.py"))) == 1
     assert not (root / "decision_engine.py").exists()
     assert not (root / "decision").exists()
 
@@ -37,6 +42,8 @@ def test_runtime_state_and_cache_files_are_gitignored():
         "data/instrument_master.csv",
         "data/option_state.json",
         "data/option_state.json.lock",
+        "data/market_context.json",
+        "data/market_context.json.lock",
         ".streamlit/secrets.toml",
         "__pycache__/",
     }
