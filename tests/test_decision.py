@@ -227,3 +227,153 @@ def test_level_cautions_are_strategy_specific():
         not in result.pe_sell.cautions
     )
     assert any("balanced room" in item for item in result.iron_condor.cautions)
+
+
+def _signal(
+    *,
+    captured_at: datetime,
+    direction: str,
+    state: str,
+    ce: float,
+    pe: float,
+    condor: float,
+) -> dict[str, object]:
+    action = {
+        "BULLISH": "PE SELL WITH HEDGE",
+        "BEARISH": "CE SELL WITH HEDGE",
+        "RANGE": "IRON CONDOR WITH HEDGE",
+    }[direction]
+    return {
+        "captured_at": captured_at.isoformat(),
+        "action": action,
+        "execution_status": "READY",
+        "ce_score": ce,
+        "pe_score": pe,
+        "condor_score": condor,
+        "wait_need": 15,
+        "signal_state": state,
+        "market_direction": direction,
+        "fake_move_risk": 20,
+        "spot": 24350,
+    }
+
+
+def _bearish_kwargs():
+    kwargs = common_kwargs()
+    kwargs["core"] = CoreMarketEvidence(
+        bullish_score=8,
+        bearish_score=88,
+        range_score=15,
+        confidence=86,
+        market_state="BEARISH",
+        move_stage="DEVELOPING",
+        status="READY",
+        reasons=("BEARISH LH/LL",),
+        blockers=(),
+    )
+    bearish_options = option_intelligence()
+    kwargs["options"] = OptionIntelligence(
+        **{
+            **bearish_options.__dict__,
+            "bullish_score": 6,
+            "bearish_score": 88,
+            "range_score": 6,
+            "market_bias": "BEARISH",
+            "persistence": "BEARISH PERSISTENT ×3",
+        }
+    )
+    kwargs["heavyweights"] = HeavyweightBundle(
+        **{
+            **kwargs["heavyweights"].__dict__,
+            "state": "BROAD BEARISH",
+        }
+    )
+    kwargs["as_of"] = NOW
+    kwargs["current_price"] = 24320.0
+    return kwargs
+
+
+def test_first_direction_is_developing_but_execution_guard_can_confirm_later():
+    kwargs = common_kwargs()
+    kwargs["as_of"] = NOW
+    result = calculate_final_decision(**kwargs)
+    assert result.final_action == "PE SELL WITH HEDGE"
+    assert result.signal_state == "BULLISH DEVELOPING"
+    assert "WARMING UP" in result.outlook.signal_memory
+
+
+def test_second_consistent_snapshot_confirms_direction():
+    kwargs = common_kwargs()
+    kwargs["as_of"] = NOW
+    kwargs["signal_history"] = (
+        _signal(
+            captured_at=NOW.replace(hour=10, minute=58),
+            direction="BULLISH",
+            state="BULLISH DEVELOPING",
+            ce=18,
+            pe=78,
+            condor=25,
+        ),
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.final_action == "PE SELL WITH HEDGE"
+    assert result.signal_state == "BULLISH CONFIRMED"
+    assert result.outlook.signal_memory.startswith("2/2 BULLISH")
+
+
+def test_single_opposite_snapshot_is_held_at_wait_instead_of_flipping():
+    kwargs = _bearish_kwargs()
+    kwargs["core"] = CoreMarketEvidence(**{**kwargs["core"].__dict__, "confidence": 65})
+    kwargs["signal_history"] = (
+        _signal(
+            captured_at=NOW.replace(hour=10, minute=58),
+            direction="BULLISH",
+            state="BULLISH CONFIRMED",
+            ce=18,
+            pe=78,
+            condor=25,
+        ),
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.instant_action == "CE SELL WITH HEDGE"
+    assert result.final_action == "WAIT"
+    assert result.signal_state == "TRANSITION / WAIT"
+    assert result.wait_need.score >= 65
+
+
+def test_persistent_opposite_direction_can_confirm_reversal():
+    kwargs = _bearish_kwargs()
+    kwargs["signal_history"] = (
+        _signal(
+            captured_at=NOW.replace(hour=10, minute=56),
+            direction="BULLISH",
+            state="BULLISH CONFIRMED",
+            ce=18,
+            pe=78,
+            condor=25,
+        ),
+        _signal(
+            captured_at=NOW.replace(hour=10, minute=58),
+            direction="BEARISH",
+            state="TRANSITION / WAIT",
+            ce=76,
+            pe=24,
+            condor=20,
+        ),
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.final_action == "CE SELL WITH HEDGE"
+    assert "BEARISH CONFIRMED" in result.signal_state
+
+
+def test_outlook_paths_are_normalized_to_one_hundred():
+    kwargs = common_kwargs()
+    kwargs["as_of"] = NOW
+    result = calculate_final_decision(**kwargs)
+    total = (
+        result.outlook.bullish_path_pct
+        + result.outlook.range_path_pct
+        + result.outlook.bearish_path_pct
+    )
+    assert total == 100.0
+    assert 0 <= result.outlook.fake_move_risk <= 100

@@ -306,6 +306,22 @@ class StrategyEvaluation:
 
 
 @dataclass(frozen=True)
+class MarketOutlook:
+    bullish_path_pct: float
+    range_path_pct: float
+    bearish_path_pct: float
+    fake_move_risk: float
+    fake_move_state: str
+    signal_state: str
+    signal_memory: str
+    invalidation_low: float | None
+    invalidation_high: float | None
+    invalidation_text: str
+    reasons: tuple[str, ...]
+    status: str
+
+
+@dataclass(frozen=True)
 class FinalDecision:
     ce_sell: StrategyEvaluation
     pe_sell: StrategyEvaluation
@@ -318,6 +334,25 @@ class FinalDecision:
     reasons: tuple[str, ...]
     blocker: str
     status: str
+    instant_action: str = ""
+    signal_state: str = "UNAVAILABLE"
+    market_direction: str = "RANGE"
+    outlook: MarketOutlook = field(
+        default_factory=lambda: MarketOutlook(
+            bullish_path_pct=33.4,
+            range_path_pct=33.3,
+            bearish_path_pct=33.3,
+            fake_move_risk=100.0,
+            fake_move_state="HIGH",
+            signal_state="UNAVAILABLE",
+            signal_memory="0/0",
+            invalidation_low=None,
+            invalidation_high=None,
+            invalidation_text="Unavailable",
+            reasons=(),
+            status="UNAVAILABLE",
+        )
+    )
 
 
 @dataclass(frozen=True)

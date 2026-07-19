@@ -80,3 +80,27 @@ def test_wait_cannot_be_marked_as_trade(tmp_path):
     store = DisciplineStore(tmp_path / "discipline.json")
     with pytest.raises(ValueError, match="WAIT"):
         store.mark_trade(session_date=NOW.date(), action="WAIT")
+
+
+def test_signal_history_persists_market_memory_fields(tmp_path):
+    store = DisciplineStore(tmp_path / "discipline.json")
+    state, appended = store.append_signal(
+        captured_at=NOW,
+        action="PE SELL WITH HEDGE",
+        execution_status="READY",
+        ce_score=18.4,
+        pe_score=76.2,
+        condor_score=24.8,
+        wait_need=22.0,
+        signal_state="BULLISH DEVELOPING",
+        market_direction="BULLISH",
+        fake_move_risk=31.5,
+        spot=24352.75,
+    )
+    assert appended is True
+    sample = state.signal_history[-1]
+    assert sample["market_direction"] == "BULLISH"
+    assert sample["signal_state"] == "BULLISH DEVELOPING"
+    assert sample["pe_score"] == 76.2
+    assert sample["fake_move_risk"] == 31.5
+    assert sample["spot"] == 24352.75

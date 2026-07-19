@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.1.0_PREMARKET_INTEGRITY_AUDIT"
+    version: str = "2.6.0_MARKET_MEMORY_FULL_AUDIT_PDF"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     context_quote_max_age_seconds: int = 60
@@ -104,6 +104,20 @@ class AppConfig:
     decision_wait_block_threshold: float = 60.0
     decision_min_option_confidence: float = 58.0
     decision_min_core_confidence: float = 55.0
+
+    # Same-brain market memory, anti-flip confirmation and fake-move risk.
+    # These settings do not create a second strategy engine; they gate the output
+    # of calculate_final_decision using bounded same-session evidence memory.
+    decision_memory_lookback: int = 5
+    decision_memory_max_age_seconds: int = 900
+    decision_confirmation_snapshots: int = 2
+    decision_flip_confirmations: int = 2
+    decision_flip_margin: float = 15.0
+    decision_emergency_flip_margin: float = 35.0
+    decision_stability_wait_floor: float = 65.0
+    fake_move_medium_threshold: float = 40.0
+    fake_move_high_threshold: float = 65.0
+    outlook_current_weight: float = 0.65
 
     # Read-only strike-planner settings. This planner consumes the final one-brain
     # action and cannot change strategy scores or place orders.

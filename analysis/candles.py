@@ -91,6 +91,7 @@ def mark_completed_candles(
     else:
         current = current.tz_convert(IST_TIMEZONE)
     result["is_complete"] = (
-        result["timestamp"] + pd.Timedelta(minutes=interval_minutes) <= current
+        result["timestamp"] + pd.to_timedelta(int(interval_minutes), unit="min")
+        <= current
     )
     return result

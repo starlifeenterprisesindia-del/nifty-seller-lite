@@ -119,3 +119,21 @@ def test_final_brain_is_called_once_and_display_matrix_cannot_feed_it():
     assert service.count("decision = calculate_final_decision(") == 1
     assert "evidence_matrix" not in decision
     assert "build_compact_evidence_matrix" not in decision
+
+
+def test_outlook_and_fake_move_filter_live_inside_the_one_brain():
+    root = Path(__file__).resolve().parents[1]
+    decision = (root / "analysis" / "decision.py").read_text(encoding="utf-8")
+    assert "def _build_outlook(" in decision
+    assert "def _fake_move_risk(" in decision
+    assert "def _memory_confirmation(" in decision
+    assert not (root / "analysis" / "prediction.py").exists()
+    assert not (root / "analysis" / "forecast.py").exists()
+
+
+def test_pdf_report_only_renders_the_existing_snapshot():
+    root = Path(__file__).resolve().parents[1]
+    report = (root / "services" / "pdf_report.py").read_text(encoding="utf-8")
+    assert "calculate_final_decision(" not in report
+    assert "DhanClient(" not in report
+    assert "build_full_audit_pdf(snapshot" in report

@@ -1,0 +1,48 @@
+DELETE THESE OBSOLETE RELEASE DOCUMENTS AFTER V2.6 IS COMMITTED — ONLY IF PRESENT
+
+DELETE_OLD_FILES_V0_5.txt
+DEPLOY_V0_8.txt
+DELETE_OLD_FILES_V0_8.txt
+V0_8_CHANGELOG.txt
+V0_8_TEST_REPORT.txt
+DEPLOY_V1_2.txt
+V1_2_UPLOAD_LIST.txt
+V1_2_DELETE_LIST.txt
+V1_2_CHANGELOG.txt
+V1_2_TEST_REPORT.txt
+DEPLOY_V1_5.txt
+V1_5_UPLOAD_LIST.txt
+V1_5_DELETE_LIST.txt
+V1_5_CHANGELOG.txt
+V1_5_TEST_REPORT.txt
+DEPLOY_V1_8.txt
+V1_8_UPLOAD_LIST.txt
+V1_8_DELETE_LIST.txt
+V1_8_CHANGELOG.txt
+V1_8_TEST_REPORT.txt
+DEPLOY_V2_0.txt
+V2_0_UPLOAD_LIST.txt
+V2_0_DELETE_LIST.txt
+V2_0_CHANGELOG.txt
+V2_0_TEST_REPORT.txt
+DEPLOY_V2_1.txt
+V2_1_UPLOAD_LIST.txt
+V2_1_DELETE_LIST.txt
+V2_1_CHANGELOG.txt
+V2_1_TEST_REPORT.txt
+DEPLOY_V2_5.txt
+V2_5_UPLOAD_LIST.txt
+V2_5_DELETE_LIST.txt
+V2_5_CHANGELOG.txt
+V2_5_TEST_REPORT.txt
+
+DO NOT DELETE:
+- analysis, services, tests, ui or data folders
+- .streamlit, .gitignore or data/.gitkeep
+- app.py, config.py, models.py
+- requirements.txt or requirements-dev.txt
+- ARCHITECTURE.md or README.md
+- Streamlit app or Streamlit Secrets
+- V2.6 release documents
+
+Old code remains recoverable in GitHub commit history; active repository should keep only current V2.6 release documents.

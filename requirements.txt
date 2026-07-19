@@ -2,3 +2,4 @@ streamlit==1.59.1
 pandas==2.3.3
 requests==2.32.3
 tzdata>=2025.2
+reportlab==4.4.9

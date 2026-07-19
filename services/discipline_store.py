@@ -23,7 +23,7 @@ class DisciplineStore:
     only the selected protected setup, frozen entry estimates and manual outcomes.
     """
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
     ALLOWED_OUTCOMES = {"", "OPEN", "TARGET / MANUAL EXIT", "SL HIT"}
 
     def __init__(self, path: str | Path | None = None):
@@ -68,12 +68,13 @@ class DisciplineStore:
     def _migrate(self, data: dict[str, Any]) -> dict[str, Any]:
         version = data.get("schema_version")
         days = data.get("days")
-        if version == 1 and isinstance(days, dict):
+        if version in {1, 2} and isinstance(days, dict):
             migrated: dict[str, Any] = {}
             for key, raw in days.items():
                 if isinstance(raw, dict):
                     clean = dict(raw)
                     clean.setdefault("trade_record", None)
+                    clean.setdefault("signal_history", [])
                     migrated[str(key)] = clean
             return {"schema_version": self.SCHEMA_VERSION, "days": migrated}
         return data
@@ -134,12 +135,32 @@ class DisciplineStore:
         captured_at: datetime,
         action: str,
         execution_status: str,
+        ce_score: float | None = None,
+        pe_score: float | None = None,
+        condor_score: float | None = None,
+        wait_need: float | None = None,
+        signal_state: str = "",
+        market_direction: str = "",
+        fake_move_risk: float | None = None,
+        spot: float | None = None,
     ) -> tuple[DisciplineState, bool]:
         key = self._day_key(captured_at)
         sample = {
             "captured_at": captured_at.isoformat(),
             "action": str(action or "WAIT").upper(),
             "execution_status": str(execution_status or "").upper(),
+            "ce_score": None if ce_score is None else round(float(ce_score), 1),
+            "pe_score": None if pe_score is None else round(float(pe_score), 1),
+            "condor_score": None
+            if condor_score is None
+            else round(float(condor_score), 1),
+            "wait_need": None if wait_need is None else round(float(wait_need), 1),
+            "signal_state": str(signal_state or "").upper(),
+            "market_direction": str(market_direction or "").upper(),
+            "fake_move_risk": (
+                None if fake_move_risk is None else round(float(fake_move_risk), 1)
+            ),
+            "spot": None if spot is None else round(float(spot), 2),
         }
         with self._locked():
             data = self._read_unlocked()

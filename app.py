@@ -15,6 +15,7 @@ from services.dhan_client import DhanClient
 from services.discipline_store import DisciplineStore
 from services.instrument_master import InstrumentMaster
 from services.option_state_store import OptionStateStore
+from services.pdf_report import audit_pdf_filename, build_full_audit_pdf
 from services.snapshot_service import SnapshotService
 from ui.components import (
     render_candles,
@@ -29,6 +30,7 @@ from ui.components import (
     render_indicators,
     render_levels,
     render_market_context,
+    render_market_outlook,
     render_market_session,
     render_option_chain,
     render_option_flow_matrix,
@@ -46,9 +48,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.1 Pre-Market Integrity Audit — one canonical strategy brain with strict "
-    "quote/candle/option continuity guards. Detailed engines stay inside compact "
-    "expanders. Read only; no order placement."
+    "V2.6 Market Memory + Full Live Audit PDF — one canonical strategy brain uses "
+    "bounded same-session signal memory, anti-flip confirmation, a conditional 5–15 "
+    "minute outlook and an immutable PDF audit of the same snapshot. Read only; no order placement."
 )
 
 
@@ -245,6 +247,43 @@ render_header(snapshot)
 
 render_evidence_matrix(snapshot)
 render_decision(snapshot)
+render_market_outlook(snapshot)
+
+st.subheader("Full Live Audit PDF")
+st.caption(
+    "The PDF freezes this exact authoritative snapshot for 5-minute and 15-minute live "
+    "verification. It does not fetch data or recalculate the Final One-Brain Decision."
+)
+pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
+if pdf_snapshot_key != snapshot.snapshot_id:
+    st.session_state.pop("audit_pdf_bytes", None)
+    st.session_state.audit_pdf_snapshot_id = snapshot.snapshot_id
+
+pdf_left, pdf_right = st.columns([1, 2])
+with pdf_left:
+    generate_pdf = st.button(
+        "Generate Full Live Audit PDF",
+        type="primary",
+        width="stretch",
+    )
+if generate_pdf:
+    try:
+        with st.spinner("Building audit PDF from the current snapshot only..."):
+            st.session_state.audit_pdf_bytes = build_full_audit_pdf(snapshot)
+        st.success("Audit PDF generated for this snapshot")
+    except Exception as exc:
+        st.error(f"Audit PDF not generated: {exc}")
+with pdf_right:
+    if st.session_state.get("audit_pdf_bytes"):
+        st.download_button(
+            "Download Full Live Audit PDF",
+            data=st.session_state.audit_pdf_bytes,
+            file_name=audit_pdf_filename(snapshot),
+            mime="application/pdf",
+            width="stretch",
+        )
+    else:
+        st.info("Generate the PDF after every important live-market checkpoint.")
 
 execution_expanded = (
     snapshot.market_session.is_live and snapshot.decision.final_action != "WAIT"

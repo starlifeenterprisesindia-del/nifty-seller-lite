@@ -78,16 +78,22 @@ def render_decision(snapshot: MarketSnapshot) -> None:
         "CE Sell, PE Sell and Iron Condor are independent suitability percentages. "
         "WAIT is a separate uncertainty/risk need, so the four values do not add to 100."
     )
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("CE Sell", f"{item.ce_sell.score:.1f}%")
     c2.metric("PE Sell", f"{item.pe_sell.score:.1f}%")
     c3.metric("Iron Condor", f"{item.iron_condor.score:.1f}%")
     c4.metric("WAIT Need", f"{item.wait_need.score:.1f}%")
+    c5.metric("Signal State", item.signal_state)
 
+    instant_note = (
+        f" | Instant read: {item.instant_action}"
+        if item.instant_action != item.final_action
+        else ""
+    )
     message = (
         f"FINAL ACTION: {item.final_action} | Execution: {item.execution_status} | "
         f"Decision confidence: {item.decision_confidence:.1f}% | "
-        f"Hedge required: {'YES' if item.hedge_required else 'NO'}"
+        f"Hedge required: {'YES' if item.hedge_required else 'NO'}{instant_note}"
     )
     if item.final_action == "WAIT":
         st.warning(message)
@@ -130,6 +136,47 @@ def render_decision(snapshot: MarketSnapshot) -> None:
                 "Cautions": st.column_config.TextColumn(width="large"),
             },
         )
+
+
+def render_market_outlook(snapshot: MarketSnapshot) -> None:
+    item = snapshot.decision.outlook
+    st.subheader("Next 5–15 Min Market Outlook")
+    st.caption(
+        "Conditional scenario weights from the same Final One-Brain Decision. "
+        "They are not guaranteed price predictions. Signal memory and fake-move "
+        "risk stop a single opposite snapshot from immediately flipping the action."
+    )
+    row = {
+        "Bullish path %": item.bullish_path_pct,
+        "Range path %": item.range_path_pct,
+        "Bearish path %": item.bearish_path_pct,
+        "Fake-move risk %": item.fake_move_risk,
+        "Risk state": item.fake_move_state,
+        "Signal memory": item.signal_memory,
+        "Invalidation": item.invalidation_text,
+        "Status": item.status,
+    }
+    st.dataframe(
+        pd.DataFrame([row]),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Bullish path %": st.column_config.ProgressColumn(
+                "Bullish path", min_value=0, max_value=100, format="%.1f%%"
+            ),
+            "Range path %": st.column_config.ProgressColumn(
+                "Range", min_value=0, max_value=100, format="%.1f%%"
+            ),
+            "Bearish path %": st.column_config.ProgressColumn(
+                "Bearish path", min_value=0, max_value=100, format="%.1f%%"
+            ),
+            "Fake-move risk %": st.column_config.ProgressColumn(
+                "Fake-move risk", min_value=0, max_value=100, format="%.1f%%"
+            ),
+        },
+    )
+    if item.reasons:
+        st.caption("Fake-move checks: " + " | ".join(item.reasons))
 
 
 def _leg_label(legs: tuple[Any, ...]) -> str:

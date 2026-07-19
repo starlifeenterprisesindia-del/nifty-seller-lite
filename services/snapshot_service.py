@@ -684,46 +684,10 @@ class SnapshotService:
             ),
         )
 
-        decision = calculate_final_decision(
-            core=core_evidence,
-            options=option_intelligence,
-            heavyweights=heavyweights,
-            vix=vix_context,
-            levels=levels,
-            institutional=institutional_context,
-            event_risk=event_risk,
-            market_session=market_session,
-            quote_live=statuses["quotes"].use_state == "LIVE",
-            candles_live=statuses["candles"].use_state == "LIVE",
-            option_chain_live=statuses["option_chain"].use_state == "LIVE",
-        )
-
-        trade_plan = calculate_trade_plan(
-            frame=validated_option_frame,
-            spot=float(current_price) if current_price is not None else 0.0,
-            expiry=expiry,
-            levels=levels,
-            options=option_intelligence,
-            decision=decision,
-            market_session=market_session,
-        )
-
         discipline_error: str | None = None
         signal_appended = False
         try:
             discipline_state = self.discipline_store.load(current.date())
-            fresh_signal = (
-                market_session.is_live
-                and statuses["quotes"].use_state == "LIVE"
-                and statuses["candles"].use_state == "LIVE"
-                and statuses["option_chain"].use_state == "LIVE"
-            )
-            if fresh_signal:
-                discipline_state, signal_appended = self.discipline_store.append_signal(
-                    captured_at=current,
-                    action=decision.final_action,
-                    execution_status=decision.execution_status,
-                )
         except Exception as exc:
             discipline_error = str(exc)
             discipline_state = DisciplineState(
@@ -736,6 +700,59 @@ class SnapshotService:
                 status="UNAVAILABLE",
             )
 
+        decision = calculate_final_decision(
+            core=core_evidence,
+            options=option_intelligence,
+            heavyweights=heavyweights,
+            vix=vix_context,
+            levels=levels,
+            institutional=institutional_context,
+            event_risk=event_risk,
+            market_session=market_session,
+            quote_live=statuses["quotes"].use_state == "LIVE",
+            candles_live=statuses["candles"].use_state == "LIVE",
+            option_chain_live=statuses["option_chain"].use_state == "LIVE",
+            price_action=price_action,
+            volume=volume,
+            signal_history=discipline_state.signal_history,
+            as_of=current,
+            current_price=(float(current_price) if current_price is not None else None),
+        )
+
+        trade_plan = calculate_trade_plan(
+            frame=validated_option_frame,
+            spot=float(current_price) if current_price is not None else 0.0,
+            expiry=expiry,
+            levels=levels,
+            options=option_intelligence,
+            decision=decision,
+            market_session=market_session,
+        )
+
+        fresh_signal = (
+            market_session.is_live
+            and statuses["quotes"].use_state == "LIVE"
+            and statuses["candles"].use_state == "LIVE"
+            and statuses["option_chain"].use_state == "LIVE"
+        )
+        if discipline_error is None and fresh_signal:
+            try:
+                discipline_state, signal_appended = self.discipline_store.append_signal(
+                    captured_at=current,
+                    action=decision.final_action,
+                    execution_status=decision.execution_status,
+                    ce_score=decision.ce_sell.score,
+                    pe_score=decision.pe_sell.score,
+                    condor_score=decision.iron_condor.score,
+                    wait_need=decision.wait_need.score,
+                    signal_state=decision.signal_state,
+                    market_direction=decision.market_direction,
+                    fake_move_risk=decision.outlook.fake_move_risk,
+                    spot=(float(current_price) if current_price is not None else None),
+                )
+            except Exception as exc:
+                discipline_error = str(exc)
+
         statuses["discipline_state"] = FeedStatus(
             name="discipline_state",
             ok=discipline_error is None,
@@ -743,11 +760,12 @@ class SnapshotService:
             message=(
                 f"One-trade state: trades={discipline_state.trades_taken}; "
                 f"signals={len(discipline_state.signal_history)}; "
+                f"memory={decision.outlook.signal_memory}; "
                 f"current {'stored' if signal_appended else 'not stored'}"
                 if discipline_error is None
                 else discipline_error
             ),
-            source="Local atomic discipline-state file",
+            source="Local atomic discipline-state and signal-memory file",
             use_state=(
                 "READY"
                 if discipline_error is None and market_session.is_live

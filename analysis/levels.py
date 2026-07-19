@@ -84,7 +84,7 @@ def _opening_range(current_3m: pd.DataFrame) -> tuple[float | None, float | None
     start = pd.Timestamp(
         f"{current_3m.iloc[0]['trade_date']} 09:15:00", tz=IST_TIMEZONE
     )
-    end = start + pd.Timedelta(minutes=CONFIG.opening_range_minutes)
+    end = start + pd.to_timedelta(int(CONFIG.opening_range_minutes), unit="min")
     opening = current_3m[
         (current_3m["timestamp"] >= start) & (current_3m["timestamp"] < end)
     ]
