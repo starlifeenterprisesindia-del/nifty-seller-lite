@@ -1,0 +1,18 @@
+NIFTY SELLER LITE — MILESTONE 1 DEPLOYMENT
+
+1. Create a NEW GitHub repository, for example: nifty-seller-lite.
+2. Extract the ZIP.
+3. Upload all files and folders INSIDE the extracted folder to repository root.
+4. Confirm app.py and requirements.txt are visible on the main page.
+5. Create a NEW Streamlit app connected to this repository and app.py.
+6. In Streamlit Settings > Secrets add:
+
+[dhan]
+client_id = "YOUR_DHAN_CLIENT_ID"
+access_token = "YOUR_24_HOUR_ACCESS_TOKEN"
+
+7. Deploy/reboot the app.
+8. Press Fetch Fresh Snapshot.
+9. Compare NIFTY price, expiry, ATM options, OI, volume, VIX and Top-7 prices with broker.
+
+This milestone is READ ONLY. It does not calculate CE SELL / PE SELL / IRON CONDOR / WAIT scores.
