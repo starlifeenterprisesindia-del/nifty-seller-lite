@@ -61,9 +61,9 @@ def render_core_evidence(snapshot: MarketSnapshot) -> None:
         "completed-candle price, indicator, level and NIFTY-futures-volume modules."
     )
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Bullish Evidence", f"{item.bullish_score:.1f}%")
-    c2.metric("Bearish Evidence", f"{item.bearish_score:.1f}%")
-    c3.metric("Range / Mixed", f"{item.range_score:.1f}%")
+    c1.metric("Bullish Evidence Index", f"{item.bullish_score:.1f}/100")
+    c2.metric("Bearish Evidence Index", f"{item.bearish_score:.1f}/100")
+    c3.metric("Range / Mixed Index", f"{item.range_score:.1f}/100")
     c4.metric("Evidence Confidence", f"{item.confidence:.1f}%")
     st.info(
         f"**Core state:** {item.market_state}  |  **Move stage:** {item.move_stage}  |  "
@@ -270,8 +270,8 @@ def render_option_chain(snapshot: MarketSnapshot) -> None:
     ]
     available = [col for col in columns if col in snapshot.option_chain.columns]
     st.caption(
-        "Raw option data only. Intraday OI-flow intelligence will arrive in the next big "
-        "Options Intelligence milestone after snapshot persistence is implemented."
+        "Raw option-chain fields from the same authoritative snapshot. Derived flow is shown "
+        "in the Options Intelligence section above."
     )
     st.dataframe(
         snapshot.option_chain[available], use_container_width=True, hide_index=True
@@ -342,3 +342,146 @@ def render_indicators(snapshot: MarketSnapshot) -> None:
                 "15m": asdict(snapshot.indicators.fifteen_minute),
             }
         )
+
+
+def render_option_intelligence(snapshot: MarketSnapshot) -> None:
+    item = snapshot.option_intelligence
+    st.caption(
+        "Options Intelligence compares the current ATM±5 chain with bounded same-day "
+        "snapshots. These are normalized market-evidence percentages, not CE/PE/Condor advice."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Bullish Option Flow", f"{item.bullish_score:.1f}%")
+    c2.metric("Bearish Option Flow", f"{item.bearish_score:.1f}%")
+    c3.metric("Mixed / Decay", f"{item.range_score:.1f}%")
+    c4.metric("Flow Confidence", f"{item.confidence:.1f}%")
+    st.info(
+        f"**Option bias:** {item.market_bias} | **Persistence:** {item.persistence} | "
+        f"**Basis:** {item.basis} | **Status:** {item.status}"
+    )
+    left, right = st.columns(2)
+    with left:
+        st.write("**Main option evidence**")
+        for reason in item.reasons or ("No consolidated option reason available",):
+            st.write(f"• {reason}")
+    with right:
+        st.write("**State blockers / cautions**")
+        if item.blockers:
+            for blocker in item.blockers:
+                st.write(f"• {blocker}")
+        else:
+            st.write("• None")
+
+
+def render_option_flow_matrix(snapshot: MarketSnapshot) -> None:
+    rows = list(snapshot.option_intelligence.flow_rows)
+    if not rows:
+        st.info("Option flow matrix is unavailable in this snapshot.")
+        return
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_option_windows(snapshot: MarketSnapshot) -> None:
+    rows = []
+    for item in snapshot.option_intelligence.windows:
+        rows.append(
+            {
+                "Window": item.label,
+                "Target sec": item.target_seconds,
+                "Actual age sec": item.actual_age_seconds,
+                "CE OI Δ": item.ce_oi_delta,
+                "PE OI Δ": item.pe_oi_delta,
+                "CE Premium Δ": item.ce_premium_delta,
+                "PE Premium Δ": item.pe_premium_delta,
+                "CE Volume Δ": item.ce_volume_delta,
+                "PE Volume Δ": item.pe_volume_delta,
+                "Bias": item.bias,
+                "Status": item.status,
+            }
+        )
+    st.caption(
+        "A 1m/3m/5m window is used only when a historical sample is close enough to "
+        "that target. Distant old samples are rejected."
+    )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
+    item = snapshot.option_intelligence
+    walls = []
+    for wall in (item.ce_wall, item.pe_wall):
+        walls.append(
+            {
+                "Side": wall.side,
+                "Main Wall Strike": wall.strike,
+                "Wall OI": wall.oi,
+                "Previous Wall": wall.previous_strike,
+                "Migration pts": wall.migration_points,
+                "Strongest 3-Strike Cluster": wall.cluster_center,
+                "Cluster OI": wall.cluster_oi,
+                "Status": wall.status,
+            }
+        )
+    st.dataframe(pd.DataFrame(walls), use_container_width=True, hide_index=True)
+    pcr = item.pcr
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Near-ATM OI PCR",
+        f"{pcr.near_atm_oi_pcr:.2f}" if pcr.near_atm_oi_pcr is not None else "—",
+    )
+    c2.metric(
+        "Day Addition PCR",
+        f"{pcr.day_addition_pcr:.2f}" if pcr.day_addition_pcr is not None else "—",
+    )
+    c3.metric(
+        "Intraday Addition PCR",
+        f"{pcr.intraday_addition_pcr:.2f}"
+        if pcr.intraday_addition_pcr is not None
+        else "—",
+    )
+    c4.metric(
+        "Volume PCR", f"{pcr.volume_pcr:.2f}" if pcr.volume_pcr is not None else "—"
+    )
+    st.caption(f"PCR context: **{pcr.state}** | Status: {pcr.status}")
+
+
+def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
+    item = snapshot.heavyweights
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Top-7 Covered Weight", f"{item.covered_weight_pct:.2f}%")
+    c2.metric(
+        "Weighted Top-7 Move",
+        f"{item.weighted_move_pct:+.3f}%"
+        if item.weighted_move_pct is not None
+        else "—",
+    )
+    c3.metric(
+        "Est. Index Contribution",
+        f"{item.estimated_index_contribution_pct:+.3f}%"
+        if item.estimated_index_contribution_pct is not None
+        else "—",
+    )
+    c4.metric("Breadth", f"{item.advancing}↑ / {item.declining}↓ / {item.unchanged}→")
+    st.info(
+        f"**Top-7 state:** {item.state} | **Confidence:** {item.confidence:.1f}% | "
+        f"**Weight date:** {snapshot.metadata.get('top7_weight_date', '—')} | **Status:** {item.status}"
+    )
+    rows = [asdict(row) for row in item.rows]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_vix_context(snapshot: MarketSnapshot) -> None:
+    item = snapshot.vix_context
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "India VIX", f"{item.last_price:.2f}" if item.last_price is not None else "—"
+    )
+    c2.metric(
+        "VIX Change",
+        f"{item.change_pct:+.2f}%" if item.change_pct is not None else "—",
+    )
+    c3.metric("VIX Regime", item.regime)
+    c4.metric("Movement", item.movement)
+    st.info(
+        f"**Seller environment:** {item.seller_environment} | **Status:** {item.status}"
+    )

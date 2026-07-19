@@ -1,0 +1,35 @@
+NIFTY SELLER LITE — V0.8 DEPLOYMENT
+===================================
+
+1. Download and extract nifty-seller-lite-v0-8-options-intelligence.zip.
+2. Open the extracted folder.
+3. Upload ALL inner files and folders to the ROOT of the existing GitHub repository.
+4. Allow files with the same names to replace the existing versions.
+5. Do not upload an outer wrapper folder.
+6. Do not upload __pycache__, .pytest_cache, .ruff_cache, *.pyc, secrets.toml,
+   data/instrument_master.csv or data/option_state.json.
+7. Commit message:
+   V0.8 Options Intelligence
+8. Delete the historical release-document files listed in DELETE_OLD_FILES_V0_8.txt.
+9. Do not delete the Streamlit app and do not re-enter Secrets. Automatic redeployment
+   should use the existing [dhan] credentials.
+10. Confirm version: 0.8.0_OPTIONS_INTELLIGENCE.
+11. Press Fetch Fresh Snapshot.
+
+LIVE VERIFICATION
+-----------------
+First valid live refresh:
+- Options status may show WARMING UP.
+- Basis should show DAY CHANGE — FIRST SNAPSHOT.
+
+Later refreshes:
+- Basis should change to INTRADAY SNAPSHOT DELTA.
+- Option-state prior snapshot count should increase.
+- 1m/3m/5m windows become READY only when refresh timing provides nearby samples.
+- Top-7 should resolve 7/7.
+- India VIX should show a normal VIX-like value, not another NIFTY sector index value.
+
+CLEANUP
+-------
+The active repository should contain only current code, tests, current documentation and
+empty runtime data scaffolding. Git history preserves old releases.

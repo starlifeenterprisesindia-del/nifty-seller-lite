@@ -1,44 +1,50 @@
-# Nifty Seller Lite — V0.5 Core Market Engine
+# Nifty Seller Lite — V0.8 Options Intelligence
 
-Fresh, read-only Streamlit application built around one authoritative DhanHQ snapshot.
-This release deliberately does **not** produce CE Sell, PE Sell, Iron Condor, WAIT,
-strike selection, order placement, or any other trading command.
+Read-only Streamlit application built around one authoritative DhanHQ snapshot.
+This release adds the complete options-evidence layer but deliberately does **not**
+produce CE Sell, PE Sell, Iron Condor, WAIT, strike selection, order placement, or
+any other trading command.
 
-## What V0.5 adds
+## What V0.8 adds
 
-- 3-minute and 15-minute Price Action:
-  - confirmed swing highs/lows
-  - HH/HL, LH/LL, range and transition classification
-  - pullback, recovery, breakout, breakdown, false break and rejection events
-  - early, developing, mature and exhaustion-risk move stages
-- Support and Resistance zones:
-  - previous-day high/low/close
-  - current-day high/low
-  - opening-range high/low
-  - confirmed 3m/15m swing levels
-  - 3m/15m EMA20/EMA50 confluence
-  - immediate/strong support and resistance, distance and remaining room
-- NIFTY Futures Volume:
-  - Dhan FUTIDX candles, not NIFTY index pseudo-volume
-  - 3m and 15m relative volume
-  - same-time-slot baseline across prior sessions
-  - rising/falling participation and move confirmation
-- Existing EMA20/50, MACD 12/26/9 and RSI14 connected to the same snapshot.
-- Evidence-only Core Market summary:
-  - Bullish Evidence %
-  - Bearish Evidence %
-  - Range/Mixed Evidence %
-  - confidence, move stage, reasons and blockers
+- Persistent intraday option-chain comparison without extra option-chain API calls.
+- Atomic, bounded, same-day option state:
+  - current date and expiry are isolated
+  - maximum 180 snapshots
+  - quick identical refreshes are deduplicated
+  - old trading dates are removed from the active file
+  - credentials and order data are never stored
+- Premium + OI + option-volume classification at every ATM±5 strike:
+  - Long Buildup
+  - Short Buildup
+  - Short Covering
+  - Long Unwinding
+  - Noise / Flat
+- Side-aware directional interpretation for CE and PE flows.
+- 1-minute, 3-minute and 5-minute change windows with continuity guards.
+- Flow persistence across recent valid snapshots.
+- CE and PE OI walls, wall migration and strongest three-strike clusters.
+- Near-ATM OI PCR, day-addition PCR, intraday-addition PCR and volume PCR.
+- Official NIFTY 50 top-seven heavyweight basket and weighted contribution.
+- India VIX regime, movement and seller-risk context.
+- Existing Price Action, Support/Resistance, Futures Volume and EMA/MACD/RSI remain
+  connected through the same `MarketSnapshot`.
 
 ## Architecture lock
 
-`One Dhan Snapshot -> isolated calculations -> Core Market Evidence`
+`One Dhan Snapshot -> isolated calculations -> Core Evidence + Options Evidence`
 
-Analysis modules never call Dhan or any network API. They receive immutable snapshot data
-from `SnapshotService`. There is no decision engine and no hidden second advisor.
+Analysis modules never call Dhan or any network API. The option-state store receives
+only sanitized rows from `SnapshotService`. There is no decision engine and no hidden
+second advisor.
 
 ## Important
 
-Core evidence percentages are **not strategy probabilities**. Final CE/PE/Condor/WAIT
-scores will only be introduced after Options Intelligence, Top-7 contribution, VIX/PCR,
-FII/DII and news-risk modules are validated.
+- Core Market scores are independent evidence indexes out of 100; they are not
+  probabilities and do not need to total 100.
+- Options Intelligence bullish/bearish/mixed values are a normalized evidence mix and
+  total 100, but they are still not strategy probabilities.
+- The first live snapshot uses day change and shows `WARMING UP`. Intraday intelligence
+  becomes ready after another valid refresh. 1m/3m/5m windows appear only when nearby
+  historical samples exist.
+- Closed-market output is `REFERENCE ONLY` and is not saved into intraday state.

@@ -14,10 +14,13 @@ from analysis.candles import (
     mark_completed_candles,
 )
 from analysis.core_market import calculate_core_market_evidence
+from analysis.heavyweights import calculate_heavyweight_bundle
 from analysis.indicators import calculate_indicator_bundle
 from analysis.levels import calculate_levels
 from analysis.market_session import classify_market_session, feed_use_state
+from analysis.market_risk import calculate_vix_context
 from analysis.option_chain import option_chain_to_frame, select_atm_window
+from analysis.option_intelligence import calculate_option_intelligence
 from analysis.price_action import calculate_price_action_bundle
 from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
@@ -25,6 +28,7 @@ from models import FeedStatus, MarketSnapshot
 from services.dhan_client import DhanClient
 from services.errors import SnapshotBuildError
 from services.instrument_master import InstrumentMaster, ResolvedInstrument
+from services.option_state_store import OptionStateStore
 
 
 IST = ZoneInfo(IST_TIMEZONE)
@@ -35,9 +39,11 @@ class SnapshotService:
         self,
         client: DhanClient,
         instrument_master: InstrumentMaster | None = None,
+        option_state_store: OptionStateStore | None = None,
     ):
         self.client = client
         self.master = instrument_master or InstrumentMaster()
+        self.option_state_store = option_state_store or OptionStateStore()
 
     @staticmethod
     def _extract_quote(
@@ -94,12 +100,24 @@ class SnapshotService:
         except Exception:
             return None
 
-    def _resolve_future(self) -> ResolvedInstrument | None:
+    def _resolve_market_references(
+        self,
+    ) -> tuple[ResolvedInstrument | None, ResolvedInstrument]:
+        fallback_vix = ResolvedInstrument(
+            symbol=CONFIG.india_vix.symbol,
+            security_id=int(CONFIG.india_vix.security_id),
+            exchange_segment=CONFIG.india_vix.exchange_segment,
+            instrument=CONFIG.india_vix.instrument,
+            display_name=CONFIG.india_vix.name,
+        )
         try:
             raw_master = self.master.load()
-            return self.master.resolve_nearest_nifty_future(raw_master)
+            future = self.master.resolve_nearest_nifty_future(raw_master)
+            resolver = getattr(self.master, "resolve_india_vix", None)
+            vix = resolver(raw_master) if callable(resolver) else None
+            return future, vix or fallback_vix
         except Exception:
-            return None
+            return None, fallback_vix
 
     def _fetch_candles(
         self,
@@ -148,16 +166,14 @@ class SnapshotService:
         else:
             current = now.replace(tzinfo=IST)
 
-        future_ref = self._resolve_future()
+        future_ref, vix_ref = self._resolve_market_references()
         # NIFTY and INDIA VIX share IDX_I. Incremental construction prevents
         # duplicate dictionary keys from overwriting an instrument.
         grouped: dict[str, list[int]] = {}
         grouped.setdefault(CONFIG.nifty.exchange_segment, []).append(
             int(CONFIG.nifty.security_id)
         )
-        grouped.setdefault(CONFIG.india_vix.exchange_segment, []).append(
-            int(CONFIG.india_vix.security_id)
-        )
+        grouped.setdefault(vix_ref.exchange_segment, []).append(vix_ref.security_id)
         if future_ref:
             grouped.setdefault(future_ref.exchange_segment, []).append(
                 future_ref.security_id
@@ -175,8 +191,8 @@ class SnapshotService:
             raise SnapshotBuildError("NIFTY quote missing from DhanHQ response")
         vix_quote = self._extract_quote(
             quote_response,
-            CONFIG.india_vix.exchange_segment,
-            CONFIG.india_vix.security_id,
+            vix_ref.exchange_segment,
+            vix_ref.security_id,
         )
         future_quote = (
             self._extract_quote(
@@ -386,6 +402,85 @@ class SnapshotService:
             volume,
             market_session,
         )
+        heavyweights = calculate_heavyweight_bundle(heavyweight_quotes, current)
+        vix_context = calculate_vix_context(vix_quote, current)
+
+        option_history: list[dict[str, Any]] = []
+        option_state_snapshot: dict[str, Any] = {
+            "captured_at": current.isoformat(),
+            "expiry": expiry or "",
+            "spot": float(current_price) if current_price is not None else None,
+            "fingerprint": "",
+            "rows": [],
+        }
+        option_state_error: str | None = None
+        if expiry and not option_frame.empty:
+            try:
+                option_history = self.option_state_store.load_session(
+                    captured_at=current, expiry=expiry
+                )
+                option_state_snapshot = self.option_state_store.make_snapshot(
+                    captured_at=current,
+                    expiry=expiry,
+                    spot=float(current_price) if current_price is not None else None,
+                    frame=option_frame,
+                )
+            except Exception as exc:
+                option_state_error = str(exc)
+                option_history = []
+
+        option_intelligence = calculate_option_intelligence(
+            current_frame=option_frame,
+            spot=float(current_price) if current_price is not None else 0.0,
+            expiry=expiry,
+            captured_at=current,
+            history=option_history,
+            current_snapshot=option_state_snapshot,
+            is_live=market_session.is_live,
+        )
+        state_appended = False
+        if (
+            market_session.is_live
+            and expiry
+            and not option_frame.empty
+            and option_state_error is None
+        ):
+            try:
+                _, state_appended = self.option_state_store.append(
+                    option_state_snapshot
+                )
+                if state_appended:
+                    option_intelligence = calculate_option_intelligence(
+                        current_frame=option_frame,
+                        spot=float(current_price) if current_price is not None else 0.0,
+                        expiry=expiry,
+                        captured_at=current,
+                        history=option_history,
+                        current_snapshot=option_state_snapshot,
+                        is_live=True,
+                    )
+            except Exception as exc:
+                option_state_error = str(exc)
+
+        statuses["option_state"] = FeedStatus(
+            name="option_state",
+            ok=option_state_error is None and bool(expiry) and not option_frame.empty,
+            fetched_at=current,
+            message=(
+                f"Same-day bounded history: {len(option_history)} prior snapshot(s); "
+                f"current {'stored' if state_appended else 'not stored'}"
+                if option_state_error is None and expiry and not option_frame.empty
+                else option_state_error or "Option state unavailable"
+            ),
+            source="Local atomic option-state file",
+            use_state=(
+                "READY"
+                if market_session.is_live and option_state_error is None
+                else "REFERENCE"
+                if not market_session.is_live and option_state_error is None
+                else "UNAVAILABLE"
+            ),
+        )
 
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
@@ -429,19 +524,26 @@ class SnapshotService:
             levels=levels,
             volume=volume,
             core_evidence=core_evidence,
+            option_intelligence=option_intelligence,
+            heavyweights=heavyweights,
+            vix_context=vix_context,
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
             metadata={
                 "version": CONFIG.version,
                 "read_only": True,
-                "strategy_scores_enabled": False,
                 "live_trading_ready": market_session.is_live
                 and statuses["quotes"].use_state == "LIVE"
                 and statuses["candles"].use_state == "LIVE",
                 "top7_configured": list(CONFIG.top7_symbols),
                 "vix_resolved": bool(vix_quote),
+                "vix_security_id": vix_ref.security_id,
                 "future_resolved": bool(future_quote),
                 "future_volume_resolved": future_candle_available,
+                "option_state_prior_snapshots": len(option_history),
+                "option_state_current_stored": state_appended,
+                "top7_weight_date": CONFIG.top7_weight_date,
+                "strategy_scores_enabled": False,
             },
         )

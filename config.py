@@ -15,12 +15,13 @@ class InstrumentRef:
     exchange_segment: str
     instrument: str
     symbol: str = ""
+    weight_pct: float = 0.0
 
 
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "0.5.0_CORE_MARKET_ENGINE"
+    version: str = "0.8.0_OPTIONS_INTELLIGENCE"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5
@@ -35,27 +36,32 @@ class AppConfig:
     )
     india_vix: InstrumentRef = InstrumentRef(
         name="INDIA VIX",
-        security_id="21",
+        security_id="33",
         exchange_segment="IDX_I",
         instrument="INDEX",
         symbol="INDIA VIX",
     )
+
+    # Official NIFTY 50 top-seven weights as at 30-Jun-2026. Security IDs are
+    # Dhan/NSE instrument identifiers used by the already grouped quote request.
+    top7_weight_date: str = "2026-06-30"
     top7: tuple[InstrumentRef, ...] = (
-        InstrumentRef("HDFC Bank", "1333", "NSE_EQ", "EQUITY", "HDFCBANK"),
-        InstrumentRef("Reliance Industries", "2885", "NSE_EQ", "EQUITY", "RELIANCE"),
-        InstrumentRef("ICICI Bank", "4963", "NSE_EQ", "EQUITY", "ICICIBANK"),
-        InstrumentRef("Bharti Airtel", "10604", "NSE_EQ", "EQUITY", "BHARTIARTL"),
-        InstrumentRef("Infosys", "1594", "NSE_EQ", "EQUITY", "INFY"),
-        InstrumentRef("Larsen & Toubro", "11483", "NSE_EQ", "EQUITY", "LT"),
-        InstrumentRef("Tata Consultancy Services", "11536", "NSE_EQ", "EQUITY", "TCS"),
+        InstrumentRef("HDFC Bank", "1333", "NSE_EQ", "EQUITY", "HDFCBANK", 11.18),
+        InstrumentRef("ICICI Bank", "4963", "NSE_EQ", "EQUITY", "ICICIBANK", 9.01),
+        InstrumentRef(
+            "Reliance Industries", "2885", "NSE_EQ", "EQUITY", "RELIANCE", 8.00
+        ),
+        InstrumentRef("Bharti Airtel", "10604", "NSE_EQ", "EQUITY", "BHARTIARTL", 5.15),
+        InstrumentRef("Larsen & Toubro", "11483", "NSE_EQ", "EQUITY", "LT", 4.44),
+        InstrumentRef("State Bank of India", "3045", "NSE_EQ", "EQUITY", "SBIN", 3.88),
+        InstrumentRef("Axis Bank", "5900", "NSE_EQ", "EQUITY", "AXISBANK", 3.54),
     )
     option_strikes_each_side: int = 5
     candle_lookback_days: int = 7
     minimum_one_minute_candles: int = 30
     minimum_indicator_candles: int = 50
 
-    # Core-market-engine settings. These values live in one central config so
-    # price action, levels and volume cannot quietly drift apart.
+    # Core-market settings.
     swing_left_bars: int = 2
     swing_right_bars: int = 2
     minimum_structure_swings: int = 2
@@ -71,9 +77,23 @@ class AppConfig:
     volume_high_ratio: float = 1.20
     volume_surge_ratio: float = 1.80
 
+    # Options-intelligence settings. History is bounded and same-session only.
+    option_state_path: str = "data/option_state.json"
+    option_state_max_snapshots: int = 180
+    option_state_dedupe_seconds: int = 20
+    option_min_price_move_pct: float = 0.50
+    option_min_price_move_points: float = 0.25
+    option_min_oi_move_pct: float = 0.20
+    option_window_tolerance_ratio: float = 0.55
+    option_persistence_lookback: int = 5
+
     @property
     def top7_symbols(self) -> tuple[str, ...]:
         return tuple(item.symbol for item in self.top7)
+
+    @property
+    def top7_weight_map(self) -> dict[str, float]:
+        return {item.symbol: item.weight_pct for item in self.top7}
 
 
 CONFIG = AppConfig()

@@ -162,6 +162,102 @@ class CoreMarketEvidence:
     blockers: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class FlowWindow:
+    label: str
+    target_seconds: int
+    actual_age_seconds: float | None
+    ce_oi_delta: float | None
+    pe_oi_delta: float | None
+    ce_premium_delta: float | None
+    pe_premium_delta: float | None
+    ce_volume_delta: float | None
+    pe_volume_delta: float | None
+    bias: str
+    status: str
+
+
+@dataclass(frozen=True)
+class OIWall:
+    side: str
+    strike: float | None
+    oi: float | None
+    previous_strike: float | None
+    migration_points: float | None
+    cluster_center: float | None
+    cluster_oi: float | None
+    status: str
+
+
+@dataclass(frozen=True)
+class PCRBundle:
+    near_atm_oi_pcr: float | None
+    day_addition_pcr: float | None
+    intraday_addition_pcr: float | None
+    volume_pcr: float | None
+    state: str
+    status: str
+
+
+@dataclass(frozen=True)
+class OptionIntelligence:
+    as_of: datetime
+    basis: str
+    snapshot_count: int
+    bullish_score: float
+    bearish_score: float
+    range_score: float
+    confidence: float
+    market_bias: str
+    persistence: str
+    ce_wall: OIWall
+    pe_wall: OIWall
+    pcr: PCRBundle
+    windows: tuple[FlowWindow, ...]
+    flow_rows: tuple[dict[str, Any], ...]
+    reasons: tuple[str, ...]
+    blockers: tuple[str, ...]
+    status: str
+
+
+@dataclass(frozen=True)
+class HeavyweightContribution:
+    symbol: str
+    name: str
+    official_weight_pct: float
+    last_price: float | None
+    change_pct: float | None
+    index_contribution_pct: float | None
+    direction: str
+
+
+@dataclass(frozen=True)
+class HeavyweightBundle:
+    as_of: datetime
+    rows: tuple[HeavyweightContribution, ...]
+    covered_weight_pct: float
+    weighted_move_pct: float | None
+    estimated_index_contribution_pct: float | None
+    advancing: int
+    declining: int
+    unchanged: int
+    state: str
+    confidence: float
+    status: str
+
+
+@dataclass(frozen=True)
+class VixContext:
+    as_of: datetime
+    last_price: float | None
+    previous_close: float | None
+    change_pct: float | None
+    regime: str
+    movement: str
+    seller_environment: str
+    status: str
+
+
 @dataclass
 class MarketSnapshot:
     snapshot_id: str
@@ -182,6 +278,9 @@ class MarketSnapshot:
     levels: LevelBundle
     volume: VolumeBundle
     core_evidence: CoreMarketEvidence
+    option_intelligence: OptionIntelligence
+    heavyweights: HeavyweightBundle
+    vix_context: VixContext
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
@@ -209,6 +308,9 @@ class MarketSnapshot:
             "levels": asdict(self.levels),
             "volume": asdict(self.volume),
             "core_evidence": asdict(self.core_evidence),
+            "option_intelligence": asdict(self.option_intelligence),
+            "heavyweights": asdict(self.heavyweights),
+            "vix_context": asdict(self.vix_context),
             "feeds": {
                 name: asdict(status) for name, status in self.feed_status.items()
             },

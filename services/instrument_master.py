@@ -35,7 +35,7 @@ class ResolvedInstrument:
 
 
 class InstrumentMaster:
-    """Small resolver used only for the nearest NIFTY future."""
+    """Cached Dhan instrument resolver for the dynamic future and index references."""
 
     def __init__(self, cache_path: Path | None = None):
         self.cache_path = cache_path or Path("data/instrument_master.csv")
@@ -88,6 +88,32 @@ class InstrumentMaster:
             result[col] = result[col].fillna("").astype(str).str.upper().str.strip()
         result["expiry"] = pd.to_datetime(result["expiry"], errors="coerce")
         return result.dropna(subset=["security_id"]).copy()
+
+    def resolve_india_vix(
+        self,
+        df: pd.DataFrame | None = None,
+    ) -> ResolvedInstrument | None:
+        frame = self.normalize(df if df is not None else self.load())
+        symbol_match = frame["symbol"].str.replace(" ", "", regex=False).eq("INDIAVIX")
+        display_match = (
+            frame["display_name"]
+            .str.replace(" ", "", regex=False)
+            .str.contains("INDIAVIX", regex=False, na=False)
+        )
+        candidates = frame[symbol_match | display_match].copy()
+        if candidates.empty:
+            return None
+        index_like = candidates[
+            candidates["instrument"].isin(["INDEX", "INDEXVALUE", "IDX"])
+        ]
+        row = (index_like if not index_like.empty else candidates).iloc[0]
+        return ResolvedInstrument(
+            symbol="INDIA VIX",
+            security_id=int(row["security_id"]),
+            exchange_segment="IDX_I",
+            instrument="INDEX",
+            display_name=str(row["display_name"] or "INDIA VIX"),
+        )
 
     def resolve_nearest_nifty_future(
         self,

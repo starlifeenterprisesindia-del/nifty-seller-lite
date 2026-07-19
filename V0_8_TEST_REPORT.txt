@@ -1,0 +1,31 @@
+NIFTY SELLER LITE — V0.8 OPTIONS INTELLIGENCE TEST REPORT
+===========================================================
+Version: 0.8.0_OPTIONS_INTELLIGENCE
+Release date: 2026-07-19
+
+FINAL AUTOMATED VALIDATION
+--------------------------
+1. Pytest suite: PASS — 39/39 tests passed
+2. Ruff lint: PASS
+3. Ruff formatting check: PASS — 43 files formatted
+4. Python compile check: PASS
+5. Streamlit AppTest safe-startup test: PASS
+6. Streamlit server startup smoke test: PASS
+7. One-snapshot / no-analysis-API architecture tests: PASS
+8. Option-state atomic persistence, same-day isolation and bounded-history tests: PASS
+9. 1m/3m/5m continuity-window tests: PASS
+10. OI-flow classification, PCR, walls and cluster tests: PASS
+11. Top-7 weighted-contribution and VIX-context tests: PASS
+12. Release hygiene tests: PASS
+
+SAFETY / SCOPE
+--------------
+- Read-only application. No order-placement code is included.
+- No final CE Sell / PE Sell / Iron Condor / WAIT strategy decision is included in V0.8.
+- Closed-market snapshots are reference-only and are not appended to live intraday option history.
+- Credentials remain in Streamlit Secrets and are not included in this package.
+- Runtime state, cache folders, compiled files and old release documents are excluded from the ZIP.
+
+LIVE VALIDATION STILL REQUIRED
+------------------------------
+An authenticated live Dhan market-session test could not be performed in the build environment because user credentials were not available. After deployment, verify option-state warming/ready behavior, 1m/3m/5m windows, wall migration, PCR, Top-7 quotes and VIX during market hours.
