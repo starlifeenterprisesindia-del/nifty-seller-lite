@@ -15,6 +15,7 @@ from analysis.candles import (
 )
 from analysis.core_market import calculate_core_market_evidence
 from analysis.decision import calculate_final_decision
+from analysis.execution_guard import calculate_execution_guard
 from analysis.heavyweights import calculate_heavyweight_bundle
 from analysis.indicators import calculate_indicator_bundle
 from analysis.levels import calculate_levels
@@ -27,8 +28,9 @@ from analysis.price_action import calculate_price_action_bundle
 from analysis.trade_plan import calculate_trade_plan
 from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
-from models import FeedStatus, MarketSnapshot
+from models import DisciplineState, FeedStatus, MarketSnapshot, RiskProfile
 from services.dhan_client import DhanClient
+from services.discipline_store import DisciplineStore
 from services.errors import SnapshotBuildError
 from services.context_store import MarketContextStore
 from services.instrument_master import InstrumentMaster, ResolvedInstrument
@@ -45,11 +47,13 @@ class SnapshotService:
         instrument_master: InstrumentMaster | None = None,
         option_state_store: OptionStateStore | None = None,
         context_store: MarketContextStore | None = None,
+        discipline_store: DisciplineStore | None = None,
     ):
         self.client = client
         self.master = instrument_master or InstrumentMaster()
         self.option_state_store = option_state_store or OptionStateStore()
         self.context_store = context_store or MarketContextStore()
+        self.discipline_store = discipline_store or DisciplineStore()
 
     @staticmethod
     def _extract_quote(
@@ -164,13 +168,29 @@ class SnapshotService:
         candles_15m = mark_completed_candles(candles_from_dhan(raw_15m), 15, current)
         return candles_1m, candles_3m, candles_15m
 
-    def build(self, now: datetime | None = None) -> MarketSnapshot:
+    def build(
+        self,
+        now: datetime | None = None,
+        risk_profile: RiskProfile | None = None,
+    ) -> MarketSnapshot:
         if now is None:
             current = datetime.now(IST)
         elif now.tzinfo:
             current = now.astimezone(IST)
         else:
             current = now.replace(tzinfo=IST)
+
+        profile = risk_profile or RiskProfile(
+            capital_rupees=CONFIG.risk_default_capital,
+            risk_pct=CONFIG.risk_default_pct,
+            lot_size=CONFIG.risk_default_lot_size,
+            max_lots_cap=CONFIG.risk_default_max_lots,
+            target_capture_pct=CONFIG.risk_default_target_capture_pct,
+            stop_loss_pct=CONFIG.risk_default_stop_loss_pct,
+            entry_start=CONFIG.risk_default_entry_start,
+            entry_end=CONFIG.risk_default_entry_end,
+            forced_exit=CONFIG.risk_default_forced_exit,
+        )
 
         future_ref, vix_ref = self._resolve_market_references()
         # NIFTY and INDIA VIX share IDX_I. Incremental construction prevents
@@ -541,6 +561,66 @@ class SnapshotService:
             market_session=market_session,
         )
 
+        discipline_error: str | None = None
+        signal_appended = False
+        try:
+            discipline_state = self.discipline_store.load(current.date())
+            fresh_signal = (
+                market_session.is_live
+                and statuses["quotes"].use_state == "LIVE"
+                and statuses["candles"].use_state == "LIVE"
+                and statuses["option_chain"].use_state == "LIVE"
+            )
+            if fresh_signal:
+                discipline_state, signal_appended = self.discipline_store.append_signal(
+                    captured_at=current,
+                    action=decision.final_action,
+                    execution_status=decision.execution_status,
+                )
+        except Exception as exc:
+            discipline_error = str(exc)
+            discipline_state = DisciplineState(
+                session_date=current.date().isoformat(),
+                trades_taken=0,
+                day_locked=False,
+                last_outcome="",
+                last_action="",
+                signal_history=(),
+                status="UNAVAILABLE",
+            )
+
+        statuses["discipline_state"] = FeedStatus(
+            name="discipline_state",
+            ok=discipline_error is None,
+            fetched_at=current,
+            message=(
+                f"One-trade state: trades={discipline_state.trades_taken}; "
+                f"signals={len(discipline_state.signal_history)}; "
+                f"current {'stored' if signal_appended else 'not stored'}"
+                if discipline_error is None
+                else discipline_error
+            ),
+            source="Local atomic discipline-state file",
+            use_state=(
+                "READY"
+                if discipline_error is None and market_session.is_live
+                else "REFERENCE"
+                if discipline_error is None
+                else "UNAVAILABLE"
+            ),
+        )
+
+        execution_guard = calculate_execution_guard(
+            decision=decision,
+            trade_plan=trade_plan,
+            market_session=market_session,
+            price_action=price_action,
+            risk_profile=profile,
+            discipline_state=discipline_state,
+            feed_status=statuses,
+            as_of=current,
+        )
+
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
             "market_state": market_session.code,
@@ -590,6 +670,9 @@ class SnapshotService:
             event_risk=event_risk,
             decision=decision,
             trade_plan=trade_plan,
+            execution_guard=execution_guard,
+            risk_profile=profile,
+            discipline_state=discipline_state,
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
@@ -611,5 +694,9 @@ class SnapshotService:
                 "decision_engine": "analysis.decision.calculate_final_decision",
                 "trade_plan_engine": "analysis.trade_plan.calculate_trade_plan",
                 "trade_plan_status": trade_plan.status,
+                "execution_guard_engine": "analysis.execution_guard.calculate_execution_guard",
+                "execution_guard_status": execution_guard.status,
+                "discipline_signal_appended": signal_appended,
+                "discipline_state_status": discipline_state.status,
             },
         )

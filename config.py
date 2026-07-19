@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "1.2.0_HEDGED_STRIKE_PLANNER"
+    version: str = "1.5.0_EXECUTION_GUARD"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5
@@ -108,6 +108,24 @@ class AppConfig:
     trade_min_credit_points: float = 1.0
     trade_min_plan_quality: float = 55.0
     trade_level_clearance_points: float = 10.0
+
+    # Read-only execution guard and one-trade discipline. The guard consumes the
+    # final decision and protected strike plan; it cannot choose a strategy or place
+    # orders. Defaults reflect a conservative seller workflow and stay editable in UI.
+    discipline_state_path: str = "data/discipline_state.json"
+    discipline_state_max_signals: int = 60
+    discipline_signal_dedupe_seconds: int = 20
+    discipline_signal_max_gap_seconds: int = 420
+    execution_required_confirmations: int = 2
+    risk_default_capital: float = 250000.0
+    risk_default_pct: float = 0.5
+    risk_default_lot_size: int = 65
+    risk_default_max_lots: int = 1
+    risk_default_target_capture_pct: float = 35.0
+    risk_default_stop_loss_pct: float = 40.0
+    risk_default_entry_start: time = time(10, 15)
+    risk_default_entry_end: time = time(11, 30)
+    risk_default_forced_exit: time = time(14, 30)
 
     @property
     def top7_symbols(self) -> tuple[str, ...]:

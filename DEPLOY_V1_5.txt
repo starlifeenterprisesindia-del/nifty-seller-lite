@@ -1,0 +1,24 @@
+NIFTY SELLER LITE V1.5 — UPLOAD-ONLY PATCH
+
+1. Download and extract nifty-seller-lite-v1-5-upload-only-patch.zip.
+2. Open the existing GitHub repository: nifty-seller-lite.
+3. Upload only the contents inside the extracted patch folder into repository root.
+4. Allow matching files to replace the current versions.
+5. Commit message:
+   V1.5 Execution Guard and One-Trade Discipline
+6. After the commit, delete only the old V1.2 release documents listed in
+   V1_5_DELETE_LIST.txt.
+7. Do not delete or recreate the Streamlit app.
+8. Do not change Streamlit Secrets.
+9. Wait for automatic redeploy, confirm version 1.5.0_EXECUTION_GUARD, then use
+   Fetch Fresh Snapshot.
+
+LIVE VERIFICATION
+- First fresh live final action should show WARMING UP 1/2.
+- A later fresh snapshot with the same action should show CONFIRMED x2 or more.
+- ENTRY READY is possible only inside the configured entry window, with a READY
+  protected plan, live feeds, enough risk budget and no trade already marked.
+- Mark current trade taken only after the actual broker trade is entered; this locks
+  the app's local one-trade journal for the day.
+
+The app remains read-only and does not place, modify or exit orders.

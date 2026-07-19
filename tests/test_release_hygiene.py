@@ -25,6 +25,11 @@ def test_release_has_no_old_release_documents_or_backup_code():
         "V1_0_DELETE_LIST.txt",
         "V1_0_CHANGELOG.txt",
         "V1_0_TEST_REPORT.txt",
+        "DEPLOY_V1_2.txt",
+        "V1_2_UPLOAD_LIST.txt",
+        "V1_2_DELETE_LIST.txt",
+        "V1_2_CHANGELOG.txt",
+        "V1_2_TEST_REPORT.txt",
         "app_old.py",
         "backup.py",
     }
@@ -48,6 +53,8 @@ def test_runtime_state_and_cache_files_are_gitignored():
         "data/option_state.json.lock",
         "data/market_context.json",
         "data/market_context.json.lock",
+        "data/discipline_state.json",
+        "data/discipline_state.json.lock",
         ".streamlit/secrets.toml",
         "__pycache__/",
     }

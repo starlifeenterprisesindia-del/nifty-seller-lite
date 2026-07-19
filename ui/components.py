@@ -144,6 +144,80 @@ def render_trade_plan(snapshot: MarketSnapshot) -> None:
         st.warning(f"Planner blocker: {bundle.blocker}")
 
 
+def render_execution_guard(snapshot: MarketSnapshot) -> None:
+    item = snapshot.execution_guard
+    profile = snapshot.risk_profile
+    state = snapshot.discipline_state
+    st.subheader("Execution Guard & One-Trade Discipline")
+    st.caption(
+        "This is not a second strategy brain. It applies signal persistence, fresh-feed, "
+        "entry-window, protected-risk budget and one-trade/day rules to the already "
+        "selected final action. It never places or exits an order."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Entry Readiness", item.readiness)
+    c2.metric("Signal Persistence", item.signal_state)
+    c3.metric("Risk Budget", f"₹{item.risk_budget_rupees:,.0f}")
+    c4.metric("Allowed Lots", str(item.allowed_lots))
+
+    message = (
+        f"Setup: {item.selected_setup} | Entry window: {item.entry_window} | "
+        f"Compulsory exit: {item.forced_exit_time} | "
+        f"One-trade state: {state.last_outcome or 'NOT USED'}"
+    )
+    if item.readiness == "ENTRY READY":
+        st.success(message)
+    elif item.readiness == "WATCH":
+        st.info(message)
+    else:
+        st.warning(message)
+
+    risk_rows = [
+        {
+            "Capital ₹": profile.capital_rupees,
+            "Risk %": profile.risk_pct,
+            "Risk budget ₹": item.risk_budget_rupees,
+            "Lot size": profile.lot_size,
+            "Risk / lot ₹": item.risk_per_lot_rupees,
+            "Budget lots": item.max_lots_by_budget,
+            "Lot cap": item.max_lots_cap,
+            "Allowed lots": item.allowed_lots,
+            "Target capture pts": item.target_capture_points,
+            "Target exit debit pts": item.target_exit_debit_points,
+            "Target ₹": item.target_profit_rupees,
+            "SL trigger pts": item.stop_loss_points,
+            "SL exit debit pts": item.stop_exit_debit_points,
+            "SL ₹": item.stop_loss_rupees,
+        }
+    ]
+    st.dataframe(pd.DataFrame(risk_rows), use_container_width=True, hide_index=True)
+
+    low = (
+        f"Below {item.spot_invalidation_low:,.2f}"
+        if item.spot_invalidation_low is not None
+        else "—"
+    )
+    high = (
+        f"Above {item.spot_invalidation_high:,.2f}"
+        if item.spot_invalidation_high is not None
+        else "—"
+    )
+    st.caption(
+        f"Spot invalidation guide — downside: **{low}** | upside: **{high}**. "
+        "Premium-based triggers are estimates; verify broker bid/ask and fills."
+    )
+
+    left, right = st.columns(2)
+    with left:
+        st.write("**Guard evidence**")
+        for reason in item.reasons or ("No positive readiness evidence",):
+            st.write(f"• {reason}")
+    with right:
+        st.write("**Guard blockers**")
+        for blocker in item.blockers or ("None",):
+            st.write(f"• {blocker}")
+
+
 def render_feed_status(snapshot: MarketSnapshot) -> None:
     rows = []
     for key, status in snapshot.feed_status.items():

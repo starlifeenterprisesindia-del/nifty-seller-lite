@@ -8,15 +8,17 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from config import CONFIG, IST_TIMEZONE
-from models import Credentials
+from models import Credentials, RiskProfile
 from services.context_store import MarketContextStore
 from services.dhan_client import DhanClient
+from services.discipline_store import DisciplineStore
 from services.instrument_master import InstrumentMaster
 from services.option_state_store import OptionStateStore
 from services.snapshot_service import SnapshotService
 from ui.components import (
     render_candles,
     render_decision,
+    render_execution_guard,
     render_core_evidence,
     render_feed_status,
     render_header,
@@ -41,9 +43,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V1.2 Hedged Strike Planner — the final one-brain decision now maps to protected "
-    "CE/PE/Condor strike candidates using the same option-chain snapshot. Read only, "
-    "no order placement, and every actionable setup keeps a mandatory hedge."
+    "V1.5 Execution Guard — the final one-brain decision and protected strike plan now "
+    "pass through fresh-signal persistence, entry-window, risk-budget and one-trade/day "
+    "discipline checks. Read only; no order placement."
 )
 
 
@@ -60,6 +62,7 @@ client_id = secret_value("client_id")
 access_token = secret_value("access_token")
 state_store = OptionStateStore(Path(CONFIG.option_state_path))
 context_store = MarketContextStore(Path(CONFIG.market_context_path))
+discipline_store = DisciplineStore(Path(CONFIG.discipline_state_path))
 
 
 def optional_number(raw: str) -> float | None:
@@ -88,6 +91,62 @@ with st.sidebar:
     clear_option_state = st.button(
         "Clear today's option history", use_container_width=True
     )
+    with st.expander("Risk & one-trade discipline", expanded=True):
+        capital_rupees = st.number_input(
+            "Trading capital ₹",
+            min_value=10000.0,
+            max_value=100000000.0,
+            value=float(CONFIG.risk_default_capital),
+            step=10000.0,
+        )
+        risk_pct = st.number_input(
+            "Maximum trade risk %",
+            min_value=0.1,
+            max_value=2.0,
+            value=float(CONFIG.risk_default_pct),
+            step=0.1,
+        )
+        lot_size = st.number_input(
+            "Current NIFTY lot size",
+            min_value=1,
+            max_value=500,
+            value=int(CONFIG.risk_default_lot_size),
+            step=1,
+        )
+        max_lots_cap = st.number_input(
+            "Maximum lots cap",
+            min_value=1,
+            max_value=20,
+            value=int(CONFIG.risk_default_max_lots),
+            step=1,
+        )
+        target_capture_pct = st.number_input(
+            "Target credit capture %",
+            min_value=5.0,
+            max_value=90.0,
+            value=float(CONFIG.risk_default_target_capture_pct),
+            step=5.0,
+        )
+        stop_loss_pct = st.number_input(
+            "Spread loss trigger % of credit",
+            min_value=10.0,
+            max_value=200.0,
+            value=float(CONFIG.risk_default_stop_loss_pct),
+            step=5.0,
+        )
+        entry_start = st.time_input(
+            "Entry window starts", value=CONFIG.risk_default_entry_start
+        )
+        entry_end = st.time_input(
+            "No new entry after", value=CONFIG.risk_default_entry_end
+        )
+        forced_exit = st.time_input(
+            "Compulsory exit by", value=CONFIG.risk_default_forced_exit
+        )
+        st.caption(
+            "Defaults enforce one trade/day, one-lot cap and a conservative 0.5% "
+            "risk budget. Lot size remains editable because exchange contracts can change."
+        )
     with st.expander("FII/DII & verified event context"):
         context_date = st.date_input(
             "Session date", datetime.now(ZoneInfo(IST_TIMEZONE)).date()
@@ -128,6 +187,35 @@ with st.sidebar:
         st.session_state.pop("snapshot", None)
         st.success("Bounded option history cleared")
 
+risk_profile = RiskProfile(
+    capital_rupees=float(capital_rupees),
+    risk_pct=float(risk_pct),
+    lot_size=int(lot_size),
+    max_lots_cap=int(max_lots_cap),
+    target_capture_pct=float(target_capture_pct),
+    stop_loss_pct=float(stop_loss_pct),
+    entry_start=entry_start,
+    entry_end=entry_end,
+    forced_exit=forced_exit,
+)
+if not (risk_profile.entry_start <= risk_profile.entry_end < risk_profile.forced_exit):
+    st.error("Risk times must follow: entry start ≤ entry end < compulsory exit.")
+    st.stop()
+profile_signature = (
+    risk_profile.capital_rupees,
+    risk_profile.risk_pct,
+    risk_profile.lot_size,
+    risk_profile.max_lots_cap,
+    risk_profile.target_capture_pct,
+    risk_profile.stop_loss_pct,
+    risk_profile.entry_start.isoformat(),
+    risk_profile.entry_end.isoformat(),
+    risk_profile.forced_exit.isoformat(),
+)
+if st.session_state.get("risk_profile_signature") != profile_signature:
+    st.session_state.risk_profile_signature = profile_signature
+    st.session_state.pop("snapshot", None)
+
 if not credentials_ready:
     st.code(
         '[dhan]\nclient_id = "YOUR_CLIENT_ID"\naccess_token = "YOUR_24_HOUR_ACCESS_TOKEN"',
@@ -147,8 +235,9 @@ if "snapshot" not in st.session_state or refresh:
                 InstrumentMaster(Path("data/instrument_master.csv")),
                 state_store,
                 context_store,
+                discipline_store,
             )
-            st.session_state.snapshot = service.build()
+            st.session_state.snapshot = service.build(risk_profile=risk_profile)
     except Exception as exc:
         st.error(f"Snapshot failed safely: {exc}")
         st.stop()
@@ -159,6 +248,64 @@ render_header(snapshot)
 
 render_decision(snapshot)
 render_trade_plan(snapshot)
+render_execution_guard(snapshot)
+
+st.write("**Manual one-trade journal**")
+trade_col, target_col, sl_col = st.columns(3)
+with trade_col:
+    mark_trade = st.button(
+        "Mark current trade taken",
+        disabled=(
+            snapshot.execution_guard.readiness != "ENTRY READY"
+            or snapshot.discipline_state.trades_taken >= 1
+        ),
+        use_container_width=True,
+    )
+with target_col:
+    mark_target = st.button(
+        "Target / manual exit — lock day",
+        disabled=(
+            snapshot.discipline_state.trades_taken < 1
+            or snapshot.discipline_state.last_outcome != "OPEN"
+        ),
+        use_container_width=True,
+    )
+with sl_col:
+    mark_sl = st.button(
+        "SL hit — lock day",
+        disabled=(
+            snapshot.discipline_state.trades_taken < 1
+            or snapshot.discipline_state.last_outcome != "OPEN"
+        ),
+        use_container_width=True,
+    )
+try:
+    if mark_trade:
+        discipline_store.mark_trade(
+            session_date=snapshot.created_at.date(),
+            action=snapshot.decision.final_action,
+        )
+        st.session_state.pop("snapshot", None)
+        st.rerun()
+    if mark_target:
+        discipline_store.mark_outcome(
+            session_date=snapshot.created_at.date(),
+            outcome="TARGET / MANUAL EXIT",
+        )
+        st.session_state.pop("snapshot", None)
+        st.rerun()
+    if mark_sl:
+        discipline_store.mark_outcome(
+            session_date=snapshot.created_at.date(), outcome="SL HIT"
+        )
+        st.session_state.pop("snapshot", None)
+        st.rerun()
+except Exception as exc:
+    st.error(f"Discipline journal not updated: {exc}")
+st.caption(
+    "The journal is local to the current Streamlit deployment filesystem. It records "
+    "discipline only and never places, modifies or exits a broker order."
+)
 
 st.subheader("Core Market Evidence")
 render_core_evidence(snapshot)

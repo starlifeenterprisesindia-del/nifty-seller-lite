@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
 
 import pandas as pd
@@ -375,6 +375,64 @@ class TradePlanBundle:
     blocker: str
 
 
+@dataclass(frozen=True)
+class RiskProfile:
+    capital_rupees: float
+    risk_pct: float
+    lot_size: int
+    max_lots_cap: int
+    target_capture_pct: float
+    stop_loss_pct: float
+    entry_start: time
+    entry_end: time
+    forced_exit: time
+
+    @property
+    def risk_budget_rupees(self) -> float:
+        return round(max(0.0, self.capital_rupees) * max(0.0, self.risk_pct) / 100.0, 2)
+
+
+@dataclass(frozen=True)
+class DisciplineState:
+    session_date: str
+    trades_taken: int
+    day_locked: bool
+    last_outcome: str
+    last_action: str
+    signal_history: tuple[dict[str, Any], ...]
+    status: str
+
+
+@dataclass(frozen=True)
+class ExecutionGuard:
+    as_of: datetime
+    selected_setup: str
+    readiness: str
+    signal_state: str
+    confirmations: int
+    required_confirmations: int
+    entry_window: str
+    risk_budget_rupees: float
+    risk_per_lot_rupees: float | None
+    allowed_lots: int
+    max_lots_by_budget: int
+    max_lots_cap: int
+    target_capture_points: float | None
+    target_exit_debit_points: float | None
+    target_profit_rupees: float | None
+    stop_loss_points: float | None
+    stop_exit_debit_points: float | None
+    stop_loss_rupees: float | None
+    forced_exit_time: str
+    spot_invalidation_low: float | None
+    spot_invalidation_high: float | None
+    trade_taken_today: bool
+    day_locked: bool
+    reasons: tuple[str, ...]
+    blockers: tuple[str, ...]
+    status: str
+
+
 @dataclass
 class MarketSnapshot:
     snapshot_id: str
@@ -402,6 +460,9 @@ class MarketSnapshot:
     event_risk: EventRiskContext
     decision: FinalDecision
     trade_plan: TradePlanBundle
+    execution_guard: ExecutionGuard
+    risk_profile: RiskProfile
+    discipline_state: DisciplineState
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
@@ -436,6 +497,18 @@ class MarketSnapshot:
             "event_risk": asdict(self.event_risk),
             "decision": asdict(self.decision),
             "trade_plan": asdict(self.trade_plan),
+            "execution_guard": asdict(self.execution_guard),
+            "risk_profile": {
+                **asdict(self.risk_profile),
+                "entry_start": self.risk_profile.entry_start.isoformat(
+                    timespec="minutes"
+                ),
+                "entry_end": self.risk_profile.entry_end.isoformat(timespec="minutes"),
+                "forced_exit": self.risk_profile.forced_exit.isoformat(
+                    timespec="minutes"
+                ),
+            },
+            "discipline_state": asdict(self.discipline_state),
             "feeds": {
                 name: asdict(status) for name, status in self.feed_status.items()
             },

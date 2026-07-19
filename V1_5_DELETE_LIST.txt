@@ -1,0 +1,10 @@
+DELETE ONLY THESE OLD V1.2 RELEASE DOCUMENTS AFTER V1.5 IS COMMITTED
+
+DEPLOY_V1_2.txt
+V1_2_UPLOAD_LIST.txt
+V1_2_DELETE_LIST.txt
+V1_2_CHANGELOG.txt
+V1_2_TEST_REPORT.txt
+
+Do not delete app.py, config.py, models.py, analysis, services, tests, ui, data,
+.streamlit, requirements files, README.md, ARCHITECTURE.md or .gitignore.

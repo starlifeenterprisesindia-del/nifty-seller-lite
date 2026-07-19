@@ -1,0 +1,28 @@
+NIFTY SELLER LITE V1.5 — TEST REPORT
+
+Automated test suite: 66/66 PASS
+Python compilation: PASS
+Ruff lint: PASS
+Ruff formatting check: PASS
+Streamlit headless startup: PASS
+V1.2 patch-overlay integrity: PASS
+
+NEW COVERAGE
+- Two fresh matching signals permit ENTRY READY only when all other gates pass.
+- First signal remains blocked while persistence warms up.
+- Reference-only session never becomes ENTRY READY.
+- Final WAIT cannot be overridden by the execution guard.
+- Closed entry window blocks a new trade.
+- Insufficient rupee risk budget permits zero lots and blocks entry.
+- One marked trade locks the day.
+- Discipline signal history is bounded and deduplicated.
+- Target/manual exit and SL outcomes remain day-locked.
+- WAIT cannot be manually marked as a trade.
+- Execution guard is wired only after the final decision and strike planner.
+- Execution guard contains no network, Dhan client or order-placement code.
+
+LIMITATION
+Authenticated live DhanHQ verification was not possible in the build environment
+because the user's Streamlit Secrets are not available here. Live quote freshness,
+consecutive refresh timing, broker bid/ask, lot size and risk values must be verified
+on the deployed app.
