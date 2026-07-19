@@ -1,7 +1,0 @@
-V0.2.1 NIFTY QUOTE HOTFIX
-
-- Fixed grouped Dhan market-quote request for instruments sharing the same exchange segment.
-- NIFTY security ID 13 and INDIA VIX security ID 21 are now both included under IDX_I.
-- Added a regression assertion that both index IDs are present in every snapshot quote request.
-- Version metadata updated to 0.2.1_NIFTY_QUOTE_HOTFIX.
-- No indicator formulas, option-chain logic, UI scoring, credentials, or order functionality changed.
