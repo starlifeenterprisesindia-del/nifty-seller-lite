@@ -401,6 +401,7 @@ class DisciplineState:
     last_action: str
     signal_history: tuple[dict[str, Any], ...]
     status: str
+    trade_record: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -433,6 +434,72 @@ class ExecutionGuard:
     status: str
 
 
+@dataclass(frozen=True)
+class PositionLegMonitor:
+    role: str
+    side: str
+    strike: float
+    entry_price: float
+    current_price: float | None
+    pnl_contribution_points: float | None
+    status: str
+
+
+@dataclass(frozen=True)
+class PositionGuardian:
+    as_of: datetime
+    action: str
+    expiry: str | None
+    opened_at: str
+    lots: int
+    lot_size: int
+    entry_spot: float | None
+    current_spot: float | None
+    entry_credit_points: float | None
+    current_debit_points: float | None
+    unrealized_pnl_points: float | None
+    unrealized_pnl_rupees: float | None
+    target_exit_debit_points: float | None
+    stop_exit_debit_points: float | None
+    target_progress_pct: float | None
+    forced_exit_time: str
+    spot_invalidation_low: float | None
+    spot_invalidation_high: float | None
+    instruction: str
+    legs: tuple[PositionLegMonitor, ...]
+    reasons: tuple[str, ...]
+    blockers: tuple[str, ...]
+    status: str
+
+    @classmethod
+    def idle(cls, *, as_of: datetime, current_spot: float | None) -> "PositionGuardian":
+        return cls(
+            as_of=as_of,
+            action="",
+            expiry=None,
+            opened_at="",
+            lots=0,
+            lot_size=0,
+            entry_spot=None,
+            current_spot=current_spot,
+            entry_credit_points=None,
+            current_debit_points=None,
+            unrealized_pnl_points=None,
+            unrealized_pnl_rupees=None,
+            target_exit_debit_points=None,
+            stop_exit_debit_points=None,
+            target_progress_pct=None,
+            forced_exit_time="",
+            spot_invalidation_low=None,
+            spot_invalidation_high=None,
+            instruction="NO OPEN TRADE",
+            legs=(),
+            reasons=("No trade is marked open in the one-trade journal",),
+            blockers=(),
+            status="IDLE",
+        )
+
+
 @dataclass
 class MarketSnapshot:
     snapshot_id: str
@@ -461,6 +528,7 @@ class MarketSnapshot:
     decision: FinalDecision
     trade_plan: TradePlanBundle
     execution_guard: ExecutionGuard
+    position_guardian: PositionGuardian
     risk_profile: RiskProfile
     discipline_state: DisciplineState
     expiry: str | None
@@ -498,6 +566,7 @@ class MarketSnapshot:
             "decision": asdict(self.decision),
             "trade_plan": asdict(self.trade_plan),
             "execution_guard": asdict(self.execution_guard),
+            "position_guardian": asdict(self.position_guardian),
             "risk_profile": {
                 **asdict(self.risk_profile),
                 "entry_start": self.risk_profile.entry_start.isoformat(

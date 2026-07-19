@@ -218,6 +218,102 @@ def render_execution_guard(snapshot: MarketSnapshot) -> None:
             st.write(f"• {blocker}")
 
 
+def render_position_guardian(snapshot: MarketSnapshot) -> None:
+    item = snapshot.position_guardian
+    st.subheader("Position Guardian — Manual Trade Monitor")
+    st.caption(
+        "This monitor starts only after you manually mark a protected trade taken. "
+        "It tracks the exact stored legs from the same full option-chain snapshot and "
+        "shows deterministic target, SL, spot-invalidation and time-exit alerts. It "
+        "cannot place, modify or exit a broker order."
+    )
+
+    if item.status == "IDLE":
+        st.info(
+            "No open trade is recorded. Position monitoring will start after an ENTRY READY setup is manually marked taken."
+        )
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Guardian Instruction", item.instruction)
+    c2.metric(
+        "Current Combo Debit",
+        f"{item.current_debit_points:.2f} pts"
+        if item.current_debit_points is not None
+        else "—",
+    )
+    c3.metric(
+        "P&L Estimate",
+        f"₹{item.unrealized_pnl_rupees:,.0f}"
+        if item.unrealized_pnl_rupees is not None
+        else "—",
+        f"{item.unrealized_pnl_points:+.2f} pts"
+        if item.unrealized_pnl_points is not None
+        else None,
+    )
+    c4.metric(
+        "Target Progress",
+        f"{item.target_progress_pct:.1f}%"
+        if item.target_progress_pct is not None
+        else "—",
+    )
+
+    summary = (
+        f"Action: {item.action or '—'} | Expiry: {item.expiry or '—'} | "
+        f"Lots: {item.lots} × {item.lot_size} | Entry credit: "
+        f"{item.entry_credit_points:.2f} pts"
+        if item.entry_credit_points is not None
+        else f"Action: {item.action or '—'} | Expiry: {item.expiry or '—'} | Lots: {item.lots} × {item.lot_size}"
+    )
+    if item.status in {"EXIT ALERT", "TARGET ALERT"}:
+        st.warning(summary)
+    elif item.status == "DATA BLOCKED":
+        st.error(summary)
+    elif item.status == "CLOSED":
+        st.info(summary)
+    else:
+        st.success(summary)
+
+    rule_rows = [
+        {
+            "Entry spot": item.entry_spot,
+            "Current spot": item.current_spot,
+            "Target debit": item.target_exit_debit_points,
+            "SL debit": item.stop_exit_debit_points,
+            "Spot invalidation low": item.spot_invalidation_low,
+            "Spot invalidation high": item.spot_invalidation_high,
+            "Compulsory exit": item.forced_exit_time,
+            "Status": item.status,
+        }
+    ]
+    st.dataframe(pd.DataFrame(rule_rows), use_container_width=True, hide_index=True)
+
+    if item.legs:
+        leg_rows = [
+            {
+                "Role": leg.role,
+                "Side": leg.side,
+                "Strike": leg.strike,
+                "Entry price": leg.entry_price,
+                "Current close price": leg.current_price,
+                "P&L contribution pts": leg.pnl_contribution_points,
+                "Status": leg.status,
+            }
+            for leg in item.legs
+        ]
+        st.dataframe(pd.DataFrame(leg_rows), use_container_width=True, hide_index=True)
+
+    left, right = st.columns(2)
+    with left:
+        st.write("**Guardian evidence**")
+        for reason in item.reasons or ("No active guardian reason",):
+            st.write(f"• {reason}")
+    with right:
+        st.write("**Guardian blockers**")
+        for blocker in item.blockers or ("None",):
+            st.write(f"• {blocker}")
+
+
 def render_feed_status(snapshot: MarketSnapshot) -> None:
     rows = []
     for key, status in snapshot.feed_status.items():

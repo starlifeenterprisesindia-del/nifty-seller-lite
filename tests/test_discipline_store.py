@@ -39,17 +39,41 @@ def test_signal_history_is_same_day_bounded_and_deduped(tmp_path):
 
 def test_one_trade_locks_day_and_outcome_is_recorded(tmp_path):
     store = DisciplineStore(tmp_path / "discipline.json")
-    state = store.mark_trade(session_date=NOW.date(), action="PE SELL WITH HEDGE")
+    record = {
+        "status": "OPEN",
+        "opened_at": NOW.isoformat(),
+        "action": "PE SELL WITH HEDGE",
+        "lots": 1,
+        "lot_size": 65,
+        "legs": [{"role": "SHORT", "side": "PE", "strike": 24200, "entry_price": 20}],
+    }
+    state = store.mark_trade(
+        session_date=NOW.date(),
+        action="PE SELL WITH HEDGE",
+        trade_record=record,
+    )
     assert state.trades_taken == 1
     assert state.day_locked is True
     assert state.last_outcome == "OPEN"
+    assert state.trade_record is not None
+    assert state.trade_record["legs"][0]["strike"] == 24200
 
     with pytest.raises(ValueError, match="already used"):
         store.mark_trade(session_date=NOW.date(), action="CE SELL WITH HEDGE")
 
-    state = store.mark_outcome(session_date=NOW.date(), outcome="TARGET / MANUAL EXIT")
+    state = store.mark_outcome(
+        session_date=NOW.date(),
+        outcome="TARGET / MANUAL EXIT",
+        exit_debit_points=7.5,
+        realized_pnl_rupees=292.5,
+        captured_at=NOW,
+    )
     assert state.last_outcome == "TARGET / MANUAL EXIT"
     assert state.day_locked is True
+    assert state.trade_record is not None
+    assert state.trade_record["status"] == "TARGET / MANUAL EXIT"
+    assert state.trade_record["exit_debit_points"] == 7.5
+    assert state.trade_record["realized_pnl_rupees"] == 292.5
 
 
 def test_wait_cannot_be_marked_as_trade(tmp_path):

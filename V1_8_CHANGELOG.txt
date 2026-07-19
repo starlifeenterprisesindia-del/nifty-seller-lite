@@ -1,0 +1,30 @@
+NIFTY SELLER LITE V1.8 — POSITION GUARDIAN & EXIT DISCIPLINE
+
+MAJOR ADDITIONS
+- Added one post-entry Position Guardian for a manually marked protected trade.
+- Freezes exact short and hedge strikes, conservative entry prices, expiry, lots,
+  lot size, entry spot, entry credit and all risk thresholds.
+- Uses the same already-fetched full Dhan option chain to find exact stored legs.
+  No second API request and no nearby-strike substitution.
+- Calculates protected-combination close debit, leg contributions, P&L points,
+  estimated P&L rupees and target-capture progress.
+- Added deterministic alerts for target, SL, spot invalidation, compulsory exit,
+  profit protection, rising risk, reference-only and data-blocked conditions.
+- Manual target/exit and SL buttons now store observed exit debit and estimated P&L.
+- Added editable lots-to-record control bounded by Execution Guard allowed lots.
+
+STATE INTEGRITY
+- Discipline journal schema upgraded from V1 to V2.
+- Existing same-day V1 state is migrated instead of silently discarded.
+- Current-day state remains atomic, locked, bounded and gitignored.
+- No credentials, broker order IDs or account positions are stored.
+
+ARCHITECTURE
+- One final brain remains analysis/decision.py.
+- Position Guardian runs only after decision, strike planner and execution guard.
+- Position Guardian cannot choose a strategy, change scores, fetch data or place orders.
+- Market-closed sessions remain reference-only.
+
+CLEANUP
+- Patch contains only changed/new V1.8 files.
+- No cache, bytecode, runtime state, backup code or old release documents are included.

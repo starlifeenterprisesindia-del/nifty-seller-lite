@@ -1,99 +1,75 @@
-# Architecture — V1.5 Execution Guard
+# Architecture — V1.8 Position Guardian
 
-## Single market-data authority
+## One market-data authority
 
-Only `services/snapshot_service.py` orchestrates DhanHQ reads and creates one
-`MarketSnapshot`. Analysis modules do not fetch data.
+Only `services/snapshot_service.py` reads DhanHQ and builds one `MarketSnapshot`.
+Analysis modules never fetch data. The option-chain response is parsed once:
 
-The snapshot contains:
+- ATM±7 rows feed the visible chain, option intelligence and strike planner.
+- The same full parsed chain is kept only inside the snapshot build for monitoring
+  exact legs of a manually marked open trade.
 
-- NIFTY, India VIX and Top-7 quotes
-- completed NIFTY 1m/3m/15m candles
-- nearest NIFTY futures quote and volume/OI candles
-- nearest-expiry ATM±7 option chain
-- canonical technical, level, volume and option-flow evidence
-- optional institutional/event context
-- one final read-only decision object
-- one post-decision protected strike-plan object
-- one post-plan execution-guard object
-- risk-profile and one-trade discipline state
-- feed/session integrity
+No second option-chain API request is made.
 
-## Canonical modules
+## Canonical processing order
 
-- `analysis/indicators.py`: EMA20/50, MACD 12/26/9 and RSI14
-- `analysis/price_action.py`: structure, event, invalidation and move stage
-- `analysis/levels.py`: confluence zones and remaining room
-- `analysis/volume.py`: NIFTY-futures participation
-- `analysis/core_market.py`: completed-candle core evidence
-- `analysis/option_intelligence.py`: Premium/OI/Volume flow, movement windows,
-  persistence, walls, clusters and PCR
-- `analysis/heavyweights.py`: official-weight Top-7 contribution
-- `analysis/market_risk.py`: India VIX context
-- `analysis/market_context.py`: optional FII/DII rolling context and verified
-  event risk
-- `analysis/decision.py`: the only final strategy brain
-- `analysis/trade_plan.py`: post-decision strike and hedge selection only
-- `analysis/execution_guard.py`: post-plan freshness, time, risk and one-trade
-  gate only
+1. Core market and options evidence
+2. `analysis/decision.py` — the only final strategy brain
+3. `analysis/trade_plan.py` — protected strikes after the decision
+4. `analysis/execution_guard.py` — pre-entry safety gate
+5. `analysis/position_guardian.py` — post-entry read-only monitor
 
-Neither `trade_plan.py` nor `execution_guard.py` can calculate CE/PE/Condor/WAIT
-scores, change the final action, fetch data or place orders. There is no second
-classifier, duplicate decision function or execution module.
+The trade planner, execution guard and position guardian cannot calculate final
+strategy scores, change the selected action, fetch data or place orders.
 
-## Final strategy brain
+## Position record
 
-The single brain consumes only canonical snapshot evidence. The architecture
-weights are:
+`create_trade_record()` runs only after an `ENTRY READY` setup is manually marked.
+It freezes:
 
-- Core price/trend/levels: 35%
-- Options flow/PCR: 35%
-- Top-7 heavyweights: 15%
-- VIX/session/institutional/event background: 15%
+- action, setup and expiry
+- exact short and hedge strikes
+- conservative entry prices: short bid, hedge ask, LTP fallback
+- entry credit, lots, lot size and entry spot
+- target debit, SL debit, spot invalidation and forced-exit time
 
-CE Sell, PE Sell and Iron Condor are independent suitability percentages. WAIT
-is a separate risk/uncertainty need. Reference-only sessions force WAIT.
+`services/discipline_store.py` stores this small record in the current-day journal.
+Schema V1 is migrated to V2 by adding an empty trade record without discarding the
+existing same-day signal history or one-trade lock.
 
-## Protected strike planner
+## Position monitoring maths
 
-The planner evaluates only farther-OTM protected structures:
+For the exact stored legs:
 
-- CE Sell: short OTM CE plus farther-OTM long CE hedge
-- PE Sell: short OTM PE plus farther-OTM long PE hedge
-- Iron Condor: protected PE spread plus protected CE spread
+- short closing cost = current ask, LTP fallback
+- hedge closing value = current bid, LTP fallback
+- combination close debit = sum(short closing costs) − sum(hedge closing values)
+- P&L points = frozen entry credit − current close debit
+- estimated P&L rupees = P&L points × lot size × lots
 
-Candidate quality combines delta proximity, bid/ask spread, OI, volume, distance
-from spot, support/resistance clearance and OI-wall context. Credit and risk are
-point estimates, never order instructions.
+The monitor blocks P&L when an exact leg, expiry, lot value or entry credit is
+missing. It never substitutes a nearby strike.
 
-## Execution guard
+## Alert precedence
 
-The execution guard receives the final decision and protected plan after both
-are complete. It can output only `ENTRY READY`, `WATCH`, `BLOCKED` or
-`REFERENCE ONLY`.
+For a live open position:
 
-`ENTRY READY` requires:
+1. data integrity block
+2. compulsory exit time
+3. NIFTY spot invalidation
+4. protected-combination SL debit
+5. protected-combination target debit
+6. profit-protection / rising-risk warning
+7. hold and monitor
 
-- a non-WAIT final action
-- a READY protected plan
-- live NIFTY quote, completed candles and option chain
-- at least two consecutive fresh confirmations of the same final action
-- current time inside the configured entry window
-- no trade already marked for the session
-- protected risk fitting the configured rupee budget
-
-Risk maths uses the protected plan's estimated maximum-risk points, editable lot
-size, capital, risk percentage and lot cap. It shows estimated target and loss
-trigger values but cannot send orders.
+A closed or weekend session is always reference-only. All exits remain manual.
 
 ## Bounded local state
 
 - `services/option_state_store.py`: same-day bounded option-flow snapshots
-- `services/context_store.py`: maximum 120 dated FII/DII/event-context entries
-- `services/discipline_store.py`: current-day signal history, one-trade lock and
-  manual outcome only
+- `services/context_store.py`: bounded FII/DII and verified-event history
+- `services/discipline_store.py`: current-day signals, one-trade lock, frozen manual
+  trade and manual outcome
 
-All stores use atomic replacement and lock files. Credentials and broker order
-data are never stored. Runtime files are gitignored. The deployment filesystem
-may reset after a Streamlit restart or redeploy, so the discipline journal is a
-runtime aid rather than a broker record.
+Runtime files are gitignored and may reset after a Streamlit redeploy. Broker order
+IDs, credentials and account positions are never stored.

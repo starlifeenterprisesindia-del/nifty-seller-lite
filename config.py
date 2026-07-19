@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "1.5.0_EXECUTION_GUARD"
+    version: str = "1.8.0_POSITION_GUARDIAN"
     request_timeout_seconds: int = 12
     quote_max_age_seconds: int = 12
     candle_max_age_minutes: int = 5
@@ -126,6 +126,10 @@ class AppConfig:
     risk_default_entry_start: time = time(10, 15)
     risk_default_entry_end: time = time(11, 30)
     risk_default_forced_exit: time = time(14, 30)
+
+    # Manual post-entry position guardian. Alerts are deterministic and read-only.
+    position_profit_protect_pct: float = 70.0
+    position_risk_warning_pct: float = -70.0
 
     @property
     def top7_symbols(self) -> tuple[str, ...]:

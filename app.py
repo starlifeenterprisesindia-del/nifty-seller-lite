@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+from analysis.position_guardian import create_trade_record
 from config import CONFIG, IST_TIMEZONE
 from models import Credentials, RiskProfile
 from services.context_store import MarketContextStore
@@ -32,6 +33,7 @@ from ui.components import (
     render_option_flow_matrix,
     render_option_intelligence,
     render_option_windows,
+    render_position_guardian,
     render_price_action,
     render_trade_plan,
     render_vix_context,
@@ -43,9 +45,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V1.5 Execution Guard — the final one-brain decision and protected strike plan now "
-    "pass through fresh-signal persistence, entry-window, risk-budget and one-trade/day "
-    "discipline checks. Read only; no order placement."
+    "V1.8 Position Guardian — after the one-brain decision, protected strike plan and "
+    "execution guard, a manually marked trade is monitored for live combination debit, "
+    "P&L, target, SL, spot invalidation and compulsory exit. Read only; no order placement."
 )
 
 
@@ -249,8 +251,18 @@ render_header(snapshot)
 render_decision(snapshot)
 render_trade_plan(snapshot)
 render_execution_guard(snapshot)
+render_position_guardian(snapshot)
 
 st.write("**Manual one-trade journal**")
+maximum_mark_lots = max(1, snapshot.execution_guard.allowed_lots)
+planned_lots = st.number_input(
+    "Lots to record when trade is taken",
+    min_value=1,
+    max_value=maximum_mark_lots,
+    value=1,
+    step=1,
+    disabled=snapshot.execution_guard.readiness != "ENTRY READY",
+)
 trade_col, target_col, sl_col = st.columns(3)
 with trade_col:
     mark_trade = st.button(
@@ -281,9 +293,19 @@ with sl_col:
     )
 try:
     if mark_trade:
+        trade_record = create_trade_record(
+            captured_at=snapshot.created_at,
+            decision=snapshot.decision,
+            trade_plan=snapshot.trade_plan,
+            execution_guard=snapshot.execution_guard,
+            lots=int(planned_lots),
+            lot_size=snapshot.risk_profile.lot_size,
+            spot=snapshot.nifty_quote.get("last_price"),
+        )
         discipline_store.mark_trade(
             session_date=snapshot.created_at.date(),
             action=snapshot.decision.final_action,
+            trade_record=trade_record,
         )
         st.session_state.pop("snapshot", None)
         st.rerun()
@@ -291,20 +313,28 @@ try:
         discipline_store.mark_outcome(
             session_date=snapshot.created_at.date(),
             outcome="TARGET / MANUAL EXIT",
+            exit_debit_points=snapshot.position_guardian.current_debit_points,
+            realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
+            captured_at=snapshot.created_at,
         )
         st.session_state.pop("snapshot", None)
         st.rerun()
     if mark_sl:
         discipline_store.mark_outcome(
-            session_date=snapshot.created_at.date(), outcome="SL HIT"
+            session_date=snapshot.created_at.date(),
+            outcome="SL HIT",
+            exit_debit_points=snapshot.position_guardian.current_debit_points,
+            realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
+            captured_at=snapshot.created_at,
         )
         st.session_state.pop("snapshot", None)
         st.rerun()
 except Exception as exc:
     st.error(f"Discipline journal not updated: {exc}")
 st.caption(
-    "The journal is local to the current Streamlit deployment filesystem. It records "
-    "discipline only and never places, modifies or exits a broker order."
+    "The journal is local to the current Streamlit deployment filesystem. It freezes "
+    "the manually marked protected setup for monitoring, but never places, modifies or "
+    "exits a broker order."
 )
 
 st.subheader("Core Market Evidence")

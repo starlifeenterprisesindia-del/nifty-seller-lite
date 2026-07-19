@@ -1,0 +1,16 @@
+NIFTY SELLER LITE V1.8 — UPLOAD-ONLY PATCH
+
+1. Extract nifty-seller-lite-v1-8-upload-only-patch.zip.
+2. Open the extracted folder.
+3. Upload its contents to the ROOT of the existing GitHub repository.
+4. Keep folder paths exactly as supplied: analysis/, services/, tests/, ui/.
+5. Allow matching files to replace the current V1.5 files.
+6. Do not delete the Streamlit app and do not change Streamlit Secrets.
+7. Commit message:
+   V1.8 Position Guardian and Exit Discipline
+8. After the commit, delete only the old V1.5 release documents listed in
+   V1_8_DELETE_LIST.txt.
+9. Streamlit should redeploy automatically.
+10. Confirm version: 1.8.0_POSITION_GUARDIAN
+
+This ZIP is a patch, not a full repository. Upload every file inside this patch.

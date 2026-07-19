@@ -92,3 +92,21 @@ def test_execution_guard_is_wired_after_decision_and_trade_plan():
         < service.index("trade_plan = calculate_trade_plan(")
         < service.index("execution_guard = calculate_execution_guard(")
     )
+
+
+def test_position_guardian_is_post_entry_monitor_not_a_strategy_brain():
+    root = Path(__file__).resolve().parents[1]
+    module = (root / "analysis" / "position_guardian.py").read_text(encoding="utf-8")
+    assert "def calculate_final_decision(" not in module
+    assert "calculate_final_decision(" not in module
+    assert "PLACE_ORDER" not in module.upper()
+    assert "DhanClient(" not in module
+
+
+def test_position_guardian_is_wired_after_execution_guard():
+    root = Path(__file__).resolve().parents[1]
+    service = (root / "services" / "snapshot_service.py").read_text(encoding="utf-8")
+    assert service.count("position_guardian = calculate_position_guardian(") == 1
+    assert service.index(
+        "execution_guard = calculate_execution_guard("
+    ) < service.index("position_guardian = calculate_position_guardian(")

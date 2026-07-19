@@ -25,6 +25,7 @@ from analysis.market_risk import calculate_vix_context
 from analysis.option_chain import option_chain_to_frame, select_atm_window
 from analysis.option_intelligence import calculate_option_intelligence
 from analysis.price_action import calculate_price_action_bundle
+from analysis.position_guardian import calculate_position_guardian
 from analysis.trade_plan import calculate_trade_plan
 from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
@@ -357,6 +358,7 @@ class SnapshotService:
 
         expiry: str | None = None
         option_frame = pd.DataFrame()
+        full_option_frame = pd.DataFrame()
         try:
             expiries = self.client.expiry_list(
                 int(CONFIG.nifty.security_id),
@@ -382,6 +384,7 @@ class SnapshotService:
                     segment=CONFIG.nifty.exchange_segment,
                 )
                 option_spot, full_chain = option_chain_to_frame(response)
+                full_option_frame = full_chain.copy()
                 spot = option_spot or float(nifty_quote.get("last_price"))
                 option_frame = select_atm_window(
                     full_chain, spot, CONFIG.option_strikes_each_side
@@ -621,6 +624,33 @@ class SnapshotService:
             as_of=current,
         )
 
+        position_guardian = calculate_position_guardian(
+            discipline_state=discipline_state,
+            option_chain=full_option_frame,
+            current_expiry=expiry,
+            current_spot=float(current_price) if current_price is not None else None,
+            market_session=market_session,
+            option_chain_live=statuses["option_chain"].use_state == "LIVE",
+            as_of=current,
+        )
+        statuses["position_guardian"] = FeedStatus(
+            name="position_guardian",
+            ok=position_guardian.status not in {"DATA BLOCKED"},
+            fetched_at=current,
+            message=(
+                f"{position_guardian.instruction}; legs={len(position_guardian.legs)}"
+            ),
+            source="Current full option-chain snapshot + local manual trade record",
+            use_state=(
+                "LIVE"
+                if market_session.is_live
+                and position_guardian.status not in {"DATA BLOCKED"}
+                else "REFERENCE"
+                if not market_session.is_live
+                else "UNAVAILABLE"
+            ),
+        )
+
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
             "market_state": market_session.code,
@@ -671,6 +701,7 @@ class SnapshotService:
             decision=decision,
             trade_plan=trade_plan,
             execution_guard=execution_guard,
+            position_guardian=position_guardian,
             risk_profile=profile,
             discipline_state=discipline_state,
             expiry=expiry,
@@ -696,6 +727,8 @@ class SnapshotService:
                 "trade_plan_status": trade_plan.status,
                 "execution_guard_engine": "analysis.execution_guard.calculate_execution_guard",
                 "execution_guard_status": execution_guard.status,
+                "position_guardian_engine": "analysis.position_guardian.calculate_position_guardian",
+                "position_guardian_status": position_guardian.status,
                 "discipline_signal_appended": signal_appended,
                 "discipline_state_status": discipline_state.status,
             },

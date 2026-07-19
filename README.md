@@ -1,33 +1,39 @@
-# Nifty Seller Lite — V1.5 Execution Guard
+# Nifty Seller Lite — V1.8 Position Guardian
 
 A read-only Streamlit decision-support app built around one authoritative DhanHQ
-`MarketSnapshot`, one canonical strategy brain and one post-decision execution
-safety gate.
+`MarketSnapshot`, one canonical strategy brain, one protected strike planner, one
+execution guard and one post-entry manual position monitor.
 
-## What V1.5 does
+## What V1.8 adds
 
-- Fetches NIFTY, India VIX, Top-7 heavyweights, completed 1m/3m/15m candles,
-  nearest NIFTY futures volume and the nearest-expiry ATM±7 option chain.
-- Calculates Price Action, Support/Resistance, EMA20/50, MACD, RSI and
-  time-normalized NIFTY-futures volume.
-- Calculates Premium + OI + Volume flow, 1m/3m/5m continuity, persistence,
-  OI walls, wall migration, clusters and PCR.
-- Uses one canonical final brain to display independent suitability scores for
-  CE Sell, PE Sell and Iron Condor, plus a separate WAIT Need score.
-- Converts the already-selected final action into protected short-strike and
-  farther-OTM hedge candidates from the same option-chain snapshot.
-- Applies a separate execution guard that cannot change the selected strategy.
-  It checks consecutive fresh confirmations, entry time, protected-plan risk,
-  one-trade/day state and live feed integrity.
-- Calculates risk budget, risk per lot, permitted lots, target-credit capture,
-  premium-loss trigger and compulsory exit time from editable risk settings.
-- Defaults to a conservative 0.5% risk budget, one-lot cap, 10:15–11:30 entry
-  window, 35% credit-capture target, 40% spread-loss trigger and 14:30 exit.
-- Stores a small same-day local discipline journal. A manually marked trade
-  locks the day; target/manual exit or SL outcome can be recorded afterward.
-- Keeps every output reference-only when the market is closed.
-- Supports optional bounded FII/DII and verified event-risk context.
-- Never places, modifies or exits broker orders.
+- A manually marked `ENTRY READY` setup is frozen with its exact short and hedge
+  strikes, entry prices, expiry, lots, lot size, entry spot and risk thresholds.
+- The same Dhan option-chain response is retained internally for exact-leg
+  monitoring, even when a moved strike falls outside the ATM table shown on screen.
+- Current protected-combination close debit uses short-leg ask and hedge-leg bid,
+  with LTP only as fallback.
+- Shows estimated live P&L in points and rupees, target-capture progress and each
+  leg's contribution.
+- Deterministic alerts: `TARGET REACHED`, `SL TRIGGERED`, spot invalidation,
+  compulsory-time exit, profit protection, rising risk and data-blocked state.
+- Market-closed sessions remain `REFERENCE ONLY`; missing exact-leg prices never
+  produce a false live P&L.
+- Manual outcome recording stores the observed exit debit and estimated P&L.
+- V1 discipline state migrates safely to the V2 journal schema.
+
+## Existing production flow
+
+1. One authoritative DhanHQ market snapshot.
+2. Price action, levels, EMA/MACD/RSI and NIFTY-futures volume.
+3. Premium + OI + volume intelligence, movement windows, persistence, walls,
+   clusters and PCR.
+4. Top-7 contribution, India VIX and optional FII/DII/event context.
+5. One final brain: CE Sell, PE Sell, Iron Condor and WAIT Need.
+6. Protected strike and mandatory hedge planner.
+7. Freshness, confirmations, entry-window, risk-budget and one-trade guard.
+8. Manual Position Guardian after the user marks the trade taken.
+
+The app never places, modifies or exits a broker order.
 
 ## Streamlit secrets
 
@@ -53,7 +59,6 @@ ruff check .
 ruff format --check .
 ```
 
-Decision-support only. Premium, target, stop and risk values are estimates based
-on the current snapshot and configured inputs. Verify contract lot size,
-bid/ask, slippage, margin, liquidity, broker fills and hedge pricing before any
-trade.
+Decision-support only. Combination debit and P&L are estimates from available
+bid/ask values. Verify actual broker positions, fills, slippage, charges, margin,
+liquidity and exit prices before acting.

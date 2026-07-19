@@ -1,0 +1,31 @@
+UPLOAD ALL 18 FILES IN THE V1.8 PATCH
+
+ROOT FILES
+1. ARCHITECTURE.md
+2. README.md
+3. app.py
+4. config.py
+5. models.py
+6. DEPLOY_V1_8.txt
+7. V1_8_UPLOAD_LIST.txt
+8. V1_8_DELETE_LIST.txt
+9. V1_8_CHANGELOG.txt
+10. V1_8_TEST_REPORT.txt
+
+ANALYSIS
+11. analysis/position_guardian.py
+
+SERVICES
+12. services/discipline_store.py
+13. services/snapshot_service.py
+
+TESTS
+14. tests/test_discipline_store.py
+15. tests/test_one_brain_architecture.py
+16. tests/test_position_guardian.py
+17. tests/test_release_hygiene.py
+
+UI
+18. ui/components.py
+
+No other V1.5 application files need to be uploaded again.
