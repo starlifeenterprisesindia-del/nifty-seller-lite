@@ -1,0 +1,24 @@
+NIFTY SELLER LITE V2.8 - DEPLOYMENT
+
+1. Extract nifty-seller-lite-v2-8-upload-only-patch.zip.
+2. Open the extracted folder.
+3. Upload only its 16 listed files to the existing GitHub repository root.
+4. Preserve analysis/, services/ and tests/ folder paths.
+5. Allow matching files to replace the current versions.
+6. Commit message:
+   V2.8 Pre-Live Final Integrity
+7. Do not delete/recreate the Streamlit app.
+8. Do not change Streamlit Secrets.
+9. Wait for automatic redeployment.
+10. Confirm version:
+    2.8.0_PRELIVE_FINAL_INTEGRITY
+11. Generate one PDF and verify:
+    - no raw JSON/code pages at the end
+    - no visible <br/> text
+    - no black-square rupee glyphs
+    - final page is Audit Completeness and Live-Test Checklist
+12. Delete obsolete V2.7 release documents using V2_8_DELETE_LIST.txt.
+
+Live-market entry remains read-only and is blocked unless flow confidence >=75%, all
+1m/3m/5m windows are READY, persistence is mature, two fresh confirmations exist,
+and 3m/15m are aligned with the selected setup.

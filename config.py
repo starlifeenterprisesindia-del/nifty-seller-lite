@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.7.0_INSTITUTIONAL_JOURNAL_INTEGRITY"
+    version: str = "2.8.0_PRELIVE_FINAL_INTEGRITY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -141,6 +141,8 @@ class AppConfig:
     discipline_signal_dedupe_seconds: int = 20
     discipline_signal_max_gap_seconds: int = 420
     execution_required_confirmations: int = 2
+    execution_min_flow_confidence: float = 75.0
+    execution_required_flow_windows: int = 3
     risk_default_capital: float = 250000.0
     risk_default_pct: float = 0.5
     risk_default_lot_size: int = 65

@@ -92,3 +92,15 @@ def test_context_store_backup_round_trip(tmp_path):
     rows = second.import_bytes(first.export_bytes())
     assert len(rows) == 1
     assert rows[0]["fii_index_futures_net"] == 5393.0
+
+
+def test_context_store_rejects_likely_contract_quantity_in_crore_field(tmp_path):
+    store = MarketContextStore(tmp_path / "context.json")
+    with pytest.raises(ValueError, match="looks too large"):
+        store.upsert(
+            session_date=date(2026, 7, 17),
+            fii_cash_net=-376.4,
+            dii_cash_net=1017.9,
+            fii_index_futures_net=-216528,
+            event_risk="NONE",
+        )

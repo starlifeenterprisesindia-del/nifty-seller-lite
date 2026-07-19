@@ -779,6 +779,7 @@ class SnapshotService:
             decision=decision,
             trade_plan=trade_plan,
             market_session=market_session,
+            option_intelligence=option_intelligence,
             price_action=price_action,
             risk_profile=profile,
             discipline_state=discipline_state,

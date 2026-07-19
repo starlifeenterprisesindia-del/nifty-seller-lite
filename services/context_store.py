@@ -24,6 +24,7 @@ class MarketContextStore:
     """
 
     SCHEMA_VERSION = 1
+    MAX_ABS_CRORE = 100_000.0
     ALLOWED_EVENT_RISK = {"NONE", "LOW", "MEDIUM", "HIGH"}
 
     def __init__(self, path: str | Path | None = None):
@@ -42,14 +43,20 @@ class MarketContextStore:
                 if fcntl is not None:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    @staticmethod
-    def _number(value: Any) -> float | None:
+    @classmethod
+    def _number(cls, value: Any, field_name: str = "value") -> float | None:
         if value in (None, ""):
             return None
         try:
-            return round(float(value), 4)
+            number = round(float(value), 4)
         except (TypeError, ValueError):
-            raise ValueError(f"Invalid numeric context value: {value!r}") from None
+            raise ValueError(f"Invalid {field_name}: {value!r}") from None
+        if abs(number) > cls.MAX_ABS_CRORE:
+            raise ValueError(
+                f"{field_name} looks too large ({number:,.2f} crore). "
+                "Enter the daily net amount in crore, not contracts or cumulative quantity."
+            )
+        return number
 
     def _empty(self) -> dict[str, Any]:
         return {"schema_version": self.SCHEMA_VERSION, "entries": []}
@@ -116,9 +123,11 @@ class MarketContextStore:
             raise ValueError("Medium/high event risk must be marked verified")
         entry = {
             "date": session_date.isoformat(),
-            "fii_cash_net": self._number(fii_cash_net),
-            "dii_cash_net": self._number(dii_cash_net),
-            "fii_index_futures_net": self._number(fii_index_futures_net),
+            "fii_cash_net": self._number(fii_cash_net, "FII cash net"),
+            "dii_cash_net": self._number(dii_cash_net, "DII cash net"),
+            "fii_index_futures_net": self._number(
+                fii_index_futures_net, "FII index futures net"
+            ),
             "event_risk": level,
             "event_note": str(event_note or "").strip()[:280],
             "verified": bool(verified),
@@ -187,10 +196,15 @@ class MarketContextStore:
             validated.append(
                 {
                     "date": session_date.isoformat(),
-                    "fii_cash_net": self._number(raw.get("fii_cash_net")),
-                    "dii_cash_net": self._number(raw.get("dii_cash_net")),
+                    "fii_cash_net": self._number(
+                        raw.get("fii_cash_net"), "FII cash net"
+                    ),
+                    "dii_cash_net": self._number(
+                        raw.get("dii_cash_net"), "DII cash net"
+                    ),
                     "fii_index_futures_net": self._number(
-                        raw.get("fii_index_futures_net")
+                        raw.get("fii_index_futures_net"),
+                        "FII index futures net",
                     ),
                     "event_risk": level,
                     "event_note": str(raw.get("event_note") or "").strip()[:280],

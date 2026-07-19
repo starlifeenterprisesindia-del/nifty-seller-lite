@@ -1,0 +1,21 @@
+Upload these files to the existing repository root, preserving folders:
+
+1. ARCHITECTURE.md
+2. README.md
+3. app.py
+4. config.py
+5. analysis/execution_guard.py
+6. services/context_store.py
+7. services/pdf_report.py
+8. services/snapshot_service.py
+9. tests/test_context_store.py
+10. tests/test_execution_guard.py
+11. tests/test_pdf_report.py
+12. DEPLOY_V2_8.txt
+13. V2_8_CHANGELOG.txt
+14. V2_8_TEST_REPORT.txt
+15. V2_8_UPLOAD_LIST.txt
+16. V2_8_DELETE_LIST.txt
+
+Do not upload the outer extracted folder. Upload its contents to the repository root.
+Do not upload caches, generated PDFs, runtime JSON journals or secrets.

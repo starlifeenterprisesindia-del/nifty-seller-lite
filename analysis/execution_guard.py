@@ -11,11 +11,47 @@ from models import (
     FeedStatus,
     FinalDecision,
     MarketSession,
+    OptionIntelligence,
     PriceActionBundle,
     RiskProfile,
     SetupPlan,
     TradePlanBundle,
 )
+
+
+def _flow_ready(option: OptionIntelligence) -> tuple[int, bool]:
+    ready_windows = sum(1 for item in option.windows if item.status == "READY")
+    mature = (
+        option.status == "READY"
+        and option.confidence >= CONFIG.execution_min_flow_confidence
+        and ready_windows >= CONFIG.execution_required_flow_windows
+        and option.persistence not in {"WARMING UP", "UNAVAILABLE"}
+    )
+    return ready_windows, mature
+
+
+def _timeframe_aligned(setup: str, price_action: PriceActionBundle) -> bool:
+    three = f"{price_action.three_minute.structure} {price_action.three_minute.event}".upper()
+    fifteen = f"{price_action.fifteen_minute.structure} {price_action.fifteen_minute.event}".upper()
+
+    def state(text: str) -> str:
+        if "MIXED" in text or "TRANSITION" in text or "RANGE" in text:
+            return "RANGE"
+        if "BULLISH" in text and "BEARISH" not in text:
+            return "BULLISH"
+        if "BEARISH" in text and "BULLISH" not in text:
+            return "BEARISH"
+        return "RANGE"
+
+    three_state = state(three)
+    fifteen_state = state(fifteen)
+    if setup == "PE SELL":
+        return three_state == fifteen_state == "BULLISH"
+    if setup == "CE SELL":
+        return three_state == fifteen_state == "BEARISH"
+    if setup == "IRON CONDOR":
+        return three_state == fifteen_state == "RANGE"
+    return False
 
 
 def _selected_plan(bundle: TradePlanBundle) -> SetupPlan | None:
@@ -160,6 +196,7 @@ def calculate_execution_guard(
     decision: FinalDecision,
     trade_plan: TradePlanBundle,
     market_session: MarketSession,
+    option_intelligence: OptionIntelligence,
     price_action: PriceActionBundle,
     risk_profile: RiskProfile,
     discipline_state: DisciplineState,
@@ -220,6 +257,26 @@ def calculate_execution_guard(
             blockers.append("Completed candles are not confirmed live")
         if not _fresh_live(feed_status, "option_chain"):
             blockers.append("Option chain is not confirmed live")
+        ready_windows, flow_mature = _flow_ready(option_intelligence)
+        if option_intelligence.status != "READY":
+            blockers.append("Options intelligence is not READY")
+        if option_intelligence.confidence < CONFIG.execution_min_flow_confidence:
+            blockers.append(
+                f"Flow confidence {option_intelligence.confidence:.1f}% is below "
+                f"{CONFIG.execution_min_flow_confidence:.0f}%"
+            )
+        if ready_windows < CONFIG.execution_required_flow_windows:
+            blockers.append(
+                f"Option-flow windows ready {ready_windows}/"
+                f"{CONFIG.execution_required_flow_windows}"
+            )
+        if not flow_mature and option_intelligence.persistence in {
+            "WARMING UP",
+            "UNAVAILABLE",
+        }:
+            blockers.append("Option-flow persistence is still warming up")
+        if setup != "WAIT" and not _timeframe_aligned(setup, price_action):
+            blockers.append("3m and 15m trend coherence is not aligned")
         if confirmations < CONFIG.execution_required_confirmations:
             blockers.append("Final action needs consecutive fresh confirmations")
         if discipline_state.trades_taken >= 1 or discipline_state.day_locked:

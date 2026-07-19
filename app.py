@@ -48,8 +48,8 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.7 Institutional Journal Integrity — one canonical strategy brain, bounded "
-    "market memory, full audit PDF and a date-wise 15-trading-session FII/DII journal. "
+    "V2.8 Pre-Live Final Integrity — one canonical strategy brain, strict data-readiness "
+    "gates, bounded market memory, clean audit PDF and a 15-session FII/DII journal. "
     "Read only; no order placement."
 )
 
@@ -180,7 +180,7 @@ with st.sidebar:
             key=f"dii_cash_{context_key}",
         )
         fii_futures_raw = st.text_input(
-            "FII index futures net ₹ crore (optional)",
+            "FII index futures net ₹ crore (optional; amount only, not contracts)",
             value=context_text(saved_context.get("fii_index_futures_net")),
             key=f"fii_futures_{context_key}",
         )
@@ -218,7 +218,7 @@ with st.sidebar:
         st.caption(
             "One row per trading date. Same date updates only that row; a new date adds "
             "a row. Only the latest 15 trading sessions are kept. Missing stays missing, "
-            "never zero."
+            "never zero. Daily amounts above 100,000 crore are rejected as likely input errors."
         )
 
         saved_rows = list(reversed(context_store.load()))
@@ -376,6 +376,17 @@ snapshot = st.session_state.snapshot
 render_market_session(snapshot)
 render_header(snapshot)
 
+readiness = snapshot.execution_guard.readiness
+if readiness == "ENTRY READY":
+    st.success("PRE-ENTRY DATA STATUS: LIVE READY — all safety gates passed")
+elif readiness == "REFERENCE ONLY":
+    st.warning("PRE-ENTRY DATA STATUS: REFERENCE ONLY — no live entry permitted")
+else:
+    blockers = (
+        "; ".join(snapshot.execution_guard.blockers[:3]) or "Final action is not ready"
+    )
+    st.error(f"PRE-ENTRY DATA STATUS: {readiness} — {blockers}")
+
 render_evidence_matrix(snapshot)
 render_decision(snapshot)
 render_market_outlook(snapshot)
@@ -383,7 +394,8 @@ render_market_outlook(snapshot)
 st.subheader("Full Live Audit PDF")
 st.caption(
     "The PDF freezes this exact authoritative snapshot for 5-minute and 15-minute live "
-    "verification. It does not fetch data or recalculate the Final One-Brain Decision."
+    "verification. It does not fetch data or recalculate the Final One-Brain Decision. "
+    "The PDF contains audit tables only — no raw JSON/code appendix."
 )
 pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
 if pdf_snapshot_key != snapshot.snapshot_id:
@@ -561,7 +573,7 @@ with st.expander("Detailed Options Intelligence", expanded=False):
     with option_tabs[5]:
         render_market_context(snapshot)
 
-with st.expander("Raw Market Data & Snapshot JSON", expanded=False):
+with st.expander("Developer Raw Market Data (screen only)", expanded=False):
     market_tabs = st.tabs(
         [
             "Candles & Futures Volume",

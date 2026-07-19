@@ -41,3 +41,12 @@ def test_pdf_report_is_read_only_and_not_a_second_brain():
     assert "requests." not in text
     assert "OptionStateStore" not in text
     assert "DisciplineStore" not in text
+
+
+def test_pdf_excludes_raw_json_code_appendix_and_uses_clean_breaks():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "services" / "pdf_report.py").read_text(encoding="utf-8")
+    assert "Canonical Snapshot JSON Summary" not in text
+    assert "json.dumps(" not in text
+    assert 'return "\\n".join' in text
+    assert "₹" not in text

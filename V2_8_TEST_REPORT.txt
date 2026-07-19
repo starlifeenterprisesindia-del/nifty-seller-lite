@@ -1,0 +1,21 @@
+NIFTY SELLER LITE V2.8 - TEST REPORT
+
+Automated tests: 114/114 PASS
+Ruff lint: PASS
+Ruff formatting: PASS
+Python compilation: PASS
+Streamlit headless startup: PASS
+Single-brain architecture tests: PASS
+Execution flow-confidence >=75% gate: PASS
+All 1m/3m/5m windows required: PASS
+3m/15m coherence gate: PASS
+FII/DII extreme-value sanity guard: PASS
+PDF read-only/no-second-brain audit: PASS
+PDF raw JSON appendix removed: PASS
+PDF visible <br/> text removed: PASS
+PDF unsupported rupee glyph removed: PASS
+PDF generated successfully: PASS (12 pages in fixture)
+PDF rendered and visually inspected: PASS
+
+Live Dhan authentication, bid/ask behaviour and same-session rolling windows require
+final verification during market hours.

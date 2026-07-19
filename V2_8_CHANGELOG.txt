@@ -1,0 +1,33 @@
+NIFTY SELLER LITE V2.8 - PRE-LIVE FINAL INTEGRITY
+
+SAFETY GATES
+- Added a visible PRE-ENTRY DATA STATUS banner.
+- Live entry now requires option-flow confidence >=75%.
+- All 1m/3m/5m option-flow windows must be READY.
+- WARMING UP/UNAVAILABLE option persistence blocks entry.
+- Two consecutive fresh action confirmations remain mandatory.
+- PE Sell requires bullish 3m+15m coherence.
+- CE Sell requires bearish 3m+15m coherence.
+- Iron Condor requires range/mixed coherence on both timeframes.
+- Execution Guard still cannot select or change a strategy.
+
+FII/DII INPUT INTEGRITY
+- Manual institutional values above 100,000 crore are rejected as likely wrong units.
+- FII index-futures field explicitly asks for amount in crore, not contracts.
+- Existing date-wise 15-session journal, upsert and backup/restore are retained.
+
+PDF FINAL CLEANUP
+- Removed the raw Canonical Snapshot JSON/code appendix.
+- Replaced it with a compact Audit Completeness and Live-Test Checklist.
+- Fixed visible <br/> text in evidence/blocker cells.
+- Replaced unsupported rupee glyphs with Rs. in the PDF to prevent black squares.
+- PDF remains a frozen rendering of the same MarketSnapshot and performs no API request
+  or independent decision calculation.
+- Typical full report reduced from about 32 pages to about 12 pages while retaining raw
+  option/candle audit tables and 5m/15m verification worksheet.
+
+NOT ADDED BEFORE LIVE TESTING
+- No auto order placement, auto hedge or auto close-all.
+- No second prediction/Greek/volatility brain.
+- OI velocity, IV skew, VIX percentile and portfolio Greeks remain deferred until live
+  data is observed across multiple sessions, avoiding a risky last-minute engine change.

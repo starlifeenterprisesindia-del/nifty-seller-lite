@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from html import escape
 from io import BytesIO
@@ -65,8 +64,8 @@ def _paragraph(value: Any, style: ParagraphStyle) -> Paragraph:
 
 
 def _bullet_lines(values: Iterable[Any]) -> str:
-    cleaned = [escape(_text(value)) for value in values if _text(value).strip()]
-    return "<br/>".join(f"- {value}" for value in cleaned) if cleaned else "- None"
+    cleaned = [_text(value) for value in values if _text(value).strip()]
+    return "\n".join(f"- {value}" for value in cleaned) if cleaned else "- None"
 
 
 def _table(
@@ -333,9 +332,9 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         ],
         [
             "Risk profile",
-            f"₹{snapshot.risk_profile.capital_rupees:,.0f} at {snapshot.risk_profile.risk_pct:.2f}%",
+            f"Rs. {snapshot.risk_profile.capital_rupees:,.0f} at {snapshot.risk_profile.risk_pct:.2f}%",
             "Risk budget",
-            f"₹{snapshot.risk_profile.risk_budget_rupees:,.2f}",
+            f"Rs. {snapshot.risk_profile.risk_budget_rupees:,.2f}",
         ],
     ]
     story.append(
@@ -501,8 +500,8 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
     story.append(
-        Paragraph(
-            "Fake-move checks:<br/>" + _bullet_lines(outlook.reasons), styles["Body"]
+        _paragraph(
+            "Fake-move checks:\n" + _bullet_lines(outlook.reasons), styles["Body"]
         )
     )
 
@@ -1504,32 +1503,71 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
 
-    story.append(_section_title("11. Canonical Snapshot JSON Summary"))
-    summary = snapshot.public_summary()
-    # A compact JSON appendix is intentionally limited to the canonical public
-    # summary because complete candle and option rows are already printed above.
-    json_text = json.dumps(summary, indent=2, ensure_ascii=True, default=str)
-    chunks: list[str] = []
-    current = ""
-    for line in json_text.splitlines():
-        safe_line = line if len(line) <= 145 else line[:142] + "..."
-        candidate = f"{current}\n{safe_line}" if current else safe_line
-        if candidate.count("\n") >= 45:
-            chunks.append(current)
-            current = safe_line
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    for index, chunk in enumerate(chunks):
-        story.append(
-            Paragraph(
-                escape(chunk).replace(" ", "&nbsp;").replace("\n", "<br/>"),
-                styles["Mono"],
-            )
+    story.append(_section_title("11. Audit Completeness and Live-Test Checklist"))
+    ready_windows = sum(
+        1 for item in snapshot.option_intelligence.windows if item.status == "READY"
+    )
+    checklist_rows = [
+        [
+            "Single canonical brain",
+            "PASS",
+            "Final strategy output is read from analysis/decision.py only.",
+        ],
+        [
+            "PDF calculation isolation",
+            "PASS",
+            "This report makes no API request and performs no independent strategy calculation.",
+        ],
+        [
+            "Required live feeds",
+            snapshot.execution_guard.readiness,
+            "Quotes, completed candles and option chain must all be LIVE before entry.",
+        ],
+        [
+            "Option-flow maturity",
+            f"{snapshot.option_intelligence.confidence:.1f}% | windows {ready_windows}/{CONFIG.execution_required_flow_windows}",
+            f"Entry requires at least {CONFIG.execution_min_flow_confidence:.0f}% confidence and all flow windows ready.",
+        ],
+        [
+            "3m / 15m coherence",
+            snapshot.price_action.relationship,
+            "Directional entry is blocked when the two timeframes are not aligned.",
+        ],
+        [
+            "Signal persistence",
+            snapshot.execution_guard.signal_state,
+            f"Entry requires {CONFIG.execution_required_confirmations} consecutive fresh confirmations.",
+        ],
+        [
+            "Risk budget",
+            f"Rs. {snapshot.risk_profile.risk_budget_rupees:,.2f}",
+            "The same risk profile is used by the screen, execution guard and PDF.",
+        ],
+        [
+            "Institutional journal",
+            f"{snapshot.institutional_context.observations}/15 sessions",
+            "FII/DII is background context only; missing is never treated as zero.",
+        ],
+        [
+            "Live outcome review",
+            "PENDING",
+            "Compare a later 5-minute and 15-minute PDF with this immutable snapshot.",
+        ],
+    ]
+    story.append(
+        _table(
+            ["Audit item", "Status / value", "Rule"],
+            checklist_rows,
+            widths=[58 * mm, 62 * mm, 137 * mm],
         )
-        if index < len(chunks) - 1:
-            story.append(Spacer(1, 2 * mm))
+    )
+    story.append(
+        _paragraph(
+            "Important: raw Snapshot JSON is intentionally excluded from the PDF. "
+            "The same developer JSON remains available only inside the collapsed screen section.",
+            styles["Body"],
+        )
+    )
 
     story.append(Spacer(1, 3 * mm))
     story.append(

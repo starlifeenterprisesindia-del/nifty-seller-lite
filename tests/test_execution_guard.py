@@ -7,8 +7,12 @@ from models import (
     ExecutionGuard,
     FeedStatus,
     FinalDecision,
+    FlowWindow,
     MarketSession,
+    OIWall,
+    OptionIntelligence,
     OptionLeg,
+    PCRBundle,
     PriceActionBundle,
     RiskProfile,
     SetupPlan,
@@ -123,6 +127,50 @@ def price_action() -> PriceActionBundle:
     )
 
 
+def option_intelligence(
+    confidence: float = 82.0,
+    ready_windows: int = 3,
+    persistence: str = "CONFIRMED",
+) -> OptionIntelligence:
+    windows = tuple(
+        FlowWindow(
+            label=f"{index + 1} minute",
+            target_seconds=(index + 1) * 60,
+            actual_age_seconds=(index + 1) * 60,
+            ce_oi_delta=100.0,
+            pe_oi_delta=200.0,
+            ce_premium_delta=-1.0,
+            pe_premium_delta=1.0,
+            ce_volume_delta=1000.0,
+            pe_volume_delta=2000.0,
+            bias="BULLISH",
+            status="READY" if index < ready_windows else "INSUFFICIENT CONTINUITY",
+        )
+        for index in range(3)
+    )
+    wall = OIWall("CE", 24500, 10000, None, None, 24500, 20000, "READY")
+    pcr = PCRBundle(1.1, 1.2, 1.2, 1.0, "BALANCED", "READY")
+    return OptionIntelligence(
+        as_of=NOW,
+        basis="INTRADAY",
+        snapshot_count=4,
+        bullish_score=80,
+        bearish_score=10,
+        range_score=10,
+        confidence=confidence,
+        market_bias="BULLISH",
+        persistence=persistence,
+        ce_wall=wall,
+        pe_wall=OIWall("PE", 24200, 10000, None, None, 24200, 20000, "READY"),
+        pcr=pcr,
+        windows=windows,
+        flow_rows=(),
+        reasons=("flow ready",),
+        blockers=(),
+        status="READY",
+    )
+
+
 def risk_profile(capital: float = 2_500_000) -> RiskProfile:
     return RiskProfile(
         capital_rupees=capital,
@@ -170,6 +218,7 @@ def run(**overrides) -> ExecutionGuard:
         "decision": decision(),
         "trade_plan": trade_plan(),
         "market_session": MarketSession("LIVE", "LIVE", True, "fresh"),
+        "option_intelligence": option_intelligence(),
         "price_action": price_action(),
         "risk_profile": risk_profile(),
         "discipline_state": discipline(),
@@ -229,3 +278,35 @@ def test_wait_action_cannot_be_overridden_by_guard():
     assert result.readiness == "BLOCKED"
     assert result.selected_setup == "PE SELL"
     assert "final one-brain action is wait" in " ".join(result.blockers).lower()
+
+
+def test_flow_confidence_below_75_blocks_entry():
+    result = run(option_intelligence=option_intelligence(confidence=74.0))
+    assert result.readiness == "BLOCKED"
+    assert "flow confidence" in " ".join(result.blockers).lower()
+
+
+def test_all_three_flow_windows_are_required():
+    result = run(option_intelligence=option_intelligence(ready_windows=2))
+    assert result.readiness == "BLOCKED"
+    assert "windows ready 2/3" in " ".join(result.blockers).lower()
+
+
+def test_timeframe_conflict_blocks_directional_entry():
+    mixed = price_action()
+    mixed = PriceActionBundle(
+        three_minute=mixed.three_minute,
+        fifteen_minute=TimeframePriceAction(
+            **{
+                **mixed.fifteen_minute.__dict__,
+                "structure": "MIXED / TRANSITION",
+                "event": "STRUCTURE MIXED",
+            }
+        ),
+        relationship="TIMEFRAMES MIXED",
+        combined_state="MIXED / TRANSITION",
+        confidence=70,
+    )
+    result = run(price_action=mixed)
+    assert result.readiness == "BLOCKED"
+    assert "coherence" in " ".join(result.blockers).lower()

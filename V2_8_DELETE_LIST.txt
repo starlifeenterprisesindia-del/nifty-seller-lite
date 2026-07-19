@@ -1,0 +1,9 @@
+After V2.8 is deployed successfully, delete these obsolete V2.7 release documents if present:
+
+- DEPLOY_V2_7.txt
+- V2_7_CHANGELOG.txt
+- V2_7_DELETE_LIST.txt
+- V2_7_TEST_REPORT.txt
+- V2_7_UPLOAD_LIST.txt
+
+Do not delete application folders, data/.gitkeep, .streamlit, requirements files or V2.8 documents.
