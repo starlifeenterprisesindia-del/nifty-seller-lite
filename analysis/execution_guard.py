@@ -286,10 +286,16 @@ def calculate_execution_guard(
             blockers.append("New-entry window has closed")
         elif not within_window:
             reasons.append("Wait for the configured entry window")
-        if risk_per_lot is None:
-            blockers.append("Protected-plan risk could not be calculated")
-        elif allowed_lots < 1:
-            blockers.append("Risk budget does not permit even one protected lot")
+        concrete_setup_selected = setup in {"CE SELL", "PE SELL", "IRON CONDOR"}
+        if concrete_setup_selected and plan is not None and plan.available:
+            if risk_per_lot is None:
+                blockers.append("Selected protected-plan risk could not be calculated")
+            elif allowed_lots < 1:
+                blockers.append(
+                    "0 LOTS — one-lot risk "
+                    f"Rs. {risk_per_lot:,.2f} exceeds budget "
+                    f"Rs. {risk_profile.risk_budget_rupees:,.2f}"
+                )
 
         hard_block = bool(blockers)
         if hard_block:

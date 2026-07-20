@@ -4,6 +4,8 @@ import importlib.util
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from services.pdf_report import audit_pdf_filename, build_full_audit_pdf
 from services.snapshot_service import SnapshotService
 
@@ -50,3 +52,51 @@ def test_pdf_excludes_raw_json_code_appendix_and_uses_clean_breaks():
     assert "json.dumps(" not in text
     assert 'return "\\n".join' in text
     assert "₹" not in text
+
+
+def test_snapshot_service_filters_forming_candles_and_ages_from_close():
+    now = datetime(2026, 7, 20, 10, 22, 24)
+    frame = pd.DataFrame(
+        {
+            "timestamp": [
+                datetime(2026, 7, 20, 10, 18),
+                datetime(2026, 7, 20, 10, 21),
+            ],
+            "close": [24222.6, 24224.8],
+            "is_complete": [True, False],
+        }
+    )
+    completed = SnapshotService._completed_only(frame)
+    assert len(completed) == 1
+    assert completed.iloc[-1]["timestamp"] == datetime(2026, 7, 20, 10, 18)
+    assert SnapshotService._completed_only(frame.drop(columns=["is_complete"])).empty
+
+    one_minute = pd.DataFrame(
+        {
+            "timestamp": [datetime(2026, 7, 20, 10, 21)],
+            "is_complete": [True],
+        }
+    )
+    age = SnapshotService._latest_candle_age_seconds(
+        one_minute, now, interval_minutes=1
+    )
+    assert age == 24.0
+
+
+def test_pdf_has_independent_required_feed_status_and_completed_filter():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "services" / "pdf_report.py").read_text(encoding="utf-8")
+    assert 'required_feeds_value = (' in text
+    assert '"PASS / LIVE"' in text
+    assert "snapshot.execution_guard.readiness" not in text.split(
+        '"Required live feeds"', 1
+    )[1].split("],", 1)[0]
+    assert "_completed_audit_frame(frame)" in text
+
+
+def test_app_separates_feed_integrity_from_execution_readiness():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "app.py").read_text(encoding="utf-8")
+    assert "REQUIRED LIVE FEEDS: PASS" in text
+    assert "EXECUTION STATUS: ENTRY READY" in text
+    assert "PRE-ENTRY DATA STATUS" not in text

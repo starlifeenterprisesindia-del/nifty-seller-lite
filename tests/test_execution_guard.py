@@ -266,11 +266,27 @@ def test_after_entry_window_blocks_new_trade():
     assert "window" in " ".join(result.blockers).lower()
 
 
-def test_small_risk_budget_permits_zero_lots():
+def test_small_risk_budget_permits_zero_lots_with_exact_reason():
     result = run(risk_profile=risk_profile(capital=50_000))
     assert result.allowed_lots == 0
     assert result.readiness == "BLOCKED"
-    assert "risk budget" in " ".join(result.blockers).lower()
+    blockers = " ".join(result.blockers).lower()
+    assert "0 lots" in blockers
+    assert "one-lot risk" in blockers
+    assert "exceeds budget" in blockers
+
+
+def test_wait_without_selected_plan_does_not_claim_risk_calculation_failed():
+    waiting_plan = trade_plan()
+    waiting_plan = TradePlanBundle(
+        **{
+            **waiting_plan.__dict__,
+            "selected_setup": "WAIT",
+        }
+    )
+    result = run(decision=decision("WAIT"), trade_plan=waiting_plan)
+    blockers = " ".join(result.blockers).lower()
+    assert "risk could not be calculated" not in blockers
 
 
 def test_wait_action_cannot_be_overridden_by_guard():

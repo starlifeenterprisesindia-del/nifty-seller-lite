@@ -48,9 +48,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.8 Pre-Live Final Integrity — one canonical strategy brain, strict data-readiness "
-    "gates, bounded market memory, clean audit PDF and a 15-session FII/DII journal. "
-    "Read only; no order placement."
+    "V2.8.1 Candle Integrity Hotfix — one canonical strategy brain, completed-candle "
+    "enforcement, separate live-feed and execution gates, bounded market memory and "
+    "clean audit PDF. Read only; no order placement."
 )
 
 
@@ -376,16 +376,36 @@ snapshot = st.session_state.snapshot
 render_market_session(snapshot)
 render_header(snapshot)
 
+required_feed_keys = ("quotes", "candles", "option_chain")
+required_feed_states = {
+    key: snapshot.feed_status.get(key) for key in required_feed_keys
+}
+all_required_feeds_live = all(
+    item is not None and item.ok and item.use_state == "LIVE"
+    for item in required_feed_states.values()
+)
+if all_required_feeds_live:
+    st.success(
+        "REQUIRED LIVE FEEDS: PASS — quote, completed candles and option chain LIVE"
+    )
+else:
+    unavailable = [
+        f"{key}={item.use_state if item is not None else 'MISSING'}"
+        for key, item in required_feed_states.items()
+        if item is None or not item.ok or item.use_state != "LIVE"
+    ]
+    st.error("REQUIRED LIVE FEEDS: BLOCKED — " + "; ".join(unavailable))
+
 readiness = snapshot.execution_guard.readiness
 if readiness == "ENTRY READY":
-    st.success("PRE-ENTRY DATA STATUS: LIVE READY — all safety gates passed")
+    st.success("EXECUTION STATUS: ENTRY READY — all strategy and risk gates passed")
 elif readiness == "REFERENCE ONLY":
-    st.warning("PRE-ENTRY DATA STATUS: REFERENCE ONLY — no live entry permitted")
+    st.warning("EXECUTION STATUS: REFERENCE ONLY — no live entry permitted")
 else:
     blockers = (
         "; ".join(snapshot.execution_guard.blockers[:3]) or "Final action is not ready"
     )
-    st.error(f"PRE-ENTRY DATA STATUS: {readiness} — {blockers}")
+    st.error(f"EXECUTION STATUS: {readiness} — {blockers}")
 
 render_evidence_matrix(snapshot)
 render_decision(snapshot)

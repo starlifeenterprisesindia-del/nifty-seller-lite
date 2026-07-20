@@ -1,4 +1,7 @@
-Upload these files to the existing repository root, preserving folders:
+V2.8.1 COMPLETED-CANDLE HOTFIX — UPLOAD THESE 16 FILES
+
+Upload these files to the existing repository root, preserving folders and replacing
+matching files:
 
 1. ARCHITECTURE.md
 2. README.md
@@ -17,5 +20,5 @@ Upload these files to the existing repository root, preserving folders:
 15. V2_8_UPLOAD_LIST.txt
 16. V2_8_DELETE_LIST.txt
 
-Do not upload the outer extracted folder. Upload its contents to the repository root.
-Do not upload caches, generated PDFs, runtime JSON journals or secrets.
+Do not upload the outer extracted folder. Do not upload caches, generated PDFs, runtime
+JSON journals, lock files or secrets.

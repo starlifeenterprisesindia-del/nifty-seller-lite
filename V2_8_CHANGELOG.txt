@@ -1,33 +1,26 @@
-NIFTY SELLER LITE V2.8 - PRE-LIVE FINAL INTEGRITY
+NIFTY SELLER LITE V2.8.1 - COMPLETED-CANDLE GUARD HOTFIX
 
-SAFETY GATES
-- Added a visible PRE-ENTRY DATA STATUS banner.
-- Live entry now requires option-flow confidence >=75%.
-- All 1m/3m/5m option-flow windows must be READY.
-- WARMING UP/UNAVAILABLE option persistence blocks entry.
-- Two consecutive fresh action confirmations remain mandatory.
-- PE Sell requires bullish 3m+15m coherence.
-- CE Sell requires bearish 3m+15m coherence.
-- Iron Condor requires range/mixed coherence on both timeframes.
-- Execution Guard still cannot select or change a strategy.
+FIXED — CANDLE INTEGRITY
+- Forming 1m/3m/15m rows are removed from the authoritative snapshot.
+- Missing is_complete metadata fails closed instead of treating rows as completed.
+- 3m aggregation uses completed 1m inputs only.
+- Candle feed age is calculated from candle close time.
+- PDF raw candle tables apply a second completed-row filter.
 
-FII/DII INPUT INTEGRITY
-- Manual institutional values above 100,000 crore are rejected as likely wrong units.
-- FII index-futures field explicitly asks for amount in crore, not contracts.
-- Existing date-wise 15-session journal, upsert and backup/restore are retained.
+FIXED — STATUS CLARITY
+- Required live-feed health is now separate from execution readiness on screen.
+- PDF “Required live feeds” no longer incorrectly copies Execution Guard BLOCKED status.
+- PDF checklist includes a separate Execution gate row.
 
-PDF FINAL CLEANUP
-- Removed the raw Canonical Snapshot JSON/code appendix.
-- Replaced it with a compact Audit Completeness and Live-Test Checklist.
-- Fixed visible <br/> text in evidence/blocker cells.
-- Replaced unsupported rupee glyphs with Rs. in the PDF to prevent black squares.
-- PDF remains a frozen rendering of the same MarketSnapshot and performs no API request
-  or independent decision calculation.
-- Typical full report reduced from about 32 pages to about 12 pages while retaining raw
-  option/candle audit tables and 5m/15m verification worksheet.
+FIXED — RISK MESSAGE
+- WAIT/no selected setup no longer says protected-plan risk could not be calculated.
+- A concrete setup that exceeds budget shows 0 LOTS, exact one-lot risk and exact budget.
 
-NOT ADDED BEFORE LIVE TESTING
-- No auto order placement, auto hedge or auto close-all.
-- No second prediction/Greek/volatility brain.
-- OI velocity, IV skew, VIX percentile and portfolio Greeks remain deferred until live
-  data is observed across multiple sessions, avoiding a risky last-minute engine change.
+UNCHANGED
+- One canonical decision brain.
+- 75% minimum option-flow confidence.
+- All 1m/3m/5m windows required.
+- Two fresh confirmations required.
+- 3m/15m coherence required.
+- One-trade lock, entry window and protected hedge rules retained.
+- No broker order placement or automatic exit.

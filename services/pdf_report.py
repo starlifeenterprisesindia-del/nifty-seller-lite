@@ -256,6 +256,16 @@ def _frame_rows(
     return result
 
 
+def _completed_audit_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Defensive report-only filter for rows already marked as completed."""
+
+    if frame is None or frame.empty:
+        return frame
+    if "is_complete" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    return frame.loc[frame["is_complete"].fillna(False).eq(True)].copy()
+
+
 def _page_decor(canvas: Any, document: Any, snapshot: MarketSnapshot) -> None:
     canvas.saveState()
     width, height = _PAGE_SIZE
@@ -1406,8 +1416,11 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         ("NIFTY future 3-minute candles", snapshot.future_candles_3m, 20),
         ("NIFTY future 15-minute candles", snapshot.future_candles_15m, 12),
     ):
-        available = [column for column in candle_columns if column in frame.columns]
-        rows = _frame_rows(frame, available, tail=tail)
+        completed_frame = _completed_audit_frame(frame)
+        available = [
+            column for column in candle_columns if column in completed_frame.columns
+        ]
+        rows = _frame_rows(completed_frame, available, tail=tail)
         story.append(_sub_title(label))
         if rows:
             widths = [
@@ -1507,6 +1520,21 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     ready_windows = sum(
         1 for item in snapshot.option_intelligence.windows if item.status == "READY"
     )
+    required_feed_keys = ("quotes", "candles", "option_chain")
+    live_feed_names = [
+        key
+        for key in required_feed_keys
+        if (
+            (item := snapshot.feed_status.get(key)) is not None
+            and item.ok
+            and item.use_state == "LIVE"
+        )
+    ]
+    required_feeds_value = (
+        "PASS / LIVE"
+        if len(live_feed_names) == len(required_feed_keys)
+        else f"BLOCKED {len(live_feed_names)}/{len(required_feed_keys)} LIVE"
+    )
     checklist_rows = [
         [
             "Single canonical brain",
@@ -1520,8 +1548,15 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         ],
         [
             "Required live feeds",
-            snapshot.execution_guard.readiness,
+            required_feeds_value,
             "Quotes, completed candles and option chain must all be LIVE before entry.",
+        ],
+        [
+            "Execution gate",
+            snapshot.execution_guard.readiness,
+            snapshot.execution_guard.blockers[0]
+            if snapshot.execution_guard.blockers
+            else "All strategy, timing, persistence and risk gates passed.",
         ],
         [
             "Option-flow maturity",

@@ -1,21 +1,23 @@
-NIFTY SELLER LITE V2.8 - TEST REPORT
+NIFTY SELLER LITE V2.8.1 - HOTFIX TEST REPORT
 
-Automated tests: 114/114 PASS
-Ruff lint: PASS
-Ruff formatting: PASS
-Python compilation: PASS
-Streamlit headless startup: PASS
-Single-brain architecture tests: PASS
-Execution flow-confidence >=75% gate: PASS
-All 1m/3m/5m windows required: PASS
-3m/15m coherence gate: PASS
-FII/DII extreme-value sanity guard: PASS
-PDF read-only/no-second-brain audit: PASS
-PDF raw JSON appendix removed: PASS
-PDF visible <br/> text removed: PASS
-PDF unsupported rupee glyph removed: PASS
-PDF generated successfully: PASS (12 pages in fixture)
-PDF rendered and visually inspected: PASS
+PATCH-LOCAL VALIDATION
+- Python compilation of all 9 included Python files: PASS
+- Execution Guard targeted harness: 11/11 PASS
+- Completed-candle filter targeted method test: PASS
+- Candle age-from-close targeted method test: PASS
+- ZIP cache/pyc hygiene check: PASS before packaging
 
-Live Dhan authentication, bid/ask behaviour and same-session rolling windows require
-final verification during market hours.
+REGRESSION COVERAGE ADDED
+- Forming candle exclusion.
+- Missing completion flag fails closed.
+- Candle age uses interval close.
+- Feed status is independent from execution readiness.
+- WAIT does not claim risk calculation failure.
+- Zero-lot blocker prints exact risk-versus-budget reason.
+
+LIMITATION
+This is an upload-only overlay, not the complete repository. The complete historical
+pytest/ruff/Streamlit suite cannot run inside this isolated patch because unchanged base
+modules (models.py, analysis/candles.py, ui/components.py and others) are intentionally
+not included. Run the full repository suite after overlay/deployment. Authenticated live
+Dhan behavior must be checked in the deployed app.

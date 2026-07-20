@@ -93,7 +93,30 @@ class SnapshotService:
             return None
 
     @staticmethod
-    def _latest_candle_age_seconds(frame: pd.DataFrame, now: datetime) -> float | None:
+    def _completed_only(frame: pd.DataFrame) -> pd.DataFrame:
+        """Return only bars whose interval has fully closed.
+
+        Dhan may include the currently forming row. Analysis modules already respect the
+        ``is_complete`` marker, but the authoritative snapshot and raw audit tables must
+        never expose a forming candle under a "completed candles" label.
+        """
+
+        if frame is None or frame.empty:
+            return frame.copy() if frame is not None else pd.DataFrame()
+        if "is_complete" not in frame.columns:
+            return frame.iloc[0:0].copy().reset_index(drop=True)
+        mask = frame["is_complete"].fillna(False).eq(True)
+        return frame.loc[mask].copy().reset_index(drop=True)
+
+    @staticmethod
+    def _latest_candle_age_seconds(
+        frame: pd.DataFrame,
+        now: datetime,
+        *,
+        interval_minutes: int = 0,
+    ) -> float | None:
+        """Age from candle close, not from the candle's opening timestamp."""
+
         if frame.empty:
             return None
         try:
@@ -107,7 +130,8 @@ class SnapshotService:
                 current = current.tz_localize(IST_TIMEZONE)
             else:
                 current = current.tz_convert(IST_TIMEZONE)
-            return max(0.0, (current - latest).total_seconds())
+            candle_close = latest + pd.Timedelta(minutes=max(0, interval_minutes))
+            return max(0.0, (current - candle_close).total_seconds())
         except Exception:
             return None
 
@@ -213,15 +237,20 @@ class SnapshotService:
             to_date=current,
             include_oi=include_oi,
         )
-        candles_1m = mark_completed_candles(candles_from_dhan(raw_1m), 1, current)
-        candles_3m = mark_completed_candles(
+        marked_1m = mark_completed_candles(candles_from_dhan(raw_1m), 1, current)
+        candles_1m = self._completed_only(marked_1m)
+        marked_3m = mark_completed_candles(
             aggregate_candles(
                 candles_1m.drop(columns=["is_complete"], errors="ignore"), 3
             ),
             3,
             current,
         )
-        candles_15m = mark_completed_candles(candles_from_dhan(raw_15m), 15, current)
+        candles_3m = self._completed_only(marked_3m)
+        marked_15m = mark_completed_candles(
+            candles_from_dhan(raw_15m), 15, current
+        )
+        candles_15m = self._completed_only(marked_15m)
         return candles_1m, candles_3m, candles_15m
 
     def build(
@@ -334,7 +363,9 @@ class SnapshotService:
                 future_candle_error = str(exc)
 
         quote_age = self._quote_age_seconds(nifty_quote, current)
-        latest_1m_age = self._latest_candle_age_seconds(candles_1m, current)
+        latest_1m_age = self._latest_candle_age_seconds(
+            candles_1m, current, interval_minutes=1
+        )
         has_current_day_candle = (
             not candles_1m.empty
             and pd.Timestamp(candles_1m.iloc[-1]["timestamp"]).date() == current.date()
@@ -438,7 +469,9 @@ class SnapshotService:
             name="future_volume",
             ok=future_candle_available,
             fetched_at=current,
-            age_seconds=self._latest_candle_age_seconds(future_candles_1m, current),
+            age_seconds=self._latest_candle_age_seconds(
+                future_candles_1m, current, interval_minutes=1
+            ),
             message=(
                 f"NIFTY future 1m={len(future_candles_1m)}, 3m={len(future_candles_3m)}, 15m={len(future_candles_15m)}"
                 if future_candle_available
@@ -450,7 +483,7 @@ class SnapshotService:
                     available=True,
                     market_session=market_session,
                     age_seconds=self._latest_candle_age_seconds(
-                        future_candles_1m, current
+                        future_candles_1m, current, interval_minutes=1
                     ),
                     max_live_age_seconds=CONFIG.candle_max_age_minutes * 60,
                 )

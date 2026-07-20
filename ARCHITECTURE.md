@@ -1,10 +1,20 @@
-# Architecture — V2.8 Pre-Live Final Integrity
+# Architecture — V2.8.1 Completed-Candle Guard Hotfix
 
 ## One market-data authority
 
 Only `services/snapshot_service.py` reads DhanHQ and builds one `MarketSnapshot`.
 Analysis modules do not fetch data. The same option-chain snapshot is reused for option
 intelligence, strike planning, monitoring and PDF reporting.
+
+## Completed-candle authority
+
+Dhan may return the currently forming interval. `SnapshotService` marks intervals and
+then removes every row whose `is_complete` flag is not true before the authoritative
+1m/3m/15m frames are stored or analysed. Missing completion metadata fails closed.
+
+Candle feed age is measured from the last completed 1-minute candle's closing time.
+`services/pdf_report.py` repeats a defensive completed-row filter before printing raw
+candle audit tables; it does not recalculate market evidence.
 
 ## Exactly one strategy brain
 
@@ -15,43 +25,26 @@ PE Sell, Iron Condor, WAIT, Final Action, Signal State, Fake-Move Risk and the c
 The evidence matrix, strike planner, execution guard, position guardian and PDF report
 cannot select or override a strategy.
 
+## Feed state versus execution state
+
+Required feed health and execution readiness are separate:
+
+- Feed health: quote + completed candles + option chain are independently shown as
+  `PASS / LIVE` or blocked.
+- Execution readiness: strategy score, flow windows, timeframe coherence, confirmations,
+  entry time, one-trade lock and risk budget may still return `BLOCKED`.
+
 ## Execution guard boundary
 
-`analysis/execution_guard.py` consumes the already-selected action. It only applies:
-
-- live-feed readiness,
-- 75% minimum flow confidence,
-- 1m/3m/5m flow-window maturity,
-- option-flow persistence,
-- two consecutive fresh confirmations,
-- 3m/15m coherence,
-- entry-time, risk-budget and one-trade rules.
-
-It may return `ENTRY READY`, `WATCH`, `BLOCKED` or `REFERENCE ONLY`, but it cannot
-change CE Sell into PE Sell or create a second strategy path.
-
-## Date-wise institutional journal
-
-`services/context_store.py` owns one atomic JSON journal.
-
-- One row per ISO trading date.
-- Same-date save is an upsert.
-- Different dates remain separate.
-- Only the latest 15 dated rows are retained.
-- Missing values remain `null`, never zero.
-- FII cash and DII cash are primary background evidence.
-- FII index futures is optional secondary confirmation.
-- Values above 100,000 crore are rejected as likely wrong units.
-- JSON export/import provides manual backup for an ephemeral Streamlit filesystem.
+`analysis/execution_guard.py` consumes the already-selected action. It may block or permit
+that action but cannot choose another setup. Risk calculation is required only when a
+concrete protected setup has actually been selected. For a selected setup that does not
+fit the budget, the exact one-lot risk and budget are shown.
 
 ## PDF boundary
 
 `services/pdf_report.py` consumes an already-built snapshot. It makes no API request and
-performs no independent strategy calculation.
-
-The PDF contains readable audit tables, live-outcome checkpoints and a final completeness
-checklist. Raw Snapshot JSON/code is intentionally excluded. Developer JSON remains only
-inside the collapsed screen section.
+performs no independent strategy calculation. Raw Snapshot JSON/code remains excluded.
 
 ## State and safety
 
@@ -59,5 +52,5 @@ inside the collapsed screen section.
 - Weekend/reference snapshots do not pollute live memory.
 - Option history remains same-session and bounded.
 - Dhan HTTP 429 responses are not immediately retried.
-- Credentials, caches, generated PDFs and runtime journals stay outside source code.
+- Credentials, caches, PDFs and runtime journals stay outside source code.
 - The app never places, modifies or exits broker orders.
