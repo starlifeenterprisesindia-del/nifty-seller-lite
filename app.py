@@ -53,7 +53,7 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.10 Live Barrier Roadmap — one canonical strategy brain plus top-screen Barrier + Range Map, "
+    "V2.10.1 Barrier Map Render Hotfix — one canonical strategy brain plus top-screen Barrier + Range Map, "
     "Barrier Strength, Break Pressure, next support/resistance, market-speed danger and India VIX "
     "expected-move context. Read only; no order placement."
 )

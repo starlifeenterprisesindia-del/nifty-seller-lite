@@ -1,0 +1,7 @@
+V2.10.1 — BARRIER MAP RENDER HOTFIX
+
+Fixes the Live Barrier + Range Map showing raw <div> HTML text on screen.
+Cause: Streamlit markdown parsing could treat nested/indented HTML as literal code.
+Fix: render the map with st.html() and compact generated HTML, with a safe markdown fallback.
+
+No Barrier Strength, Break Pressure, Range, Market Speed, VIX, One-Brain, FII/DII, News or strike-selection calculations were changed.

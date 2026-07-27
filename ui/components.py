@@ -28,20 +28,18 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
     sources = escape(_barrier_sources(level))
     strength_width = max(0.0, min(100.0, float(level.strength)))
     pressure_width = max(0.0, min(100.0, float(level.break_pressure)))
-    return f"""
-    <div class="bm-level {css_class}">
-      <div class="bm-level-head">
-        <span class="bm-tag">{escape(level.label)} · {escape(level.side.title())}</span>
-        <span class="bm-state">{state}</span>
-      </div>
-      <div class="bm-zone">{level.lower:,.0f}–{level.upper:,.0f}</div>
-      <div class="bm-bars">
-        <div><span>Strength</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>
-        <div><span>Break Pressure</span><b>{level.break_pressure:.0f}/100</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>
-      </div>
-      <div class="bm-small">Distance {level.distance_points:,.0f} pts · Kyun: {sources}</div>
-    </div>
-    """
+    return (
+        f'<div class="bm-level {css_class}">'
+        f'<div class="bm-level-head"><span class="bm-tag">{escape(level.label)} · {escape(level.side.title())}</span>'
+        f'<span class="bm-state">{state}</span></div>'
+        f'<div class="bm-zone">{level.lower:,.0f}–{level.upper:,.0f}</div>'
+        f'<div class="bm-bars">'
+        f'<div><span>Strength</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>'
+        f'<div><span>Break Pressure</span><b>{level.break_pressure:.0f}/100</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>'
+        f'</div>'
+        f'<div class="bm-small">Distance {level.distance_points:,.0f} pts · Kyun: {sources}</div>'
+        f'</div>'
+    )
 
 
 def render_barrier_map(snapshot: MarketSnapshot) -> None:
@@ -97,51 +95,49 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
     vix_15 = f"{speed.vix_change_15m_pct:+.1f}%" if speed.vix_change_15m_pct is not None else "warming"
     volume_text = f"{speed.volume_ratio:.2f}x" if speed.volume_ratio is not None else "warming"
 
-    st.markdown(
-        f"""
-<style>
-.bm-wrap{{border:1px solid rgba(128,128,128,.25);border-radius:16px;padding:14px;background:rgba(127,127,127,.035);margin:6px 0 10px}}
-.bm-level{{border-radius:12px;padding:10px 12px;margin:7px 0;border-left:6px solid}}
-.bm-level.res{{border-left-color:#d9534f;background:rgba(217,83,79,.08)}}
-.bm-level.sup{{border-left-color:#2e9d63;background:rgba(46,157,99,.08)}}
-.bm-level.secondary{{opacity:.84}}
-.bm-level.primary{{box-shadow:0 0 0 1px rgba(127,127,127,.10) inset}}
-.bm-level.muted{{opacity:.55}}
-.bm-level-head{{display:flex;justify-content:space-between;gap:12px;align-items:center}}
-.bm-tag{{font-size:.78rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase}}
-.bm-state{{font-size:.75rem;font-weight:700;opacity:.8}}
-.bm-zone{{font-size:1.45rem;font-weight:800;line-height:1.2;margin:3px 0 7px}}
-.bm-bars{{display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:.78rem}}
-.bm-bars>div>span{{opacity:.75;margin-right:6px}}
-.bm-bars b{{float:right}}
-.bm-track{{height:6px;border-radius:99px;background:rgba(127,127,127,.18);overflow:hidden;margin-top:4px}}
-.bm-fill{{height:100%;background:#6b7280;border-radius:99px}}
-.bm-fill.pressure{{background:#f59e0b}}
-.bm-small{{font-size:.78rem;opacity:.78;margin-top:7px}}
-.bm-spot{{margin:10px 0;padding:13px;border-radius:12px;text-align:center;border:2px solid rgba(80,130,255,.45);background:rgba(80,130,255,.08)}}
-.bm-spot .price{{font-size:1.55rem;font-weight:900}}
-.bm-road{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;font-size:.82rem}}
-.bm-road>div{{padding:8px;border-radius:9px;background:rgba(127,127,127,.07)}}
-@media (max-width:900px){{.bm-bars,.bm-road{{grid-template-columns:1fr}}}}
-</style>
-<div class="bm-wrap">
-  {r2}
-  {r1}
-  <div class="bm-spot">
-    <div>NIFTY CURRENT</div><div class="price">{spot}</div>
-    <div>{range_state} · Position {range_pos} · Break Bias {bias}</div>
-  </div>
-  {s1}
-  {s2}
-  <div class="bm-road">
-    <div><b>India VIX Risk</b><br>{escape(item.vix_risk)} · Daily move {vix_daily}</div>
-    <div><b>VIX Speed</b><br>5m {vix_5} · 15m {vix_15}</div>
-    <div><b>Option Shock</b><br>{speed.option_shock_score:.0f}/100 · Volume {volume_text}</div>
-  </div>
-</div>
-        """,
-        unsafe_allow_html=True,
+    barrier_html = (
+        '<style>'
+        '.bm-wrap{border:1px solid rgba(128,128,128,.25);border-radius:16px;padding:14px;background:rgba(127,127,127,.035);margin:6px 0 10px}'
+        '.bm-level{border-radius:12px;padding:10px 12px;margin:7px 0;border-left:6px solid}'
+        '.bm-level.res{border-left-color:#d9534f;background:rgba(217,83,79,.08)}'
+        '.bm-level.sup{border-left-color:#2e9d63;background:rgba(46,157,99,.08)}'
+        '.bm-level.secondary{opacity:.84}'
+        '.bm-level.primary{box-shadow:0 0 0 1px rgba(127,127,127,.10) inset}'
+        '.bm-level.muted{opacity:.55}'
+        '.bm-level-head{display:flex;justify-content:space-between;gap:12px;align-items:center}'
+        '.bm-tag{font-size:.78rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase}'
+        '.bm-state{font-size:.75rem;font-weight:700;opacity:.8}'
+        '.bm-zone{font-size:1.45rem;font-weight:800;line-height:1.2;margin:3px 0 7px}'
+        '.bm-bars{display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:.78rem}'
+        '.bm-bars>div>span{opacity:.75;margin-right:6px}'
+        '.bm-bars b{float:right}'
+        '.bm-track{height:6px;border-radius:99px;background:rgba(127,127,127,.18);overflow:hidden;margin-top:4px}'
+        '.bm-fill{height:100%;background:#6b7280;border-radius:99px}'
+        '.bm-fill.pressure{background:#f59e0b}'
+        '.bm-small{font-size:.78rem;opacity:.78;margin-top:7px}'
+        '.bm-spot{margin:10px 0;padding:13px;border-radius:12px;text-align:center;border:2px solid rgba(80,130,255,.45);background:rgba(80,130,255,.08)}'
+        '.bm-spot .price{font-size:1.55rem;font-weight:900}'
+        '.bm-road{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;font-size:.82rem}'
+        '.bm-road>div{padding:8px;border-radius:9px;background:rgba(127,127,127,.07)}'
+        '@media (max-width:900px){.bm-bars,.bm-road{grid-template-columns:1fr}}'
+        '</style>'
+        '<div class="bm-wrap">'
+        + r2 + r1
+        + f'<div class="bm-spot"><div>NIFTY CURRENT</div><div class="price">{spot}</div>'
+          f'<div>{range_state} · Position {range_pos} · Break Bias {bias}</div></div>'
+        + s1 + s2
+        + '<div class="bm-road">'
+          f'<div><b>India VIX Risk</b><br>{escape(item.vix_risk)} · Daily move {vix_daily}</div>'
+          f'<div><b>VIX Speed</b><br>5m {vix_5} · 15m {vix_15}</div>'
+          f'<div><b>Option Shock</b><br>{speed.option_shock_score:.0f}/100 · Volume {volume_text}</div>'
+          '</div></div>'
     )
+    # st.html is the correct Streamlit primitive for raw HTML/CSS. Using st.markdown
+    # can make indented nested HTML appear as literal code on some deployments/themes.
+    if hasattr(st, "html"):
+        st.html(barrier_html)
+    else:
+        st.markdown(barrier_html, unsafe_allow_html=True)
 
     st.info("🧠 **Barrier Brain:** " + item.summary)
     if range_item.explanation:

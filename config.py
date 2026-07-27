@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.10.0_BARRIER_ROADMAP_SPEED_VIX"
+    version: str = "2.10.1_BARRIER_MAP_RENDER_HOTFIX"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
