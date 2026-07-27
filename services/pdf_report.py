@@ -23,6 +23,12 @@ from reportlab.platypus import (
 from analysis.evidence_matrix import build_compact_evidence_matrix
 from config import CONFIG
 from models import MarketSnapshot
+from services.summary_presenter import (
+    best_existing_candidate,
+    brain_hinglish_line,
+    plan_leg_text,
+    required_live_feed_state,
+)
 
 
 _PAGE_SIZE = landscape(A4)
@@ -371,8 +377,78 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
 
+    # Main AI is presentation-only: it condenses the existing canonical snapshot.
+    story.append(_section_title("1. Main AI Market View"))
+    feed_ok, feed_text = required_live_feed_state(snapshot)
+    direction = {"BULLISH": "UP", "BEARISH": "DOWN", "RANGE": "RANGE"}.get(
+        snapshot.decision.market_direction, snapshot.decision.market_direction
+    )
+    speed = snapshot.barrier_map.market_speed
+    story.append(
+        _table(
+            ["NIFTY", "Market rukh", "Final action", "Decision conf.", "Market danger", "Live data", "Entry readiness"],
+            [[
+                snapshot.nifty_quote.get("last_price"),
+                direction,
+                snapshot.decision.final_action,
+                f"{snapshot.decision.decision_confidence:.1f}/100",
+                f"{speed.state} {speed.score:.1f}/100",
+                "PASS / LIVE" if feed_ok else feed_text,
+                snapshot.execution_guard.readiness,
+            ]],
+            widths=[31 * mm, 30 * mm, 34 * mm, 34 * mm, 38 * mm, 50 * mm, 40 * mm],
+            compact=True,
+        )
+    )
+    story.append(Spacer(1, 2 * mm))
+    story.append(_callout("AI samajh: " + brain_hinglish_line(snapshot), _BLUE))
+
+    roadmap = snapshot.barrier_map
+    r1 = roadmap.nearest_resistance
+    s1 = roadmap.nearest_support
+    range_item = roadmap.trading_range
+    story.append(
+        _table(
+            ["Next resistance", "R strength / break", "Next support", "S strength / break", "Probable range", "Range conf.", "VIX context"],
+            [[
+                f"{r1.lower:,.0f}-{r1.upper:,.0f}" if r1 else "-",
+                f"{r1.strength:.0f}/{r1.break_pressure:.0f}" if r1 else "-",
+                f"{s1.lower:,.0f}-{s1.upper:,.0f}" if s1 else "-",
+                f"{s1.strength:.0f}/{s1.break_pressure:.0f}" if s1 else "-",
+                f"{range_item.lower:,.0f}-{range_item.upper:,.0f}" if range_item.lower is not None and range_item.upper is not None else "-",
+                f"{range_item.confidence:.0f}/100",
+                f"{roadmap.vix_risk}; daily +/-{roadmap.vix_expected_daily_move_points:.0f} pts" if roadmap.vix_expected_daily_move_points is not None else roadmap.vix_risk,
+            ]],
+            widths=[42 * mm, 34 * mm, 42 * mm, 34 * mm, 40 * mm, 27 * mm, 38 * mm],
+            compact=True,
+        )
+    )
+
+    candidate_name, candidate_score, candidate_plan, candidate_selected = best_existing_candidate(snapshot)
+    if candidate_plan is not None and candidate_plan.available:
+        candidate_status = candidate_plan.status if candidate_selected else "REFERENCE ONLY"
+        story.append(
+            _table(
+                ["Protected setup", "Brain score", "Sell", "Hedge", "Credit pts", "Max risk pts", "Quality", "Status"],
+                [[
+                    candidate_name,
+                    _pct(candidate_score),
+                    plan_leg_text(candidate_plan.short_legs),
+                    plan_leg_text(candidate_plan.hedge_legs),
+                    candidate_plan.estimated_credit_points,
+                    candidate_plan.max_risk_points,
+                    _pct(candidate_plan.quality_score),
+                    candidate_status,
+                ]],
+                widths=[30 * mm, 25 * mm, 38 * mm, 38 * mm, 27 * mm, 30 * mm, 25 * mm, 44 * mm],
+                compact=True,
+            )
+        )
+        if not candidate_selected:
+            story.append(Paragraph("Final Action is WAIT; protected setup above is reference-only, not an entry signal.", styles["Body"]))
+
     # Feed integrity.
-    story.append(_section_title("1. Snapshot and Feed Integrity"))
+    story.append(_section_title("2. Snapshot and Feed Integrity"))
     feed_rows = []
     for name, status in snapshot.feed_status.items():
         feed_rows.append(
@@ -395,7 +471,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     )
 
     # Evidence and decision.
-    story.append(_section_title("2. Compact All-Features Evidence"))
+    story.append(_section_title("3. Compact All-Features Evidence"))
     matrix = build_compact_evidence_matrix(snapshot)
     matrix_rows = [
         [
@@ -419,29 +495,6 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         Paragraph(
             "Directional percentages are evidence mix, not profit probability. The compact matrix is display-only.",
             styles["Body"],
-        )
-    )
-
-    story.append(_sub_title("Pre-Touch Support / Resistance Early Warning"))
-    barrier_rows = []
-    for label, barrier in (("Probable support", snapshot.pre_touch_barriers.support), ("Probable resistance", snapshot.pre_touch_barriers.resistance)):
-        if barrier is None:
-            barrier_rows.append([label, "-", "-", "-", "UNAVAILABLE", "-"])
-        else:
-            barrier_rows.append([
-                label,
-                f"{barrier.lower:,.2f} - {barrier.upper:,.2f}",
-                _pct(barrier.strength),
-                barrier.distance_points,
-                barrier.proximity,
-                " | ".join(barrier.sources),
-            ])
-    story.append(
-        _table(
-            ["Barrier", "Zone", "Strength", "Distance pts", "Proximity", "Sources"],
-            barrier_rows,
-            widths=[36 * mm, 48 * mm, 28 * mm, 30 * mm, 33 * mm, 82 * mm],
-            compact=True,
         )
     )
 
@@ -497,7 +550,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     story.append(Paragraph(roadmap.summary, styles["Body"]))
 
     decision = snapshot.decision
-    story.append(_section_title("3. Final One-Brain Decision"))
+    story.append(_section_title("4. Detailed Final One-Brain Decision"))
     decision_color = _GREEN if decision.final_action != "WAIT" else _WARN
     story.append(
         _callout(
@@ -546,7 +599,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     )
 
     outlook = decision.outlook
-    story.append(_section_title("4. Next 5-15 Minute Conditional Outlook"))
+    story.append(_section_title("5. Next 5-15 Minute Conditional Outlook"))
     story.append(
         _table(
             [
@@ -591,7 +644,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Core market evidence.
     story.append(PageBreak())
-    story.append(_section_title("5. Core Market Evidence"))
+    story.append(_section_title("6. Core Market Evidence"))
     core = snapshot.core_evidence
     story.append(
         _table(
@@ -864,7 +917,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Options intelligence.
     story.append(PageBreak())
-    story.append(_section_title("6. Options Intelligence"))
+    story.append(_section_title("7. Options Intelligence"))
     option = snapshot.option_intelligence
     story.append(
         _table(
@@ -1090,7 +1143,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Market support and risk.
     story.append(PageBreak())
-    story.append(_section_title("7. Top-7, VIX, FII/DII, News and Event Risk"))
+    story.append(_section_title("8. Top-7, VIX, FII/DII, News and Event Risk"))
     heavy = snapshot.heavyweights
     story.append(
         _table(
@@ -1268,7 +1321,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Plans and guards.
     story.append(
-        _section_title("8. Protected Plan, Execution Guard and Position Guardian")
+        _section_title("9. Protected Plan, Execution Guard and Position Guardian")
     )
     plan = snapshot.trade_plan
     plan_rows = []
@@ -1466,7 +1519,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Raw market appendices.
     story.append(PageBreak())
-    story.append(_section_title("9. Raw Market Audit Tables"))
+    story.append(_section_title("10. Raw Market Audit Tables"))
     option_columns = [
         "strike",
         "side",
@@ -1537,7 +1590,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Verification worksheet and compact JSON audit.
     story.append(PageBreak())
-    story.append(_section_title("10. Live Outcome Verification Worksheet"))
+    story.append(_section_title("11. Live Outcome Verification Worksheet"))
     story.append(
         Paragraph(
             "Use the exact snapshot ID and time below to compare NIFTY after 5 and 15 minutes. "
@@ -1621,7 +1674,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
 
-    story.append(_section_title("11. Audit Completeness and Live-Test Checklist"))
+    story.append(_section_title("12. Audit Completeness and Live-Test Checklist"))
     ready_windows = sum(
         1 for item in snapshot.option_intelligence.windows if item.status == "READY"
     )

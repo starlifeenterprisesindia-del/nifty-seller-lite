@@ -268,7 +268,7 @@ class MarketNewsService:
         rows: list[dict[str, Any]] = []
         failures = 0
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; NiftySellerLite/2.9; market-news-context)"
+            "User-Agent": "Mozilla/5.0 (compatible; NiftySellerLite/2.11; market-news-context)"
         }
         for query in self.QUERIES:
             try:

@@ -1,4 +1,60 @@
-# Nifty Seller Lite — V2.10 Live Barrier Roadmap + Speed/VIX
+# Nifty Seller Lite — V2.11 Main AI Consolidated
+
+## V2.11 changes
+
+### 1. Main AI — Market View at the very top
+A new top-screen summary reads the **same authoritative MarketSnapshot and same Final
+One-Brain Decision**. It does not calculate a second signal. In one place it shows:
+- NIFTY, market rukh, Final Action, decision confidence and Market Danger
+- simple Hinglish explanation: market upar/neeche/range kyun lag raha hai
+- live-feed and entry-readiness status
+- current protected reference/selected setup with mandatory hedge
+- nearest support/resistance with Strength and Break Pressure
+- probable range, Range Confidence, India VIX context, FII/DII and News state
+- last-snapshot changes for decision confidence, speed and barrier pressure
+
+### 2. Duplicate top sections removed from the normal screen
+The standalone Pre-Touch Support/Resistance and large Final One-Brain block are no longer
+shown as separate top-level sections. Their calculations remain active and are consumed by
+the Main AI/Barrier Map. The detailed Final One-Brain and Protected Planner stay inside one
+collapsed detail expander for audit/proof.
+
+The Barrier Map also no longer repeats a second row of NIFTY/range/speed metric cards; those
+headline values now live in Main AI while the map focuses on R1/R2/S1/S2 and live pressure.
+
+### 3. Safer update/add workflow
+- FII/DII keeps **Save / update selected date**; the normal UI no longer exposes a delete-date button.
+- Destructive cache/history maintenance is hidden by default and can only be exposed with
+  `NSL_SHOW_MAINTENANCE=1`.
+- Developer Raw Market Data is hidden by default and can only be exposed with
+  `NSL_SHOW_DEVELOPER_DATA=1`.
+- FII/DII JSON backup/restore remains merge-based for deployment resets.
+
+### 4. VIX danger calculation tightened
+A fast **rise** in India VIX now adds materially more danger than an equal-sized VIX fall.
+The current VIX regime still supplies the base risk. Daily expected move remains the
+approximate `Spot × (VIX/100) / sqrt(252)` estimate; live remaining-session move is scaled by
+the square root of the remaining 375-minute cash-session fraction. VIX is still risk context,
+never bullish/bearish direction.
+
+### 5. Updated Main AI Audit PDF
+The PDF first page now mirrors the new Main AI screen: Final Action, Hinglish explanation,
+nearest barriers, range/VIX context and the protected setup. Detailed evidence follows on
+later pages. The PDF still performs no API call and no strategy recalculation.
+
+## Update deployment — replace/update only
+Use `V2_11_UPDATE_LIST.txt`. Upload the listed files to the same paths and replace matching
+files. Do **not** delete the repository or runtime data folder.
+
+Expected version:
+
+```text
+2.11.0_MAIN_AI_CONSOLIDATED
+```
+
+---
+
+## V2.10 Live Barrier Roadmap + Speed/VIX
 
 ## V2.10 changes
 

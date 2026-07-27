@@ -148,3 +148,14 @@ def test_barrier_map_builds_range_next_barriers_and_speed():
     assert result.vix_expected_daily_move_points is not None
     assert 0 <= result.nearest_resistance.strength <= 100
     assert 0 <= result.nearest_resistance.break_pressure <= 100
+
+
+def test_vix_rise_adds_more_danger_than_equal_sized_fall():
+    from analysis.barrier_map import _vix_risk_score
+
+    vix = VixContext(NOW, 15.0, 15.0, 0.0, "NORMAL", "STABLE", "NORMAL", "READY")
+    rising = _vix_risk_score(vix, 4.0, 6.0)
+    falling = _vix_risk_score(vix, -4.0, -6.0)
+    assert rising > falling
+    assert 0 <= falling <= 100
+    assert 0 <= rising <= 100

@@ -9,6 +9,14 @@ import streamlit as st
 
 from analysis.evidence_matrix import build_compact_evidence_matrix
 from models import MarketLevel, MarketSnapshot, TimeframeIndicators
+from services.summary_presenter import (
+    best_existing_candidate,
+    brain_hinglish_line,
+    plan_leg_text,
+    required_live_feed_state,
+    snapshot_change_hinglish,
+    snapshot_change_items,
+)
 
 
 def _barrier_sources(level: Any | None) -> str:
@@ -63,13 +71,10 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         if item.vix_expected_remaining_move_points is not None
         else "—"
     )
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("NIFTY Now", f"{item.current_price:,.2f}" if item.current_price is not None else "—")
-    c2.metric("Probable Range", range_text)
-    c3.metric("Range Confidence", f"{range_item.confidence:.0f}/100")
-    c4.metric("Market Speed", f"{speed.state} {speed.score:.0f}/100")
-    c5.metric("Speed Direction", speed.direction)
-    c6.metric("VIX Remaining Move", remaining_move)
+    st.caption(
+        f"Detail map: Range {range_text} | Confidence {range_item.confidence:.0f}/100 | "
+        f"Speed {speed.state} {speed.score:.0f}/100 {speed.direction} | VIX remaining move {remaining_move}."
+    )
 
     if speed.state == "DANGER":
         st.error(
@@ -251,75 +256,175 @@ def render_pre_touch_barriers(snapshot: MarketSnapshot) -> None:
             st.warning(resistance.message)
 
 
-def _brain_hinglish_line(snapshot: MarketSnapshot) -> str:
+def _level_summary(level: Any | None, *, fallback: str) -> str:
+    if level is None:
+        return f"{fallback}: unresolved"
+    return (
+        f"{level.lower:,.0f}–{level.upper:,.0f} | Strength {level.strength:.0f}/100 | "
+        f"Break {level.break_pressure:.0f}/100 | {level.state}"
+    )
+
+
+def render_main_ai_market_view(
+    snapshot: MarketSnapshot, previous_snapshot: MarketSnapshot | None = None
+) -> None:
+    """Top-screen summary of the existing canonical MarketSnapshot.
+
+    This renderer never recalculates a strategy. It only condenses the already-built
+    Final One-Brain, Barrier Map, execution guard and supporting contexts.
+    """
+
     decision = snapshot.decision
-    direction = decision.market_direction
-    reasons: list[str] = []
+    barrier = snapshot.barrier_map
+    speed = barrier.market_speed
+    feed_ok, feed_text = required_live_feed_state(snapshot)
+    direction = {"BULLISH": "UP", "BEARISH": "DOWN", "RANGE": "RANGE"}.get(
+        decision.market_direction, decision.market_direction
+    )
+    spot = snapshot.nifty_quote.get("last_price")
 
-    pa = snapshot.price_action.combined_state.upper()
-    option_bias = snapshot.option_intelligence.market_bias.upper()
-    heavy = snapshot.heavyweights.state.upper()
-    inst = snapshot.institutional_context.state.upper()
+    st.subheader("🧠 Main AI — Market View")
+    st.caption(
+        "Yeh koi second brain nahi hai. Neeche ki poori app ke same authoritative snapshot aur "
+        "Final One-Brain ko ek jagah simple Hinglish me summarize karta hai."
+    )
 
-    if direction == "BULLISH":
-        if "BULL" in pa:
-            reasons.append("Price Action bullish hai")
-        if "BULL" in option_bias:
-            reasons.append("Options/OI flow upar ki taraf support kar raha hai")
-        if "BULL" in heavy or snapshot.heavyweights.advancing > snapshot.heavyweights.declining:
-            reasons.append("Top-7 heavy stocks positive hain")
-        if "SUPPORT" in inst or "FII BUYING" in inst or "FUTURES LONG" in inst:
-            reasons.append("FII/DII background support de raha hai")
-        base = "Market upar ja sakta hai"
-        barrier = snapshot.pre_touch_barriers.resistance
-        barrier_text = (
-            f" Lekin {barrier.lower:,.0f}–{barrier.upper:,.0f} ke paas resistance aa sakta hai."
-            if barrier is not None and barrier.distance_points <= 100
-            else ""
+    with st.container(border=True):
+        top = st.columns(5)
+        top[0].metric("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—")
+        top[1].metric("Market Rukh", direction)
+        top[2].metric("Final Action", decision.final_action)
+        top[3].metric("Decision Confidence", f"{decision.decision_confidence:.0f}/100")
+        top[4].metric("Market Danger", f"{speed.state} {speed.score:.0f}/100 · {speed.direction}")
+
+        st.info("🧠 **AI samajh:** " + brain_hinglish_line(snapshot))
+
+        data_text = "LIVE DATA PASS" if feed_ok else feed_text
+        readiness = snapshot.execution_guard.readiness
+        status_line = (
+            f"Data: {data_text}  |  Entry Readiness: {readiness}  |  "
+            f"Hedge: {'YES' if decision.hedge_required else 'NO'}  |  "
+            f"Expiry: {snapshot.expiry or '—'}  |  Snapshot: {snapshot.snapshot_id[-8:]}"
         )
-    elif direction == "BEARISH":
-        if "BEAR" in pa:
-            reasons.append("Price Action bearish hai")
-        if "BEAR" in option_bias:
-            reasons.append("Options/OI flow neeche ki taraf pressure dikha raha hai")
-        if "BEAR" in heavy or snapshot.heavyweights.declining > snapshot.heavyweights.advancing:
-            reasons.append("Top-7 heavy stocks weak hain")
-        if "PRESSURE" in inst or "FII SELLING" in inst or "FUTURES SHORT" in inst:
-            short_pct = snapshot.institutional_context.latest_fii_futures_short_pct
-            if short_pct is not None and short_pct >= 55:
-                reasons.append(f"FII futures me {short_pct:.1f}% short position hai")
-            else:
-                reasons.append("FII side se pressure hai")
-        base = "Market neeche ja sakta hai"
-        barrier = snapshot.pre_touch_barriers.support
-        barrier_text = (
-            f" Lekin {barrier.lower:,.0f}–{barrier.upper:,.0f} ke paas support aa sakta hai."
-            if barrier is not None and barrier.distance_points <= 100
-            else ""
-        )
-    else:
-        base = "Abhi market ka direction clear nahi hai"
-        if "MIXED" in pa or "CONFLICT" in snapshot.price_action.relationship.upper():
-            reasons.append("3m aur 15m Price Action ek jaisa signal nahi de rahe")
-        if "MIXED" in option_bias or "RANGE" in option_bias:
-            reasons.append("Options/OI flow mixed hai")
-        barrier_text = ""
-
-    news = snapshot.news_context
-    if news.status == "READY" and news.risk_level in {"HIGH", "MEDIUM"}:
-        if news.bias == "BEARISH":
-            reasons.append("fresh news me bearish risk hai")
-        elif news.bias == "BULLISH":
-            reasons.append("fresh news supportive hai")
+        if feed_ok and readiness == "ENTRY READY":
+            st.success(status_line)
+        elif not feed_ok:
+            st.error(status_line)
         else:
-            reasons.append(f"fresh news risk {news.risk_level.lower()} hai")
+            st.warning(status_line)
 
-    if not reasons:
-        reasons.append("available signals abhi mixed/limited hain")
-    explanation = base + " kyunki " + ", ".join(reasons[:4]) + "." + barrier_text
-    if decision.final_action == "WAIT":
-        explanation += " Isliye final entry ke liye abhi WAIT better hai jab tak confirmation strong na ho."
-    return explanation
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**🎯 Abhi ka Plan**")
+            name, score, plan, is_selected = best_existing_candidate(snapshot)
+            if decision.final_action == "WAIT":
+                st.write("**Action:** WAIT — fresh entry abhi nahi.")
+                candidate_prefix = "Best reference candidate"
+            else:
+                st.write(f"**Action:** {decision.final_action}")
+                candidate_prefix = "Selected protected setup"
+
+            if plan is not None and plan.available:
+                st.write(
+                    f"**{candidate_prefix}:** {name} | Brain score {score:.1f}% | "
+                    f"Quality {plan.quality_score:.1f}%"
+                )
+                st.write(
+                    f"Sell: **{plan_leg_text(plan.short_legs)}**  →  Hedge: **{plan_leg_text(plan.hedge_legs)}**"
+                )
+                if not is_selected:
+                    st.caption("Final Action WAIT hai; yeh sirf existing score ka reference candidate hai, entry signal nahi.")
+            else:
+                st.write("Protected strike candidate abhi reliable tarah resolve nahi hua.")
+            st.caption(f"Main blocker: {decision.blocker}")
+
+        with right:
+            st.markdown("**🧭 Aage ka Road Map**")
+            st.write("🔴 **Next Resistance:** " + _level_summary(barrier.nearest_resistance, fallback="R1"))
+            st.write("🟢 **Next Support:** " + _level_summary(barrier.nearest_support, fallback="S1"))
+            if barrier.trading_range.breakout_bias == "UPSIDE RISK" and barrier.next_resistance is not None:
+                st.caption(
+                    f"R1 tootkar accept hua to next resistance {barrier.next_resistance.lower:,.0f}–"
+                    f"{barrier.next_resistance.upper:,.0f} hai (Strength {barrier.next_resistance.strength:.0f}/100)."
+                )
+            elif barrier.trading_range.breakout_bias == "DOWNSIDE RISK" and barrier.next_support is not None:
+                st.caption(
+                    f"S1 tootkar accept hua to next support {barrier.next_support.lower:,.0f}–"
+                    f"{barrier.next_support.upper:,.0f} hai (Strength {barrier.next_support.strength:.0f}/100)."
+                )
+            else:
+                st.caption("Abhi dono taraf ke next barriers Live Barrier Map me track ho rahe hain.")
+
+        range_item = barrier.trading_range
+        range_text = (
+            f"{range_item.lower:,.0f}–{range_item.upper:,.0f}"
+            if range_item.lower is not None and range_item.upper is not None
+            else "Unresolved"
+        )
+        vix_daily = (
+            f"±{barrier.vix_expected_daily_move_points:,.0f} pts"
+            if barrier.vix_expected_daily_move_points is not None
+            else "—"
+        )
+        inst = snapshot.institutional_context
+        if inst.observations <= 0:
+            inst_text = "MISSING / WARMING"
+        elif "FII SELLING / DII ABSORPTION" in inst.state:
+            inst_text = "FII SELL / DII BUY"
+        elif "FII BUYING / DII SELLING" in inst.state:
+            inst_text = "FII BUY / DII SELL"
+        elif "NET INSTITUTIONAL SUPPORT" in inst.state:
+            inst_text = "NET SUPPORT"
+        elif "NET INSTITUTIONAL PRESSURE" in inst.state:
+            inst_text = "NET PRESSURE"
+        else:
+            inst_text = "MIXED"
+        if inst.fii_futures_bias not in {"UNAVAILABLE", "BALANCED"}:
+            inst_text += f" | FUT {inst.fii_futures_bias}"
+        news = snapshot.news_context
+        news_text = f"{news.bias} / {news.risk_level}" if news.status == "READY" else news.status
+        strip = st.columns(5)
+        strip[0].metric("Probable Range", range_text)
+        strip[1].metric("Range Confidence", f"{range_item.confidence:.0f}/100")
+        strip[2].metric("India VIX Risk", f"{barrier.vix_risk} | {vix_daily}")
+        strip[3].metric("FII/DII", inst_text)
+        strip[4].metric("News", news_text)
+
+        st.markdown("**🔄 Last Snapshot Se Kya Badla**")
+        changes = snapshot_change_items(snapshot, previous_snapshot)
+        if changes:
+            cols = st.columns(len(changes))
+            for col, (label, value, delta) in zip(cols, changes):
+                col.metric(label, value, delta)
+        st.caption(snapshot_change_hinglish(snapshot, previous_snapshot))
+
+
+def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
+    """Show one compact protected setup row without duplicating the full planner."""
+
+    st.subheader("Best Protected Setup — One-Brain Reference")
+    st.caption(
+        "Same Final One-Brain scores aur same option-chain snapshot. WAIT ho to candidate sirf reference hai; "
+        "full planner neeche detail expander me rahega."
+    )
+    name, score, plan, is_selected = best_existing_candidate(snapshot)
+    if plan is None or not plan.available:
+        st.info("Protected CE/PE/Condor candidate abhi available nahi hai.")
+        return
+
+    row = {
+        "Setup": name,
+        "Brain score %": score,
+        "Sell": plan_leg_text(plan.short_legs),
+        "Buy hedge": plan_leg_text(plan.hedge_legs),
+        "Credit pts": plan.estimated_credit_points,
+        "Max risk pts": plan.max_risk_points,
+        "Quality %": plan.quality_score,
+        "Status": plan.status if is_selected else "REFERENCE ONLY",
+    }
+    st.dataframe(pd.DataFrame([row]), width="stretch", hide_index=True)
+    if snapshot.decision.final_action == "WAIT":
+        st.info("Final Action WAIT hai — yeh strike pair sirf reference hai, entry signal nahi.")
 
 
 def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
@@ -430,7 +535,7 @@ def render_decision(snapshot: MarketSnapshot) -> None:
     else:
         st.success(message)
 
-    st.info("🧠 **Brain samjha raha hai:** " + _brain_hinglish_line(snapshot))
+    st.info("🧠 **Brain samjha raha hai:** " + brain_hinglish_line(snapshot))
 
     left, right = st.columns(2)
     with left:

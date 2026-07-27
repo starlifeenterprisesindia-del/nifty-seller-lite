@@ -381,14 +381,30 @@ def _volume_speed_score(volume: VolumeBundle) -> tuple[float | None, float | Non
 
 
 def _vix_risk_score(vix: VixContext, change_5m: float | None, change_15m: float | None) -> float:
+    """Estimate volatility danger without treating a VIX fall like a VIX spike.
+
+    India VIX level supplies the base regime. Fast positive VIX changes add strong risk;
+    fast negative changes can still indicate a regime transition but receive a much
+    smaller shock contribution because falling implied volatility normally cools, rather
+    than amplifies, option-seller danger.
+    """
+
     base = {"LOW": 20.0, "NORMAL": 30.0, "ELEVATED": 60.0, "HIGH": 82.0}.get(vix.regime, 35.0)
+
+    def shock_component(change: float, rise_threshold: float) -> float:
+        if change >= 0:
+            return clamp(change / rise_threshold * 100.0, 0.0, 100.0)
+        # A rapid VIX fall is informative, but it should not be scored as equally
+        # dangerous as the same-sized rise. Cap the cooling-transition contribution.
+        return clamp(abs(change) / rise_threshold * 35.0, 0.0, 35.0)
+
     shocks: list[float] = []
     if change_5m is not None:
-        shocks.append(clamp(abs(change_5m) / 4.0 * 100.0, 0.0, 100.0))
+        shocks.append(shock_component(change_5m, 4.0))
     if change_15m is not None:
-        shocks.append(clamp(abs(change_15m) / 6.0 * 100.0, 0.0, 100.0))
+        shocks.append(shock_component(change_15m, 6.0))
     if not shocks and vix.change_pct is not None:
-        shocks.append(clamp(abs(vix.change_pct) / 8.0 * 100.0, 0.0, 100.0) * 0.65)
+        shocks.append(shock_component(float(vix.change_pct), 8.0) * 0.65)
     shock = max(shocks) if shocks else 20.0
     return clamp(base * 0.55 + shock * 0.45, 0.0, 100.0)
 

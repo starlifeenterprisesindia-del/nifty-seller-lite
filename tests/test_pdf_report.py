@@ -94,9 +94,13 @@ def test_pdf_has_independent_required_feed_status_and_completed_filter():
     assert "_completed_audit_frame(frame)" in text
 
 
-def test_app_separates_feed_integrity_from_execution_readiness():
+def test_app_consolidates_status_in_main_ai_without_duplicate_top_sections():
     root = Path(__file__).resolve().parents[1]
     text = (root / "app.py").read_text(encoding="utf-8")
-    assert "REQUIRED LIVE FEEDS: PASS" in text
-    assert "EXECUTION STATUS: ENTRY READY" in text
-    assert "PRE-ENTRY DATA STATUS" not in text
+    assert "render_main_ai_market_view(snapshot, previous_snapshot)" in text
+    assert "render_barrier_map(snapshot)" in text
+    assert "render_evidence_matrix(snapshot)" in text
+    assert "render_pre_touch_barriers(snapshot)" not in text
+    assert "render_best_protected_sells(snapshot)" not in text
+    assert "Delete selected date" not in text
+    assert 'NSL_SHOW_DEVELOPER_DATA' in text

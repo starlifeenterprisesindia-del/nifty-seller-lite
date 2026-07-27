@@ -1,0 +1,21 @@
+V2.11.0 MAIN AI CONSOLIDATED
+
+1. Added a top-screen "Main AI — Market View" that summarizes the existing canonical
+   Final One-Brain Decision and authoritative MarketSnapshot in simple Hinglish.
+2. Main AI shows NIFTY, market rukh, Final Action, decision confidence, Market Danger,
+   feed/readiness status, protected setup + hedge, nearest barriers, range, VIX, FII/DII,
+   news and last-snapshot changes.
+3. No second brain was added. analysis/decision.py remains the only final-decision engine.
+4. Removed direct top-level duplication:
+   - standalone Pre-Touch S/R is no longer rendered separately;
+   - large Final One-Brain block is moved into a collapsed detail expander;
+   - old Best CE/PE table is not separately rendered;
+   - Barrier Map headline metric cards were removed because Main AI owns those headlines.
+5. FII/DII normal UI is update/add only; Delete selected date is removed.
+6. Destructive cache/history controls are hidden unless NSL_SHOW_MAINTENANCE=1.
+7. Developer raw market data is hidden unless NSL_SHOW_DEVELOPER_DATA=1.
+8. India VIX danger scoring now weights fast VIX rises much more strongly than equal falls.
+9. Updated audit PDF first page with Main AI summary, Hinglish explanation, barriers,
+   range/VIX and protected setup. Detailed evidence stays in later pages.
+10. Added presentation-only summary module shared by screen and PDF to prevent two
+    separate explanation engines.

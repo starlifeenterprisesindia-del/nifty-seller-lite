@@ -25,7 +25,6 @@ from ui.components import (
     render_execution_guard,
     render_core_evidence,
     render_feed_status,
-    render_header,
     render_heavyweight_intelligence,
     render_heavyweights,
     render_indicators,
@@ -34,9 +33,8 @@ from ui.components import (
     render_market_outlook,
     render_market_session,
     render_news_context,
-    render_pre_touch_barriers,
-    render_best_protected_sells,
     render_barrier_map,
+    render_main_ai_market_view,
     render_option_chain,
     render_option_flow_matrix,
     render_option_intelligence,
@@ -53,9 +51,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.10.1 Barrier Map Render Hotfix — one canonical strategy brain plus top-screen Barrier + Range Map, "
-    "Barrier Strength, Break Pressure, next support/resistance, market-speed danger and India VIX "
-    "expected-move context. Read only; no order placement."
+    "V2.11 Main AI Consolidated — one canonical strategy brain, top-screen Hinglish market summary, "
+    "live Barrier + Range Map, protected hedge reference, market-speed danger, India VIX context and "
+    "clean collapsed evidence. Read only; no order placement."
 )
 
 
@@ -107,8 +105,25 @@ with st.sidebar:
             st.warning(f"Please wait {remaining:.1f}s before another Dhan snapshot.")
         else:
             refresh = True
-    clear_instrument_cache = st.button("Clear instrument cache", width="stretch")
-    clear_option_state = st.button("Clear today's option history", width="stretch")
+    clear_instrument_cache = False
+    clear_option_state = False
+    # Destructive maintenance is hidden from the normal trading UI. It can be
+    # temporarily exposed by setting NSL_SHOW_MAINTENANCE=1 on the deployment.
+    if os.getenv("NSL_SHOW_MAINTENANCE", "").strip() == "1":
+        with st.expander("Advanced maintenance", expanded=False):
+            st.warning("Maintenance only — normal trading me use mat karo.")
+            confirm_cache = st.checkbox("Instrument cache reset confirm")
+            clear_instrument_cache = st.button(
+                "Reset instrument cache",
+                width="stretch",
+                disabled=not confirm_cache,
+            )
+            confirm_history = st.checkbox("Aaj ki bounded option history reset confirm")
+            clear_option_state = st.button(
+                "Reset today's option history",
+                width="stretch",
+                disabled=not confirm_history,
+            )
     with st.expander("Risk & one-trade discipline", expanded=True):
         capital_rupees = st.number_input(
             "Trading capital ₹",
@@ -234,12 +249,6 @@ with st.sidebar:
             width="stretch",
             key=f"save_context_{context_key}",
         )
-        delete_context = st.button(
-            "Delete selected date",
-            width="stretch",
-            disabled=not bool(saved_context),
-            key=f"delete_context_{context_key}",
-        )
         st.caption(
             "One row per trading date. Same date updates only that row; a new date adds a row. "
             "Latest 15 sessions primary + mirror atomic files me save hote hain aur read par merge hote hain. "
@@ -302,23 +311,6 @@ with st.sidebar:
             st.rerun()
         except Exception as exc:
             st.error(f"Context not saved: {exc}")
-    if delete_context:
-        context_store.delete_date(context_date)
-        for prefix in (
-            "fii_cash_",
-            "dii_cash_",
-            "fii_futures_",
-            "fii_futures_contracts_",
-            "fii_futures_long_",
-            "fii_futures_short_",
-            "event_level_",
-            "event_verified_",
-            "event_note_",
-        ):
-            st.session_state.pop(f"{prefix}{context_key}", None)
-        st.session_state.pop("snapshot", None)
-        st.success(f"Deleted institutional context for {context_key}")
-        st.rerun()
     if restore_context and context_backup is not None:
         try:
             context_store.import_bytes(context_backup.getvalue())
@@ -403,59 +395,34 @@ if "snapshot" not in st.session_state or refresh:
                 discipline_store,
                 news_service=news_service,
             )
-            st.session_state.snapshot = service.build(risk_profile=risk_profile)
+            previous_snapshot = st.session_state.get("snapshot")
+            new_snapshot = service.build(risk_profile=risk_profile)
+            if (
+                previous_snapshot is not None
+                and previous_snapshot.snapshot_id != new_snapshot.snapshot_id
+                and previous_snapshot.created_at.date() == new_snapshot.created_at.date()
+            ):
+                st.session_state.previous_snapshot = previous_snapshot
+            st.session_state.snapshot = new_snapshot
             st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
     except Exception as exc:
         st.error(f"Snapshot failed safely: {exc}")
         st.stop()
 
 snapshot = st.session_state.snapshot
+previous_snapshot = st.session_state.get("previous_snapshot")
+
 render_market_session(snapshot)
-render_header(snapshot)
+render_main_ai_market_view(snapshot, previous_snapshot)
 render_barrier_map(snapshot)
-
-required_feed_keys = ("quotes", "candles", "option_chain")
-required_feed_states = {
-    key: snapshot.feed_status.get(key) for key in required_feed_keys
-}
-all_required_feeds_live = all(
-    item is not None and item.ok and item.use_state == "LIVE"
-    for item in required_feed_states.values()
-)
-if all_required_feeds_live:
-    st.success(
-        "REQUIRED LIVE FEEDS: PASS — quote, completed candles and option chain LIVE"
-    )
-else:
-    unavailable = [
-        f"{key}={item.use_state if item is not None else 'MISSING'}"
-        for key, item in required_feed_states.items()
-        if item is None or not item.ok or item.use_state != "LIVE"
-    ]
-    st.error("REQUIRED LIVE FEEDS: BLOCKED — " + "; ".join(unavailable))
-
-readiness = snapshot.execution_guard.readiness
-if readiness == "ENTRY READY":
-    st.success("EXECUTION STATUS: ENTRY READY — all strategy and risk gates passed")
-elif readiness == "REFERENCE ONLY":
-    st.warning("EXECUTION STATUS: REFERENCE ONLY — no live entry permitted")
-else:
-    blockers = (
-        "; ".join(snapshot.execution_guard.blockers[:3]) or "Final action is not ready"
-    )
-    st.error(f"EXECUTION STATUS: {readiness} — {blockers}")
-
 render_evidence_matrix(snapshot)
-render_pre_touch_barriers(snapshot)
-render_decision(snapshot)
-render_best_protected_sells(snapshot)
 render_market_outlook(snapshot)
 
-st.subheader("Full Live Audit PDF")
+st.subheader("Main AI + Full Audit PDF")
 st.caption(
-    "The PDF freezes this exact authoritative snapshot for 5-minute and 15-minute live "
-    "verification. It does not fetch data or recalculate the Final One-Brain Decision. "
-    "The PDF contains audit tables only — no raw JSON/code appendix."
+    "PDF ke first page par Main AI Market View, Barrier/Range, final action aur protected setup aayega; "
+    "uske baad detailed audit evidence. Yeh isi authoritative snapshot ko freeze karta hai aur "
+    "Final One-Brain ko dobara calculate nahi karta."
 )
 pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
 if pdf_snapshot_key != snapshot.snapshot_id:
@@ -465,7 +432,7 @@ if pdf_snapshot_key != snapshot.snapshot_id:
 pdf_left, pdf_right = st.columns([1, 2])
 with pdf_left:
     generate_pdf = st.button(
-        "Generate Full Live Audit PDF",
+        "Generate Updated Main AI Audit PDF",
         type="primary",
         width="stretch",
     )
@@ -479,7 +446,7 @@ if generate_pdf:
 with pdf_right:
     if st.session_state.get("audit_pdf_bytes"):
         st.download_button(
-            "Download Full Live Audit PDF",
+            "Download Updated Main AI Audit PDF",
             data=st.session_state.audit_pdf_bytes,
             file_name=audit_pdf_filename(snapshot),
             mime="application/pdf",
@@ -492,9 +459,10 @@ execution_expanded = (
     snapshot.market_session.is_live and snapshot.decision.final_action != "WAIT"
 )
 with st.expander(
-    "Protected Strike Planner, Execution Guard & Position Guardian",
+    "Detailed Brain Decision, Protected Planner & Execution",
     expanded=execution_expanded,
 ):
+    render_decision(snapshot)
     render_trade_plan(snapshot)
     render_execution_guard(snapshot)
     render_position_guardian(snapshot)
@@ -636,30 +604,31 @@ with st.expander("Detailed Options Intelligence", expanded=False):
     with option_tabs[6]:
         render_news_context(snapshot)
 
-with st.expander("Developer Raw Market Data (screen only)", expanded=False):
-    market_tabs = st.tabs(
-        [
-            "Candles & Futures Volume",
-            "Option Chain",
-            "Top-7 Quotes",
-            "VIX & Future",
-            "Snapshot JSON",
-        ]
-    )
-    with market_tabs[0]:
-        render_candles(snapshot)
-    with market_tabs[1]:
-        render_option_chain(snapshot)
-    with market_tabs[2]:
-        render_heavyweights(snapshot)
-    with market_tabs[3]:
-        left, right = st.columns(2)
-        left.write("**India VIX quote**")
-        left.json(snapshot.vix_quote or {"status": "not resolved"})
-        right.write("**Nearest NIFTY future quote**")
-        right.json(snapshot.nifty_future_quote or {"status": "not resolved"})
-    with market_tabs[4]:
-        st.json(snapshot.public_summary())
+if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":
+    with st.expander("Developer Raw Market Data (screen only)", expanded=False):
+        market_tabs = st.tabs(
+            [
+                "Candles & Futures Volume",
+                "Option Chain",
+                "Top-7 Quotes",
+                "VIX & Future",
+                "Snapshot JSON",
+            ]
+        )
+        with market_tabs[0]:
+            render_candles(snapshot)
+        with market_tabs[1]:
+            render_option_chain(snapshot)
+        with market_tabs[2]:
+            render_heavyweights(snapshot)
+        with market_tabs[3]:
+            left, right = st.columns(2)
+            left.write("**India VIX quote**")
+            left.json(snapshot.vix_quote or {"status": "not resolved"})
+            right.write("**Nearest NIFTY future quote**")
+            right.json(snapshot.nifty_future_quote or {"status": "not resolved"})
+        with market_tabs[4]:
+            st.json(snapshot.public_summary())
 
 st.info(
     "Decision-support only. Strategy scores are independent suitability percentages; "
