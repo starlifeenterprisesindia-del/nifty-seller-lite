@@ -16,19 +16,31 @@ except ImportError:  # pragma: no cover - Windows local fallback.
 
 
 class MarketContextStore:
-    """Bounded date-wise journal for institutional and verified event context.
+    """Bounded shared FII/DII journal with redundant atomic persistence.
 
-    One row is kept per trading date. Saving the same date updates that row; saving a
-    different date never overwrites another date. The journal is capped at the latest
-    configured trading-session records.
+    One row is kept per trading date. Saving the same date updates only that row. A
+    primary and mirror JSON are monotonically merged on every read, so one stale/corrupt
+    copy cannot make already-saved dates disappear while the deployment filesystem lives.
     """
 
     SCHEMA_VERSION = 1
     MAX_ABS_CRORE = 100_000.0
     ALLOWED_EVENT_RISK = {"NONE", "LOW", "MEDIUM", "HIGH"}
 
-    def __init__(self, path: str | Path | None = None):
-        self.path = Path(path or CONFIG.market_context_path)
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        mirror_path: str | Path | None = None,
+    ):
+        if path is None:
+            self.path = Path(CONFIG.market_context_path)
+            self.mirror_path = Path(mirror_path or CONFIG.market_context_mirror_path)
+        else:
+            self.path = Path(path)
+            self.mirror_path = Path(
+                mirror_path
+                or self.path.with_name(f"{self.path.stem}.mirror{self.path.suffix}")
+            )
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
 
     @contextmanager
@@ -61,11 +73,11 @@ class MarketContextStore:
     def _empty(self) -> dict[str, Any]:
         return {"schema_version": self.SCHEMA_VERSION, "entries": []}
 
-    def _read_unlocked(self) -> dict[str, Any]:
-        if not self.path.exists():
+    def _read_path(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
             return self._empty()
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return self._empty()
         if (
@@ -76,32 +88,67 @@ class MarketContextStore:
             return self._empty()
         return data
 
-    def _write_unlocked(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+    @staticmethod
+    def _updated_key(item: dict[str, Any]) -> str:
+        return str(item.get("updated_at") or "")
+
+    @staticmethod
+    def _sorted_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        clean = [item for item in entries if isinstance(item, dict) and item.get("date")]
+        clean.sort(key=lambda item: str(item.get("date", "")))
+        return clean
+
+    def _merge_entries(self, *entry_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        by_date: dict[str, dict[str, Any]] = {}
+        for group in entry_groups:
+            for item in self._sorted_entries(group):
+                key = str(item.get("date"))
+                current = by_date.get(key)
+                if current is None or self._updated_key(item) >= self._updated_key(current):
+                    by_date[key] = dict(item)
+        return self._sorted_entries(list(by_date.values()))[-CONFIG.market_context_max_entries :]
+
+    def _read_unlocked(self) -> dict[str, Any]:
+        primary = self._read_path(self.path)
+        mirror = self._read_path(self.mirror_path)
+        merged = self._merge_entries(primary["entries"], mirror["entries"])
+        return {"schema_version": self.SCHEMA_VERSION, "entries": merged}
+
+    @staticmethod
+    def _atomic_write(path: Path, data: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(
             json.dumps(data, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
-        os.replace(temporary, self.path)
+        os.replace(temporary, path)
 
-    @staticmethod
-    def _sorted_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        clean = [
-            item for item in entries if isinstance(item, dict) and item.get("date")
-        ]
-        clean.sort(key=lambda item: str(item.get("date", "")))
-        return clean
+    def _write_unlocked(self, data: dict[str, Any]) -> None:
+        clean = {
+            "schema_version": self.SCHEMA_VERSION,
+            "entries": self._sorted_entries(data.get("entries", []))[
+                -CONFIG.market_context_max_entries :
+            ],
+        }
+        # Write both copies. A future read merges them if one write was interrupted.
+        self._atomic_write(self.path, clean)
+        self._atomic_write(self.mirror_path, clean)
 
     def load(self) -> list[dict[str, Any]]:
         with self._locked():
-            return list(self._sorted_entries(self._read_unlocked()["entries"]))
+            data = self._read_unlocked()
+            # Self-heal both copies after a successful monotonic merge.
+            self._write_unlocked(data)
+            return list(data["entries"])
 
     def get(self, session_date: date) -> dict[str, Any] | None:
         target = session_date.isoformat()
         with self._locked():
-            for item in self._read_unlocked()["entries"]:
-                if isinstance(item, dict) and item.get("date") == target:
+            data = self._read_unlocked()
+            self._write_unlocked(data)
+            for item in data["entries"]:
+                if item.get("date") == target:
                     return dict(item)
         return None
 
@@ -136,29 +183,18 @@ class MarketContextStore:
         }
         with self._locked():
             data = self._read_unlocked()
-            entries = [
-                item
-                for item in data["entries"]
-                if isinstance(item, dict) and item.get("date") != entry["date"]
-            ]
+            entries = [item for item in data["entries"] if item.get("date") != entry["date"]]
             entries.append(entry)
-            entries = self._sorted_entries(entries)[
-                -CONFIG.market_context_max_entries :
-            ]
-            data["entries"] = entries
+            data["entries"] = self._sorted_entries(entries)[-CONFIG.market_context_max_entries :]
             self._write_unlocked(data)
-            return list(entries)
+            return list(data["entries"])
 
     def delete_date(self, session_date: date) -> list[dict[str, Any]]:
         target = session_date.isoformat()
         with self._locked():
             data = self._read_unlocked()
             data["entries"] = self._sorted_entries(
-                [
-                    item
-                    for item in data["entries"]
-                    if not (isinstance(item, dict) and item.get("date") == target)
-                ]
+                [item for item in data["entries"] if item.get("date") != target]
             )
             self._write_unlocked(data)
             return list(data["entries"])
@@ -166,9 +202,7 @@ class MarketContextStore:
     def export_bytes(self) -> bytes:
         with self._locked():
             data = self._read_unlocked()
-            data["entries"] = self._sorted_entries(data["entries"])[
-                -CONFIG.market_context_max_entries :
-            ]
+            self._write_unlocked(data)
             return json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
 
     def import_bytes(self, payload: bytes) -> list[dict[str, Any]]:
@@ -196,37 +230,30 @@ class MarketContextStore:
             validated.append(
                 {
                     "date": session_date.isoformat(),
-                    "fii_cash_net": self._number(
-                        raw.get("fii_cash_net"), "FII cash net"
-                    ),
-                    "dii_cash_net": self._number(
-                        raw.get("dii_cash_net"), "DII cash net"
-                    ),
+                    "fii_cash_net": self._number(raw.get("fii_cash_net"), "FII cash net"),
+                    "dii_cash_net": self._number(raw.get("dii_cash_net"), "DII cash net"),
                     "fii_index_futures_net": self._number(
-                        raw.get("fii_index_futures_net"),
-                        "FII index futures net",
+                        raw.get("fii_index_futures_net"), "FII index futures net"
                     ),
                     "event_risk": level,
                     "event_note": str(raw.get("event_note") or "").strip()[:280],
                     "verified": verified,
                     "source": str(raw.get("source") or "BACKUP")[:40],
-                    "updated_at": str(raw.get("updated_at") or ""),
+                    "updated_at": str(raw.get("updated_at") or datetime.now().astimezone().isoformat()),
                 }
             )
 
-        deduped: dict[str, dict[str, Any]] = {
-            item["date"]: item for item in self._sorted_entries(validated)
-        }
-        entries = list(deduped.values())[-CONFIG.market_context_max_entries :]
         with self._locked():
-            self._write_unlocked(
-                {"schema_version": self.SCHEMA_VERSION, "entries": entries}
-            )
+            current = self._read_unlocked()["entries"]
+            # Restore is a merge, not a destructive replacement. Same-date newer rows win.
+            entries = self._merge_entries(current, validated)
+            self._write_unlocked({"schema_version": self.SCHEMA_VERSION, "entries": entries})
         return entries
 
     def clear(self) -> None:
         with self._locked():
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
+            for path in (self.path, self.mirror_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass

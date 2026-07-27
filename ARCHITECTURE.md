@@ -1,56 +1,34 @@
-# Architecture — V2.8.1 Completed-Candle Guard Hotfix
+# Architecture — V2.9 Early Barrier + News + Protected Hedge Update
 
-## One market-data authority
+## One authoritative snapshot
+`services/snapshot_service.py` builds one `MarketSnapshot`. Screen, PDF, decision,
+pre-touch warnings, protected strike candidates, execution guard and position guardian
+all consume that same snapshot.
 
-Only `services/snapshot_service.py` reads DhanHQ and builds one `MarketSnapshot`.
-Analysis modules do not fetch data. The same option-chain snapshot is reused for option
-intelligence, strike planning, monitoring and PDF reporting.
+## One canonical strategy brain
+`analysis/decision.py::calculate_final_decision` remains the only CE Sell / PE Sell /
+Iron Condor / WAIT selector. No new module may override its final action.
 
-## Completed-candle authority
+## Early barrier layer
+`analysis/pre_touch_barriers.py` combines existing support/resistance structure with
+Previous Day / Opening Range anchors and current CE/PE OI walls/clusters. It provides an
+early warning before touch. It is not a strategy selector.
 
-Dhan may return the currently forming interval. `SnapshotService` marks intervals and
-then removes every row whose `is_complete` flag is not true before the authoritative
-1m/3m/15m frames are stored or analysed. Missing completion metadata fails closed.
+## News context
+`services/news_service.py` reads recent public market-news RSS, classifies conservative
+risk/bias context and caches it for a short TTL. Failure becomes UNAVAILABLE. The final
+brain uses news only as a risk/WAIT/fake-move caution; no separate news strategy exists.
 
-Candle feed age is measured from the last completed 1-minute candle's closing time.
-`services/pdf_report.py` repeats a defensive completed-row filter before printing raw
-candle audit tables; it does not recalculate market evidence.
+## FII/DII journal
+`services/context_store.py` owns the date-wise 15-session journal. Primary and mirror
+atomic files are merged monotonically. `analysis/market_context.py` keeps latest valid
+institutional data separate from the latest event row.
 
-## Exactly one strategy brain
+## Protected strike planner
+`analysis/trade_plan.py` runs only after the final brain. It selects read-only protected
+CE/PE candidates, including a mandatory farther-OTM hedge. Hedge search is bounded and
+scores liquidity, distance and credit/risk efficiency. It cannot change strategy scores.
 
-Only `analysis/decision.py::calculate_final_decision` may produce or stabilize CE Sell,
-PE Sell, Iron Condor, WAIT, Final Action, Signal State, Fake-Move Risk and the conditional
-5–15 minute outlook. `SnapshotService` calls it exactly once.
-
-The evidence matrix, strike planner, execution guard, position guardian and PDF report
-cannot select or override a strategy.
-
-## Feed state versus execution state
-
-Required feed health and execution readiness are separate:
-
-- Feed health: quote + completed candles + option chain are independently shown as
-  `PASS / LIVE` or blocked.
-- Execution readiness: strategy score, flow windows, timeframe coherence, confirmations,
-  entry time, one-trade lock and risk budget may still return `BLOCKED`.
-
-## Execution guard boundary
-
-`analysis/execution_guard.py` consumes the already-selected action. It may block or permit
-that action but cannot choose another setup. Risk calculation is required only when a
-concrete protected setup has actually been selected. For a selected setup that does not
-fit the budget, the exact one-lot risk and budget are shown.
-
-## PDF boundary
-
-`services/pdf_report.py` consumes an already-built snapshot. It makes no API request and
-performs no independent strategy calculation. Raw Snapshot JSON/code remains excluded.
-
-## State and safety
-
-- Live signal memory is same-session and bounded.
-- Weekend/reference snapshots do not pollute live memory.
-- Option history remains same-session and bounded.
-- Dhan HTTP 429 responses are not immediately retried.
-- Credentials, caches, PDFs and runtime journals stay outside source code.
-- The app never places, modifies or exits broker orders.
+## Read-only execution
+No module places, modifies or exits broker orders. Execution Guard and Position Guardian
+remain deterministic read-only risk/discipline layers.

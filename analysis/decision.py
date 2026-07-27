@@ -14,6 +14,7 @@ from models import (
     LevelBundle,
     MarketOutlook,
     MarketSession,
+    NewsContext,
     OptionIntelligence,
     PriceActionBundle,
     StrategyEvaluation,
@@ -139,6 +140,16 @@ def _event_adjustment(event: EventRiskContext) -> tuple[float, str | None]:
         return 22.0, "Verified medium-impact event risk"
     if event.level == "LOW":
         return 5.0, None
+    return 0.0, None
+
+
+def _news_adjustment(news: NewsContext | None) -> tuple[float, str | None]:
+    if news is None or news.status != "READY":
+        return 0.0, None
+    if news.risk_level == "HIGH":
+        return 18.0, "Fresh high-impact market news is active"
+    if news.risk_level == "MEDIUM":
+        return 8.0, "Fresh medium-impact market news is active"
     return 0.0, None
 
 
@@ -278,6 +289,7 @@ def _fake_move_risk(
     vix: VixContext,
     levels: LevelBundle,
     event_risk: EventRiskContext,
+    news: NewsContext | None,
     market_session: MarketSession,
     price_action: PriceActionBundle | None,
     volume: VolumeBundle | None,
@@ -375,6 +387,14 @@ def _fake_move_risk(
     elif event_risk.level == "MEDIUM":
         risk += 15
         reasons.append("Event risk can disturb short-term movement")
+
+    if news is not None and news.status == "READY":
+        if news.risk_level == "HIGH":
+            risk += 20
+            reasons.append("Fresh high-impact news can create a fast false move")
+        elif news.risk_level == "MEDIUM":
+            risk += 8
+            reasons.append("Fresh market news adds short-term movement risk")
 
     return round(clamp(risk, 0, 100), 1), tuple(dict.fromkeys(reasons))[:3]
 
@@ -577,6 +597,7 @@ def calculate_final_decision(
     quote_live: bool,
     candles_live: bool,
     option_chain_live: bool,
+    news: NewsContext | None = None,
     price_action: PriceActionBundle | None = None,
     volume: VolumeBundle | None = None,
     signal_history: tuple[dict[str, Any], ...] = (),
@@ -638,6 +659,7 @@ def calculate_final_decision(
         condor -= 5
 
     event_wait, event_blocker = _event_adjustment(event_risk)
+    news_wait, news_blocker = _news_adjustment(news)
     if event_risk.level == "HIGH":
         ce -= 12
         pe -= 12
@@ -646,6 +668,13 @@ def calculate_final_decision(
         ce -= 5
         pe -= 5
         condor -= 10
+    if news is not None and news.status == "READY":
+        if news.risk_level == "HIGH":
+            ce -= 5
+            pe -= 5
+            condor -= 10
+        elif news.risk_level == "MEDIUM":
+            condor -= 4
 
     ce = round(clamp(ce, 0, 100), 1)
     pe = round(clamp(pe, 0, 100), 1)
@@ -699,8 +728,11 @@ def calculate_final_decision(
         if inst_caution:
             wait += 4
         wait += event_wait
+        wait += news_wait
         if event_blocker:
             blockers.append(event_blocker)
+        if news_blocker:
+            blockers.append(news_blocker)
 
     wait = round(clamp(wait, 0, 100), 1)
 
@@ -721,6 +753,10 @@ def calculate_final_decision(
         ce_cautions.append(event_blocker)
         pe_cautions.append(event_blocker)
         condor_cautions.append(event_blocker)
+    if news_blocker:
+        ce_cautions.append(news_blocker)
+        pe_cautions.append(news_blocker)
+        condor_cautions.append(news_blocker)
 
     unavailable_reason = ("Option chain unavailable — seller setup not scored",)
     ce_eval = StrategyEvaluation(
@@ -806,6 +842,7 @@ def calculate_final_decision(
         vix=vix,
         levels=levels,
         event_risk=event_risk,
+        news=news,
         market_session=market_session,
         price_action=price_action,
         volume=volume,

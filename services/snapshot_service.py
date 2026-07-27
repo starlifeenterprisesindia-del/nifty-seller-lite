@@ -26,16 +26,18 @@ from analysis.option_chain import option_chain_to_frame, select_atm_window
 from analysis.option_intelligence import calculate_option_intelligence
 from analysis.price_action import calculate_price_action_bundle
 from analysis.position_guardian import calculate_position_guardian
+from analysis.pre_touch_barriers import calculate_pre_touch_barriers
 from analysis.trade_plan import calculate_trade_plan
 from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
-from models import DisciplineState, FeedStatus, MarketSnapshot, RiskProfile
+from models import DisciplineState, FeedStatus, MarketSnapshot, NewsContext, RiskProfile
 from services.dhan_client import DhanClient
 from services.discipline_store import DisciplineStore
 from services.errors import SnapshotBuildError
 from services.context_store import MarketContextStore
 from services.instrument_master import InstrumentMaster, ResolvedInstrument
 from services.option_state_store import OptionStateStore
+from services.news_service import MarketNewsService
 
 
 IST = ZoneInfo(IST_TIMEZONE)
@@ -49,12 +51,15 @@ class SnapshotService:
         option_state_store: OptionStateStore | None = None,
         context_store: MarketContextStore | None = None,
         discipline_store: DisciplineStore | None = None,
+        news_service: MarketNewsService | None = None,
     ):
         self.client = client
         self.master = instrument_master or InstrumentMaster()
         self.option_state_store = option_state_store or OptionStateStore()
         self.context_store = context_store or MarketContextStore()
         self.discipline_store = discipline_store or DisciplineStore()
+        # Kept injectable so unit tests and offline analysis never need public internet.
+        self.news_service = news_service
 
     @staticmethod
     def _extract_quote(
@@ -707,7 +712,7 @@ class SnapshotService:
                 if context_error is None
                 else context_error
             ),
-            source="Local bounded market-context journal",
+            source="Primary + mirror bounded market-context journal",
             use_state=(
                 "READY"
                 if context_error is None and institutional_context.status != "MISSING"
@@ -715,6 +720,60 @@ class SnapshotService:
                 if context_error is None
                 else "UNAVAILABLE"
             ),
+        )
+
+        if self.news_service is None:
+            news_context = NewsContext(
+                as_of=current,
+                headlines=(),
+                bias="NEUTRAL",
+                risk_level="NONE",
+                summary="Live news service is not enabled in this runtime.",
+                newest_age_minutes=None,
+                status="UNAVAILABLE",
+                source="Disabled",
+            )
+            news_error = None
+        else:
+            try:
+                news_context = self.news_service.fetch(current)
+                news_error = None
+            except Exception as exc:
+                news_error = str(exc)
+                news_context = NewsContext(
+                    as_of=current,
+                    headlines=(),
+                    bias="NEUTRAL",
+                    risk_level="NONE",
+                    summary="Live news fetch failed safely; news weight is zero.",
+                    newest_age_minutes=None,
+                    status="UNAVAILABLE",
+                    source="Public RSS",
+                )
+        statuses["news"] = FeedStatus(
+            name="news",
+            ok=news_context.status in {"READY", "NO RECENT NEWS"},
+            fetched_at=current,
+            age_seconds=(
+                news_context.newest_age_minutes * 60.0
+                if news_context.newest_age_minutes is not None
+                else None
+            ),
+            message=(news_error or news_context.summary)[:500],
+            source=news_context.source,
+            use_state=(
+                "LIVE"
+                if news_context.status == "READY"
+                else "READY / NO RECENT"
+                if news_context.status == "NO RECENT NEWS"
+                else "UNAVAILABLE"
+            ),
+        )
+
+        pre_touch_barriers = calculate_pre_touch_barriers(
+            levels=levels,
+            options=option_intelligence,
+            spot=float(current_price) if current_price is not None else 0.0,
         )
 
         discipline_error: str | None = None
@@ -741,6 +800,7 @@ class SnapshotService:
             levels=levels,
             institutional=institutional_context,
             event_risk=event_risk,
+            news=news_context,
             market_session=market_session,
             quote_live=statuses["quotes"].use_state == "LIVE",
             candles_live=statuses["candles"].use_state == "LIVE",
@@ -894,6 +954,8 @@ class SnapshotService:
             vix_context=vix_context,
             institutional_context=institutional_context,
             event_risk=event_risk,
+            news_context=news_context,
+            pre_touch_barriers=pre_touch_barriers,
             decision=decision,
             trade_plan=trade_plan,
             execution_guard=execution_guard,
@@ -920,6 +982,9 @@ class SnapshotService:
                 "top7_weight_date": CONFIG.top7_weight_date,
                 "strategy_scores_enabled": True,
                 "decision_engine": "analysis.decision.calculate_final_decision",
+                "pre_touch_engine": "analysis.pre_touch_barriers.calculate_pre_touch_barriers",
+                "pre_touch_status": pre_touch_barriers.status,
+                "news_status": news_context.status,
                 "trade_plan_engine": "analysis.trade_plan.calculate_trade_plan",
                 "trade_plan_status": trade_plan.status,
                 "execution_guard_engine": "analysis.execution_guard.calculate_execution_guard",

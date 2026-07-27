@@ -1,0 +1,21 @@
+NIFTY SELLER LITE V2.9 - EARLY BARRIER + NEWS + PROTECTED HEDGE UPDATE
+
+ADDED
+- Pre-touch probable Support/Resistance combining structure + PDH/PDL + ORH/ORL + OI walls/clusters.
+- Simple Hinglish Brain explanation below Final One-Brain Decision.
+- Live public market-news context with bias, impact, age and risk.
+- Compact Best CE / PE Sell + Hedge summary near the main decision.
+- Better bounded hedge search across 2-5 farther-OTM strike steps.
+
+FIXED
+- FII/DII primary/mirror atomic persistence with monotonic merge.
+- Same-date FII/DII remains an update, not a duplicate.
+- A newer blank/event-only date no longer hides the latest valid FII/DII values.
+- Backup restore merges instead of destructively replacing the journal.
+
+SAFETY
+- Exactly one canonical strategy brain remains.
+- News unavailable/stale => zero news directional weight.
+- Pre-touch layer cannot override the final action.
+- Protected strike planner cannot override the final action.
+- App remains read only; no order placement.

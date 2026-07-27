@@ -1,0 +1,17 @@
+NIFTY SELLER LITE V2.9 - TEST REPORT
+
+Static compile:
+- python -m compileall: PASS
+
+Automated unit/integration tests available in this runtime:
+- 123 tests PASS
+- App smoke test was not executed here because the container package index did not provide
+  the pinned Streamlit 1.59.1 build. All Python modules compile successfully and the
+  non-Streamlit test suite passes.
+
+New coverage includes:
+- FII/DII mirror recovery after primary regression
+- latest valid FII/DII surviving a newer blank/event-only row
+- recent news parsing, impact and bias classification
+- pre-touch barrier confluence with CE/PE OI walls
+- bounded best-hedge selection window

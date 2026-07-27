@@ -207,3 +207,20 @@ def test_missing_farther_otm_hedge_makes_plan_unavailable():
     assert result.ce_sell.status == "UNAVAILABLE"
     assert "hedge" in result.ce_sell.blocker.lower()
     assert result.status == "BLOCKED"
+
+
+def test_best_hedge_search_stays_within_configured_window():
+    result = calculate_trade_plan(
+        frame=option_frame(),
+        spot=24350,
+        expiry="2026-07-21",
+        levels=levels(),
+        options=option_intelligence(),
+        decision=decision("CE SELL WITH HEDGE"),
+        market_session=live_session(),
+    )
+    short = result.ce_sell.short_legs[0]
+    hedge = result.ce_sell.hedge_legs[0]
+    gap = hedge.strike - short.strike
+    assert gap >= 100
+    assert gap <= 250

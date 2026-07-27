@@ -15,6 +15,7 @@ from services.dhan_client import DhanClient
 from services.discipline_store import DisciplineStore
 from services.instrument_master import InstrumentMaster
 from services.option_state_store import OptionStateStore
+from services.news_service import MarketNewsService
 from services.pdf_report import audit_pdf_filename, build_full_audit_pdf
 from services.snapshot_service import SnapshotService
 from ui.components import (
@@ -32,6 +33,9 @@ from ui.components import (
     render_market_context,
     render_market_outlook,
     render_market_session,
+    render_news_context,
+    render_pre_touch_barriers,
+    render_best_protected_sells,
     render_option_chain,
     render_option_flow_matrix,
     render_option_intelligence,
@@ -48,9 +52,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.8.1 Candle Integrity Hotfix — one canonical strategy brain, completed-candle "
-    "enforcement, separate live-feed and execution gates, bounded market memory and "
-    "clean audit PDF. Read only; no order placement."
+    "V2.9 Early Barrier + News + Protected Hedge Update — one canonical strategy brain, "
+    "pre-touch S/R warning, stronger FII/DII persistence, live news context and best CE/PE "
+    "sell with hedge. Read only; no order placement."
 )
 
 
@@ -66,8 +70,11 @@ def secret_value(name: str) -> str:
 client_id = secret_value("client_id")
 access_token = secret_value("access_token")
 state_store = OptionStateStore(Path(CONFIG.option_state_path))
-context_store = MarketContextStore(Path(CONFIG.market_context_path))
+context_store = MarketContextStore(
+    Path(CONFIG.market_context_path), Path(CONFIG.market_context_mirror_path)
+)
 discipline_store = DisciplineStore(Path(CONFIG.discipline_state_path))
+news_service = MarketNewsService(Path(CONFIG.news_cache_path))
 
 
 def optional_number(raw: str) -> float | None:
@@ -216,9 +223,9 @@ with st.sidebar:
             key=f"delete_context_{context_key}",
         )
         st.caption(
-            "One row per trading date. Same date updates only that row; a new date adds "
-            "a row. Only the latest 15 trading sessions are kept. Missing stays missing, "
-            "never zero. Daily amounts above 100,000 crore are rejected as likely input errors."
+            "One row per trading date. Same date updates only that row; a new date adds a row. "
+            "Latest 15 sessions primary + mirror atomic files me save hote hain aur read par merge hote hain. "
+            "Missing stays missing, never zero. Daily amounts above 100,000 crore are rejected as likely input errors."
         )
 
         saved_rows = list(reversed(context_store.load()))
@@ -365,6 +372,7 @@ if "snapshot" not in st.session_state or refresh:
                 state_store,
                 context_store,
                 discipline_store,
+                news_service=news_service,
             )
             st.session_state.snapshot = service.build(risk_profile=risk_profile)
             st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
@@ -408,7 +416,9 @@ else:
     st.error(f"EXECUTION STATUS: {readiness} — {blockers}")
 
 render_evidence_matrix(snapshot)
+render_pre_touch_barriers(snapshot)
 render_decision(snapshot)
+render_best_protected_sells(snapshot)
 render_market_outlook(snapshot)
 
 st.subheader("Full Live Audit PDF")
@@ -578,6 +588,7 @@ with st.expander("Detailed Options Intelligence", expanded=False):
             "Top-7 Weighted Contribution",
             "VIX Context",
             "FII/DII & Event Risk",
+            "Live Market News",
         ]
     )
     with option_tabs[0]:
@@ -592,6 +603,8 @@ with st.expander("Detailed Options Intelligence", expanded=False):
         render_vix_context(snapshot)
     with option_tabs[5]:
         render_market_context(snapshot)
+    with option_tabs[6]:
+        render_news_context(snapshot)
 
 with st.expander("Developer Raw Market Data (screen only)", expanded=False):
     market_tabs = st.tabs(

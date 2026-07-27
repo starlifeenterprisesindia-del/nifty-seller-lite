@@ -32,7 +32,16 @@ def calculate_market_context(
     ]
     clean.sort(key=lambda item: str(item.get("date", "")))
     clean = clean[-15:]
-    latest = clean[-1] if clean else {}
+    institutional_rows = [
+        item
+        for item in clean
+        if any(
+            _number(item.get(field)) is not None
+            for field in ("fii_cash_net", "dii_cash_net", "fii_index_futures_net")
+        )
+    ]
+    latest = institutional_rows[-1] if institutional_rows else {}
+    event_latest = clean[-1] if clean else {}
 
     fii_values = [_number(item.get("fii_cash_net")) for item in clean]
     dii_values = [_number(item.get("dii_cash_net")) for item in clean]
@@ -111,20 +120,24 @@ def calculate_market_context(
         status=status,
     )
 
-    level = str(latest.get("event_risk") or "NONE").upper() if latest else "NONE"
-    verified = bool(latest.get("verified")) if latest else False
-    note = str(latest.get("event_note") or "") if latest else ""
+    level = (
+        str(event_latest.get("event_risk") or "NONE").upper()
+        if event_latest
+        else "NONE"
+    )
+    verified = bool(event_latest.get("verified")) if event_latest else False
+    note = str(event_latest.get("event_note") or "") if event_latest else ""
     if level not in {"NONE", "LOW", "MEDIUM", "HIGH"}:
         level = "NONE"
     if level in {"MEDIUM", "HIGH"} and not verified:
         event_status = "UNVERIFIED — IGNORED"
         level = "NONE"
-    elif latest:
+    elif event_latest:
         event_status = "READY"
     else:
         event_status = "NOT PROVIDED"
     event = EventRiskContext(
-        as_of_date=str(latest.get("date")) if latest else None,
+        as_of_date=str(event_latest.get("date")) if event_latest else None,
         level=level,
         note=note,
         verified=verified,

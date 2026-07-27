@@ -1,46 +1,78 @@
-# Nifty Seller Lite — V2.8.1 Completed-Candle Guard Hotfix
+# Nifty Seller Lite — V2.9 Early Barrier + News + Protected Hedge Update
 
-A read-only Streamlit decision-support app built around one authoritative DhanHQ
+Read-only Streamlit decision-support app built around one authoritative DhanHQ
 `MarketSnapshot` and exactly one canonical strategy brain:
 `analysis/decision.py::calculate_final_decision`.
 
-## V2.8.1 hotfix
+## V2.9 changes
 
-- The authoritative snapshot now keeps only fully closed 1m, 3m and 15m candles.
-- A currently forming 3m/15m candle can no longer appear in a table labelled
-  “completed candles”.
-- Candle freshness age is measured from the candle close time, not its opening timestamp.
-- The PDF applies a second defensive completed-row filter.
-- Live-feed integrity is displayed separately from execution readiness.
-- The final PDF checklist now reports `PASS / LIVE` for healthy required feeds even when
-  a strategy, confirmation, timing or risk gate correctly keeps execution `BLOCKED`.
-- A WAIT state with no selected protected setup no longer produces the misleading
-  “risk could not be calculated” blocker.
-- When a selected protected setup exceeds the configured budget, the blocker prints the
-  exact one-lot rupee risk and the available risk budget.
+### 1. Pre-Touch Support / Resistance
+The app now shows probable support and resistance **before price touches the level**.
+It combines the existing completed-candle structure with Previous Day High/Low,
+Opening Range High/Low and current CE/PE OI wall/cluster information.
 
-## Retained V2.8 safety gates
+The pre-touch layer is an early-warning layer only. It does not create a second strategy
+brain and cannot override the final CE/PE/Condor/WAIT decision.
 
-A live setup cannot become `ENTRY READY` unless:
+### 2. FII/DII 15-session persistence repair
+- One row per trading date.
+- Saving the same date updates only that date; no duplicate row is created.
+- Latest 15 dated rows are retained.
+- Primary + mirror atomic JSON copies are monotonically merged on read.
+- A stale/corrupt primary copy cannot make already-saved rows move backwards while the
+  same deployment filesystem remains alive.
+- A newer event-only row no longer hides the latest valid FII/DII values.
+- Backup restore is merge-based instead of destructive replacement.
 
-- NIFTY quote, completed candles and option chain are LIVE.
-- Flow confidence is at least 75%.
-- 1m, 3m and 5m option-flow windows are all READY.
-- Flow persistence is mature.
-- The final action has two consecutive fresh confirmations.
-- 3m and 15m agree with the selected directional setup.
-- The protected plan fits the configured risk budget.
-- The one-trade-per-day lock is unused and the entry window is open.
+Runtime JSON remains gitignored, so normal source-file replacement does not delete it.
+The existing JSON download/restore remains available for deployment/filesystem resets.
 
-## Deployment
+### 3. Live market-news context
+A public RSS news layer fetches recent Indian/global market-moving headlines using a
+3-minute local TTL cache. It shows:
+- News Bias: Bullish / Bearish / Mixed / Neutral
+- News Risk: Low / Medium / High
+- headline age, impact and source
 
-Upload the 16 files listed in `V2_8_UPLOAD_LIST.txt` into the existing GitHub repository
-root and replace matching files. Do not recreate the Streamlit app or change Secrets.
+If public news fails or has no fresh data, it becomes `UNAVAILABLE` / `NO RECENT NEWS`.
+Old/unavailable headlines are never silently treated as live directional evidence.
+News risk can increase WAIT/fake-move caution, but news does not create another trading
+brain.
 
-Expected version after redeployment:
+### 4. Simple Hinglish Brain explanation
+The technical labels remain unchanged. Under Final One-Brain Decision the app now adds a
+simple line such as:
+
+`Market upar ja sakta hai kyunki Price Action bullish hai, Options/OI flow support kar raha hai...`
+
+or
+
+`Market neeche ja sakta hai kyunki Price Action bearish hai, Options/OI flow pressure dikha raha hai...`
+
+It also mentions nearby pre-touch support/resistance and fresh news risk when relevant.
+
+### 5. Best CE Sell / PE Sell with mandatory hedge
+The protected strike planner still runs **after** the Final One-Brain Decision. It now:
+- shows a compact Best CE / PE Sell + Hedge table near the main decision,
+- updates both directional protected candidates from every fresh option-chain snapshot,
+- highlights the Brain Pick when CE Sell or PE Sell is selected,
+- keeps candidates reference-only when the final action is WAIT,
+- searches a bounded 2–5 strike-step window for a better liquid hedge instead of blindly
+  taking the first farther-OTM strike.
+
+## Retained safety gates
+A live setup cannot become `ENTRY READY` unless the required live feeds, option-flow
+continuity, signal persistence, completed-candle agreement, protected risk budget,
+one-trade/day discipline and entry-window rules all pass.
+
+## Update deployment — no delete workflow
+Use `V2_9_UPDATE_LIST.txt`. Upload only the listed files to the existing repository and
+**replace matching files**. Do not delete the app folders or runtime data files.
+
+Expected version:
 
 ```text
-2.8.1_COMPLETED_CANDLE_GUARD_HOTFIX
+2.9.0_EARLY_BARRIER_NEWS_HEDGE_UPDATE
 ```
 
 Decision-support only. Verify broker quotes, liquidity, margin, fills and hedge prices.

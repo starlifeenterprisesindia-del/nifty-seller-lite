@@ -1,0 +1,19 @@
+NIFTY SELLER LITE V2.9 - UPDATE WITHOUT DELETE
+
+1. Open the existing GitHub repository used by the Streamlit app.
+2. Upload the files/folders from the V2.9 update package.
+3. For every matching filename choose REPLACE / UPDATE.
+4. Do NOT delete the existing app, folders, Secrets or runtime data files.
+5. Commit the replacement files.
+6. Let the existing Streamlit deployment redeploy automatically.
+7. Confirm sidebar version:
+   2.9.0_EARLY_BARRIER_NEWS_HEDGE_UPDATE
+8. Press Fetch Fresh Snapshot.
+9. Confirm the top screen shows:
+   - Pre-Touch Support / Resistance
+   - Final One-Brain Decision + Hinglish Brain line
+   - Best CE / PE Sell + Hedge
+10. Open Detailed Options Intelligence and confirm Live Market News appears.
+11. Save one FII/DII date, refresh, then reopen the date and confirm the values remain.
+
+No application-file deletion is required for this update.

@@ -301,6 +301,49 @@ class EventRiskContext:
 
 
 @dataclass(frozen=True)
+class NewsHeadline:
+    title: str
+    source: str
+    published_at: datetime | None
+    age_minutes: float | None
+    impact: str
+    bias: str
+    link: str = ""
+
+
+@dataclass(frozen=True)
+class NewsContext:
+    as_of: datetime
+    headlines: tuple[NewsHeadline, ...]
+    bias: str
+    risk_level: str
+    summary: str
+    newest_age_minutes: float | None
+    status: str
+    source: str
+
+
+@dataclass(frozen=True)
+class PreTouchBarrier:
+    side: str
+    lower: float
+    upper: float
+    midpoint: float
+    strength: float
+    distance_points: float
+    proximity: str
+    sources: tuple[str, ...]
+    message: str
+
+
+@dataclass(frozen=True)
+class PreTouchBarrierBundle:
+    support: PreTouchBarrier | None
+    resistance: PreTouchBarrier | None
+    status: str
+
+
+@dataclass(frozen=True)
 class StrategyEvaluation:
     name: str
     score: float
@@ -576,6 +619,8 @@ class MarketSnapshot:
     vix_context: VixContext
     institutional_context: InstitutionalContext
     event_risk: EventRiskContext
+    news_context: NewsContext
+    pre_touch_barriers: PreTouchBarrierBundle
     decision: FinalDecision
     trade_plan: TradePlanBundle
     execution_guard: ExecutionGuard
@@ -615,6 +660,8 @@ class MarketSnapshot:
                 "vix_context": asdict(self.vix_context),
                 "institutional_context": asdict(self.institutional_context),
                 "event_risk": asdict(self.event_risk),
+                "news_context": asdict(self.news_context),
+                "pre_touch_barriers": asdict(self.pre_touch_barriers),
                 "decision": asdict(self.decision),
                 "trade_plan": asdict(self.trade_plan),
                 "execution_guard": asdict(self.execution_guard),

@@ -216,30 +216,77 @@ def _select_hedge_leg(
     short: OptionLeg,
     spot: float,
 ) -> OptionLeg | None:
-    rows = _candidate_rows(frame, side, spot)
+    """Choose the best farther-OTM hedge, not merely the first available strike.
+
+    The hedge search is bounded from the configured minimum to maximum strike steps.
+    Liquidity is the largest weight, while credit/risk efficiency and distance prevent a
+    very cheap but unusable far-away hedge from winning.
+    """
+    if frame.empty:
+        return None
+    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
+    rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
+    rows = rows.dropna(subset=["strike", "last_price"])
+    rows = rows[rows["last_price"] >= CONFIG.trade_min_hedge_premium]
+    if side == "CE":
+        rows = rows[rows["strike"] > spot]
+    else:
+        rows = rows[rows["strike"] < spot]
+    rows = rows.sort_values("strike").reset_index(drop=True)
     if rows.empty:
         return None
     step = _strike_step(rows)
     if step is None or step <= 0:
         return None
     minimum_gap = step * CONFIG.trade_hedge_steps
+    maximum_gap = step * max(CONFIG.trade_hedge_steps, CONFIG.trade_max_hedge_steps)
     if side == "CE":
-        eligible = rows[rows["strike"] >= short.strike + minimum_gap]
-        eligible = eligible.sort_values("strike")
+        eligible = rows[
+            (rows["strike"] >= short.strike + minimum_gap)
+            & (rows["strike"] <= short.strike + maximum_gap)
+        ].copy()
     else:
-        eligible = rows[rows["strike"] <= short.strike - minimum_gap]
-        eligible = eligible.sort_values("strike", ascending=False)
+        eligible = rows[
+            (rows["strike"] <= short.strike - minimum_gap)
+            & (rows["strike"] >= short.strike - maximum_gap)
+        ].copy()
     if eligible.empty:
         return None
-    row = eligible.iloc[0]
-    spread_pct, spread_score = _spread_metrics(row)
-    oi_score = _percentile_score(
-        _number(row.get("oi")), rows.get("oi", pd.Series(dtype=float))
-    )
-    volume_score = _percentile_score(
-        _number(row.get("volume")), rows.get("volume", pd.Series(dtype=float))
-    )
-    liquidity = spread_score * 0.50 + oi_score * 0.30 + volume_score * 0.20
+
+    short_price = _sell_price(short)
+    if short_price is None or short_price <= 0:
+        return None
+
+    oi_series = rows.get("oi", pd.Series(dtype=float))
+    volume_series = rows.get("volume", pd.Series(dtype=float))
+    scored: list[tuple[float, pd.Series, float | None, float]] = []
+    target_steps = max(CONFIG.trade_hedge_steps, min(3, CONFIG.trade_max_hedge_steps))
+    target_gap = target_steps * step
+    for _, row in eligible.iterrows():
+        strike = float(row["strike"])
+        hedge_price = _number(row.get("top_ask_price")) or _number(row.get("last_price"))
+        if hedge_price is None or hedge_price <= 0 or hedge_price >= short_price:
+            continue
+        credit = short_price - hedge_price
+        width = abs(strike - short.strike)
+        if width <= 0 or credit < CONFIG.trade_min_credit_points:
+            continue
+        spread_pct, spread_score = _spread_metrics(row)
+        oi_score = _percentile_score(_number(row.get("oi")), oi_series)
+        volume_score = _percentile_score(_number(row.get("volume")), volume_series)
+        liquidity = spread_score * 0.50 + oi_score * 0.30 + volume_score * 0.20
+        width_score = clamp(100.0 - abs(width - target_gap) / max(target_gap, step) * 55.0, 20.0, 100.0)
+        credit_ratio = credit / width
+        efficiency_score = clamp(credit_ratio * 500.0, 15.0, 100.0)
+        hedge_cost_ratio = hedge_price / short_price
+        cost_score = clamp(100.0 - abs(hedge_cost_ratio - 0.35) * 140.0, 20.0, 100.0)
+        total = liquidity * 0.45 + width_score * 0.20 + efficiency_score * 0.20 + cost_score * 0.15
+        scored.append((total, row, spread_pct, liquidity))
+
+    if not scored:
+        return None
+    _, row, spread_pct, liquidity = max(scored, key=lambda item: item[0])
     return _row_to_leg(
         row,
         role="HEDGE",

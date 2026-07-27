@@ -38,3 +38,32 @@ def test_context_builds_rolling_sums_and_verified_event():
     assert institutional.status == "READY"
     assert event.level == "MEDIUM"
     assert event.verified is True
+
+
+def test_blank_newer_event_row_does_not_erase_latest_fii_dii_values():
+    entries = [
+        {
+            "date": "2026-07-24",
+            "fii_cash_net": -1250.0,
+            "dii_cash_net": 900.0,
+            "fii_index_futures_net": None,
+            "event_risk": "NONE",
+            "event_note": "",
+            "verified": False,
+        },
+        {
+            "date": "2026-07-27",
+            "fii_cash_net": None,
+            "dii_cash_net": None,
+            "fii_index_futures_net": None,
+            "event_risk": "LOW",
+            "event_note": "Results day",
+            "verified": True,
+        },
+    ]
+    institutional, event = calculate_market_context(entries, date(2026, 7, 27))
+    assert institutional.as_of_date == "2026-07-24"
+    assert institutional.latest_fii_net == -1250.0
+    assert institutional.latest_dii_net == 900.0
+    assert event.as_of_date == "2026-07-27"
+    assert event.level == "LOW"

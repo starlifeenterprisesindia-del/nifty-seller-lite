@@ -422,6 +422,29 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
 
+    story.append(_sub_title("Pre-Touch Support / Resistance Early Warning"))
+    barrier_rows = []
+    for label, barrier in (("Probable support", snapshot.pre_touch_barriers.support), ("Probable resistance", snapshot.pre_touch_barriers.resistance)):
+        if barrier is None:
+            barrier_rows.append([label, "-", "-", "-", "UNAVAILABLE", "-"])
+        else:
+            barrier_rows.append([
+                label,
+                f"{barrier.lower:,.2f} - {barrier.upper:,.2f}",
+                _pct(barrier.strength),
+                barrier.distance_points,
+                barrier.proximity,
+                " | ".join(barrier.sources),
+            ])
+    story.append(
+        _table(
+            ["Barrier", "Zone", "Strength", "Distance pts", "Proximity", "Sources"],
+            barrier_rows,
+            widths=[36 * mm, 48 * mm, 28 * mm, 30 * mm, 33 * mm, 82 * mm],
+            compact=True,
+        )
+    )
+
     decision = snapshot.decision
     story.append(_section_title("3. Final One-Brain Decision"))
     decision_color = _GREEN if decision.final_action != "WAIT" else _WARN
@@ -1016,7 +1039,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Market support and risk.
     story.append(PageBreak())
-    story.append(_section_title("7. Top-7, VIX, FII/DII and Event Risk"))
+    story.append(_section_title("7. Top-7, VIX, FII/DII, News and Event Risk"))
     heavy = snapshot.heavyweights
     story.append(
         _table(
@@ -1160,6 +1183,30 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
             compact=True,
         )
     )
+
+    news = snapshot.news_context
+    story.append(_sub_title("Live Market News Context"))
+    story.append(
+        _table(
+            ["Status", "Risk", "Bias", "Newest age min", "Source", "Summary"],
+            [[news.status, news.risk_level, news.bias, news.newest_age_minutes, news.source, news.summary]],
+            widths=[28 * mm, 24 * mm, 26 * mm, 31 * mm, 52 * mm, 96 * mm],
+            compact=True,
+        )
+    )
+    if news.headlines:
+        headline_rows = [
+            [item.age_minutes, item.impact, item.bias, item.title, item.source]
+            for item in news.headlines[:8]
+        ]
+        story.append(
+            _table(
+                ["Age min", "Impact", "Bias", "Headline", "Source"],
+                headline_rows,
+                widths=[21 * mm, 23 * mm, 24 * mm, 148 * mm, 41 * mm],
+                compact=True,
+            )
+        )
 
     # Plans and guards.
     story.append(

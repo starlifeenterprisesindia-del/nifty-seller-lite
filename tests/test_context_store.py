@@ -104,3 +104,25 @@ def test_context_store_rejects_likely_contract_quantity_in_crore_field(tmp_path)
             fii_index_futures_net=-216528,
             event_risk="NONE",
         )
+
+
+def test_context_store_mirror_recovers_primary_regression(tmp_path):
+    store = MarketContextStore(tmp_path / "context.json")
+    store.upsert(
+        session_date=date(2026, 7, 16),
+        fii_cash_net=-100,
+        dii_cash_net=200,
+        event_risk="NONE",
+    )
+    store.upsert(
+        session_date=date(2026, 7, 17),
+        fii_cash_net=-50,
+        dii_cash_net=250,
+        event_risk="NONE",
+    )
+    # Simulate a stale/corrupt primary copy while the mirror remains authoritative.
+    store.path.write_text('{"schema_version":1,"entries":[]}', encoding="utf-8")
+    rows = store.load()
+    assert [row["date"] for row in rows] == ["2026-07-16", "2026-07-17"]
+    # load() self-heals the primary from the monotonic merged view.
+    assert "2026-07-17" in store.path.read_text(encoding="utf-8")

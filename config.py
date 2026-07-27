@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.8.1_COMPLETED_CANDLE_GUARD_HOTFIX"
+    version: str = "2.9.0_EARLY_BARRIER_NEWS_HEDGE_UPDATE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -99,7 +99,21 @@ class AppConfig:
 
     # Durable background context and final one-brain decision settings.
     market_context_path: str = "data/market_context.json"
+    market_context_mirror_path: str = "data/market_context_mirror.json"
     market_context_max_entries: int = 15
+
+    # Pre-touch support/resistance early warning. This is display/risk context only and
+    # never creates a second strategy brain.
+    pretouch_warning_distance_points: float = 40.0
+    pretouch_watch_distance_points: float = 100.0
+
+    # Public market-news context. A short TTL cache prevents repeated RSS traffic on
+    # every 5-second Dhan snapshot. Failure is fail-open to UNAVAILABLE, never stale-as-live.
+    news_cache_path: str = "data/news_cache.json"
+    news_cache_ttl_seconds: int = 180
+    news_request_timeout_seconds: int = 4
+    news_max_age_hours: int = 12
+    news_max_headlines: int = 12
     decision_minimum_score: float = 62.0
     decision_minimum_margin: float = 8.0
     decision_wait_block_threshold: float = 60.0
@@ -128,7 +142,9 @@ class AppConfig:
     trade_target_distance_pct: float = 1.0
     trade_distance_tolerance_pct: float = 0.9
     trade_hedge_steps: int = 2
+    trade_max_hedge_steps: int = 5
     trade_min_option_premium: float = 3.0
+    trade_min_hedge_premium: float = 0.5
     trade_min_credit_points: float = 1.0
     trade_min_plan_quality: float = 55.0
     trade_level_clearance_points: float = 10.0

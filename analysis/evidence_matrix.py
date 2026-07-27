@@ -318,9 +318,15 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
     support_result = f"Top-7 {snapshot.heavyweights.state} | FII/DII {snapshot.institutional_context.state}"
 
     vix = snapshot.vix_context
+    news = getattr(snapshot, "news_context", None)
+    news_text = (
+        f"; news {news.risk_level}/{news.bias}"
+        if news is not None
+        else ""
+    )
     risk_result = (
         f"{snapshot.market_session.label} | VIX {vix.seller_environment}; "
-        f"event {snapshot.event_risk.level}"
+        f"event {snapshot.event_risk.level}{news_text}"
     )
 
     return [
