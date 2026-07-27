@@ -150,7 +150,11 @@ def _brain_hinglish_line(snapshot: MarketSnapshot) -> str:
         if "BEAR" in heavy or snapshot.heavyweights.declining > snapshot.heavyweights.advancing:
             reasons.append("Top-7 heavy stocks weak hain")
         if "PRESSURE" in inst or "FII SELLING" in inst or "FUTURES SHORT" in inst:
-            reasons.append("FII side se pressure hai")
+            short_pct = snapshot.institutional_context.latest_fii_futures_short_pct
+            if short_pct is not None and short_pct >= 55:
+                reasons.append(f"FII futures me {short_pct:.1f}% short position hai")
+            else:
+                reasons.append("FII side se pressure hai")
         base = "Market neeche ja sakta hai"
         barrier = snapshot.pre_touch_barriers.support
         barrier_text = (
@@ -1030,11 +1034,11 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
     institutional = snapshot.institutional_context
     event = snapshot.event_risk
     st.caption(
-        "FII/DII cash is the main background context. FII index futures is optional short-term confirmation. "
-        "Same-date save update hota hai; primary + mirror journal latest 15 dates ko merge karke rakhta hai. "
-        "Missing values kabhi zero nahi banaye jate."
+        "FII/DII cash main background context hai. FII Index Futures me contracts sirf size dikhate hain; "
+        "direction Long % / Short % se nikalti hai aur ye secondary confirmation hai. "
+        "Same-date save update hota hai; latest 15 dates primary + mirror journal me rehti hain."
     )
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric(
         "Latest FII cash ₹ cr",
         f"{institutional.latest_fii_net:,.1f}"
@@ -1048,31 +1052,40 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
         else "Missing",
     )
     c3.metric(
-        "FII index futures ₹ cr",
-        f"{institutional.latest_fii_index_futures_net:,.1f}"
-        if institutional.latest_fii_index_futures_net is not None
+        "FII Futures contracts",
+        f"{institutional.latest_fii_index_futures_contracts:,.0f}"
+        if institutional.latest_fii_index_futures_contracts is not None
         else "Missing",
     )
-    c4.metric("Institutional State", institutional.state)
-    c5.metric("Verified Event Risk", event.level)
+    futures_split = (
+        f"Long {institutional.latest_fii_futures_long_pct:.2f}% | Short {institutional.latest_fii_futures_short_pct:.2f}%"
+        if institutional.latest_fii_futures_long_pct is not None
+        and institutional.latest_fii_futures_short_pct is not None
+        else "Long/Short missing"
+    )
+    c4.metric("FII Futures Bias", institutional.fii_futures_bias, delta=futures_split, delta_color="off")
+    st.info(f"**Institutional State:** {institutional.state} | **Verified Event Risk:** {event.level}")
     rows = [
         {
             "Window": "5 sessions",
             "FII cash net ₹ cr": institutional.fii_5d_net,
             "DII cash net ₹ cr": institutional.dii_5d_net,
-            "FII index futures net ₹ cr": institutional.fii_index_futures_5d_net,
+            "FII Futures Long avg %": institutional.fii_futures_5d_long_avg_pct,
+            "FII Futures Short avg %": institutional.fii_futures_5d_short_avg_pct,
         },
         {
             "Window": "10 sessions",
             "FII cash net ₹ cr": institutional.fii_10d_net,
             "DII cash net ₹ cr": institutional.dii_10d_net,
-            "FII index futures net ₹ cr": institutional.fii_index_futures_10d_net,
+            "FII Futures Long avg %": institutional.fii_futures_10d_long_avg_pct,
+            "FII Futures Short avg %": institutional.fii_futures_10d_short_avg_pct,
         },
         {
             "Window": "15 sessions",
             "FII cash net ₹ cr": institutional.fii_15d_net,
             "DII cash net ₹ cr": institutional.dii_15d_net,
-            "FII index futures net ₹ cr": institutional.fii_index_futures_15d_net,
+            "FII Futures Long avg %": institutional.fii_futures_15d_long_avg_pct,
+            "FII Futures Short avg %": institutional.fii_futures_15d_short_avg_pct,
         },
     ]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)

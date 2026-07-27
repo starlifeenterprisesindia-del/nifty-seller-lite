@@ -126,3 +126,34 @@ def test_context_store_mirror_recovers_primary_regression(tmp_path):
     assert [row["date"] for row in rows] == ["2026-07-16", "2026-07-17"]
     # load() self-heals the primary from the monotonic merged view.
     assert "2026-07-17" in store.path.read_text(encoding="utf-8")
+
+
+def test_context_store_accepts_fii_futures_contracts_and_long_short_percentages(tmp_path):
+    store = MarketContextStore(tmp_path / "context.json")
+    rows = store.upsert(
+        session_date=date(2026, 7, 27),
+        fii_cash_net=-1688.2,
+        dii_cash_net=2329.1,
+        fii_index_futures_contracts=266925,
+        fii_futures_long_pct=8.78,
+        fii_futures_short_pct=91.22,
+        event_risk="NONE",
+    )
+    row = rows[0]
+    assert row["fii_index_futures_contracts"] == 266925.0
+    assert row["fii_futures_long_pct"] == 8.78
+    assert row["fii_futures_short_pct"] == 91.22
+
+
+def test_context_store_rejects_bad_futures_percentage_pair(tmp_path):
+    store = MarketContextStore(tmp_path / "context.json")
+    with pytest.raises(ValueError, match="about 100"):
+        store.upsert(
+            session_date=date(2026, 7, 27),
+            fii_cash_net=-1688.2,
+            dii_cash_net=2329.1,
+            fii_index_futures_contracts=266925,
+            fii_futures_long_pct=8.78,
+            fii_futures_short_pct=80.0,
+            event_risk="NONE",
+        )

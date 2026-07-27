@@ -25,6 +25,7 @@ class MarketContextStore:
 
     SCHEMA_VERSION = 1
     MAX_ABS_CRORE = 100_000.0
+    MAX_FUTURES_CONTRACTS = 10_000_000.0
     ALLOWED_EVENT_RISK = {"NONE", "LOW", "MEDIUM", "HIGH"}
 
     def __init__(
@@ -69,6 +70,43 @@ class MarketContextStore:
                 "Enter the daily net amount in crore, not contracts or cumulative quantity."
             )
         return number
+
+    @classmethod
+    def _contracts(cls, value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            number = round(float(value), 2)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid FII index futures contracts: {value!r}") from None
+        if number < 0 or number > cls.MAX_FUTURES_CONTRACTS:
+            raise ValueError("FII index futures contracts must be a positive quantity")
+        return number
+
+    @staticmethod
+    def _percent(value: Any, field_name: str) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            number = round(float(value), 4)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid {field_name}: {value!r}") from None
+        if not 0.0 <= number <= 100.0:
+            raise ValueError(f"{field_name} must be between 0 and 100")
+        return number
+
+    @classmethod
+    def _futures_percent_pair(cls, long_pct: Any, short_pct: Any) -> tuple[float | None, float | None]:
+        long_value = cls._percent(long_pct, "FII futures long %")
+        short_value = cls._percent(short_pct, "FII futures short %")
+        if long_value is None and short_value is not None:
+            long_value = round(100.0 - short_value, 4)
+        elif short_value is None and long_value is not None:
+            short_value = round(100.0 - long_value, 4)
+        if long_value is not None and short_value is not None:
+            if not 99.0 <= long_value + short_value <= 101.0:
+                raise ValueError("FII futures Long % + Short % should be about 100")
+        return long_value, short_value
 
     def _empty(self) -> dict[str, Any]:
         return {"schema_version": self.SCHEMA_VERSION, "entries": []}
@@ -159,6 +197,9 @@ class MarketContextStore:
         fii_cash_net: float | None,
         dii_cash_net: float | None,
         fii_index_futures_net: float | None = None,
+        fii_index_futures_contracts: float | None = None,
+        fii_futures_long_pct: float | None = None,
+        fii_futures_short_pct: float | None = None,
         event_risk: str,
         event_note: str = "",
         verified: bool = False,
@@ -168,13 +209,20 @@ class MarketContextStore:
             raise ValueError(f"Unsupported event risk: {level}")
         if level in {"MEDIUM", "HIGH"} and not verified:
             raise ValueError("Medium/high event risk must be marked verified")
+        futures_long, futures_short = self._futures_percent_pair(
+            fii_futures_long_pct, fii_futures_short_pct
+        )
         entry = {
             "date": session_date.isoformat(),
             "fii_cash_net": self._number(fii_cash_net, "FII cash net"),
             "dii_cash_net": self._number(dii_cash_net, "DII cash net"),
+            # Legacy field remains readable, but the current UI no longer asks for ₹-crore futures net.
             "fii_index_futures_net": self._number(
                 fii_index_futures_net, "FII index futures net"
             ),
+            "fii_index_futures_contracts": self._contracts(fii_index_futures_contracts),
+            "fii_futures_long_pct": futures_long,
+            "fii_futures_short_pct": futures_short,
             "event_risk": level,
             "event_note": str(event_note or "").strip()[:280],
             "verified": bool(verified),
@@ -235,6 +283,15 @@ class MarketContextStore:
                     "fii_index_futures_net": self._number(
                         raw.get("fii_index_futures_net"), "FII index futures net"
                     ),
+                    "fii_index_futures_contracts": self._contracts(
+                        raw.get("fii_index_futures_contracts")
+                    ),
+                    "fii_futures_long_pct": self._futures_percent_pair(
+                        raw.get("fii_futures_long_pct"), raw.get("fii_futures_short_pct")
+                    )[0],
+                    "fii_futures_short_pct": self._futures_percent_pair(
+                        raw.get("fii_futures_long_pct"), raw.get("fii_futures_short_pct")
+                    )[1],
                     "event_risk": level,
                     "event_note": str(raw.get("event_note") or "").strip()[:280],
                     "verified": verified,

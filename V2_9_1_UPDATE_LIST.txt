@@ -1,0 +1,20 @@
+Replace/update these files only (no delete required):
+
+app.py
+config.py
+models.py
+analysis/market_context.py
+analysis/decision.py
+ui/components.py
+services/context_store.py
+services/pdf_report.py
+
+Optional verification tests:
+tests/test_context_store.py
+tests/test_market_context.py
+
+Docs:
+DEPLOY_V2_9_1.txt
+V2_9_1_CHANGELOG.txt
+V2_9_1_UPDATE_LIST.txt
+V2_9_1_TEST_REPORT.txt

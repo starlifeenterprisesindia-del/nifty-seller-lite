@@ -54,11 +54,37 @@ def _institutional_scores(
     state = context.state.upper()
     if context.status == "MISSING":
         return 50.0, 50.0, 55.0, "FII/DII background is missing"
-    if "SUPPORT" in state or "FII BUYING" in state or "FUTURES LONG" in state:
-        return 68.0, 32.0, 42.0, None
-    if "PRESSURE" in state or "FII SELLING" in state or "FUTURES SHORT" in state:
-        return 32.0, 68.0, 42.0, None
-    return 48.0, 48.0, 60.0, None
+
+    # Cash stays primary; futures Long/Short positioning is secondary confirmation.
+    if "SUPPORT" in state or "FII BUYING" in state:
+        bull, bear, neutral = 68.0, 32.0, 42.0
+    elif "PRESSURE" in state or "FII SELLING" in state:
+        bull, bear, neutral = 32.0, 68.0, 42.0
+    else:
+        bull, bear, neutral = 48.0, 48.0, 60.0
+
+    long_pct = context.latest_fii_futures_long_pct
+    short_pct = context.latest_fii_futures_short_pct
+    if long_pct is not None or short_pct is not None:
+        long_value = float(long_pct if long_pct is not None else 100.0 - float(short_pct or 0.0))
+        short_value = float(short_pct if short_pct is not None else 100.0 - float(long_pct or 0.0))
+        # Max 15-point secondary adjustment even in extreme positioning.
+        adjustment = min(15.0, abs(long_value - short_value) * 0.18)
+        if long_value > short_value:
+            bull += adjustment
+            bear -= adjustment
+        elif short_value > long_value:
+            bear += adjustment
+            bull -= adjustment
+        neutral = max(30.0, neutral - adjustment * 0.5)
+    elif "FUTURES LONG" in state:
+        bull += 8.0
+        bear -= 8.0
+    elif "FUTURES SHORT" in state:
+        bear += 8.0
+        bull -= 8.0
+
+    return clamp(bull, 5.0, 95.0), clamp(bear, 5.0, 95.0), clamp(neutral, 20.0, 80.0), None
 
 
 def _seller_environment_score(vix: VixContext) -> float:

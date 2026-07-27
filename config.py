@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.9.0_EARLY_BARRIER_NEWS_HEDGE_UPDATE"
+    version: str = "2.9.1_FII_FUTURES_POSITION_FIX"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12

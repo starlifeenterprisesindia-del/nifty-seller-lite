@@ -275,6 +275,7 @@ class InstitutionalContext:
     as_of_date: str | None
     latest_fii_net: float | None
     latest_dii_net: float | None
+    # Legacy amount field kept for backward-compatible journal/test reads only.
     latest_fii_index_futures_net: float | None
     fii_5d_net: float | None
     fii_10d_net: float | None
@@ -289,6 +290,17 @@ class InstitutionalContext:
     state: str
     confidence: float
     status: str
+    # Correct position-style FII index-futures fields used by the current UI/brain.
+    latest_fii_index_futures_contracts: float | None = None
+    latest_fii_futures_long_pct: float | None = None
+    latest_fii_futures_short_pct: float | None = None
+    fii_futures_bias: str = "UNAVAILABLE"
+    fii_futures_5d_long_avg_pct: float | None = None
+    fii_futures_5d_short_avg_pct: float | None = None
+    fii_futures_10d_long_avg_pct: float | None = None
+    fii_futures_10d_short_avg_pct: float | None = None
+    fii_futures_15d_long_avg_pct: float | None = None
+    fii_futures_15d_short_avg_pct: float | None = None
 
 
 @dataclass(frozen=True)

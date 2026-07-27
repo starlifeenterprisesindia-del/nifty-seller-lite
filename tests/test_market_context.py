@@ -67,3 +67,25 @@ def test_blank_newer_event_row_does_not_erase_latest_fii_dii_values():
     assert institutional.latest_dii_net == 900.0
     assert event.as_of_date == "2026-07-27"
     assert event.level == "LOW"
+
+
+def test_fii_futures_position_percentages_drive_secondary_bias():
+    entries = [
+        {
+            "date": "2026-07-27",
+            "fii_cash_net": -1688.2,
+            "dii_cash_net": 2329.1,
+            "fii_index_futures_contracts": 266925,
+            "fii_futures_long_pct": 8.78,
+            "fii_futures_short_pct": 91.22,
+            "event_risk": "NONE",
+            "event_note": "",
+            "verified": False,
+        }
+    ]
+    institutional, _ = calculate_market_context(entries, date(2026, 7, 27))
+    assert institutional.latest_fii_index_futures_contracts == 266925
+    assert institutional.latest_fii_futures_long_pct == 8.78
+    assert institutional.latest_fii_futures_short_pct == 91.22
+    assert institutional.fii_futures_bias == "STRONGLY SHORT"
+    assert "FUTURES STRONGLY SHORT" in institutional.state

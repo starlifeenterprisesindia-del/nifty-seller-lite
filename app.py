@@ -186,10 +186,27 @@ with st.sidebar:
             value=context_text(saved_context.get("dii_cash_net")),
             key=f"dii_cash_{context_key}",
         )
-        fii_futures_raw = st.text_input(
-            "FII index futures net ₹ crore (optional; amount only, not contracts)",
-            value=context_text(saved_context.get("fii_index_futures_net")),
-            key=f"fii_futures_{context_key}",
+        fii_futures_contracts_raw = st.text_input(
+            "FII Index Futures contracts (optional; quantity, not ₹ crore)",
+            value=context_text(saved_context.get("fii_index_futures_contracts")),
+            key=f"fii_futures_contracts_{context_key}",
+        )
+        futures_c1, futures_c2 = st.columns(2)
+        with futures_c1:
+            fii_futures_long_raw = st.text_input(
+                "FII Futures Long %",
+                value=context_text(saved_context.get("fii_futures_long_pct")),
+                key=f"fii_futures_long_{context_key}",
+            )
+        with futures_c2:
+            fii_futures_short_raw = st.text_input(
+                "FII Futures Short %",
+                value=context_text(saved_context.get("fii_futures_short_pct")),
+                key=f"fii_futures_short_{context_key}",
+            )
+        st.caption(
+            "Example: HDFC Sky me FII Index Futures 2,66,925; Long 8.78%; Short 91.22% ho to "
+            "266925, 8.78, 91.22 enter karo. Minus sign contracts par mat lagao; direction Long/Short % se niklegi."
         )
         event_options = ["NONE", "LOW", "MEDIUM", "HIGH"]
         saved_level = str(saved_context.get("event_risk") or "NONE").upper()
@@ -225,7 +242,7 @@ with st.sidebar:
         st.caption(
             "One row per trading date. Same date updates only that row; a new date adds a row. "
             "Latest 15 sessions primary + mirror atomic files me save hote hain aur read par merge hote hain. "
-            "Missing stays missing, never zero. Daily amounts above 100,000 crore are rejected as likely input errors."
+            "Missing stays missing, never zero. Cash ₹ crore me hai; Index Futures contracts + Long/Short % me save hote hain."
         )
 
         saved_rows = list(reversed(context_store.load()))
@@ -236,7 +253,9 @@ with st.sidebar:
                         "Date": row.get("date"),
                         "FII cash": row.get("fii_cash_net"),
                         "DII cash": row.get("dii_cash_net"),
-                        "FII futures": row.get("fii_index_futures_net"),
+                        "FII fut contracts": row.get("fii_index_futures_contracts"),
+                        "Long %": row.get("fii_futures_long_pct"),
+                        "Short %": row.get("fii_futures_short_pct"),
                         "Event": row.get("event_risk", "NONE"),
                     }
                     for row in saved_rows
@@ -269,7 +288,10 @@ with st.sidebar:
                 session_date=context_date,
                 fii_cash_net=optional_number(fii_raw),
                 dii_cash_net=optional_number(dii_raw),
-                fii_index_futures_net=optional_number(fii_futures_raw),
+                fii_index_futures_net=None,
+                fii_index_futures_contracts=optional_number(fii_futures_contracts_raw),
+                fii_futures_long_pct=optional_number(fii_futures_long_raw),
+                fii_futures_short_pct=optional_number(fii_futures_short_raw),
                 event_risk=event_level,
                 event_note=event_note,
                 verified=event_verified,
@@ -285,6 +307,9 @@ with st.sidebar:
             "fii_cash_",
             "dii_cash_",
             "fii_futures_",
+            "fii_futures_contracts_",
+            "fii_futures_long_",
+            "fii_futures_short_",
             "event_level_",
             "event_verified_",
             "event_note_",
@@ -302,6 +327,9 @@ with st.sidebar:
                         "fii_cash_",
                         "dii_cash_",
                         "fii_futures_",
+                        "fii_futures_contracts_",
+                        "fii_futures_long_",
+                        "fii_futures_short_",
                         "event_level_",
                         "event_verified_",
                         "event_note_",

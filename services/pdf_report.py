@@ -1150,14 +1150,21 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
                     f"As of {inst.as_of_date or '-'}",
                 ],
                 [
-                    "FII index futures net",
-                    inst.latest_fii_index_futures_net,
-                    inst.fii_index_futures_5d_net,
-                    inst.fii_index_futures_10d_net,
-                    inst.fii_index_futures_15d_net,
-                    "SECONDARY CONFIRMATION",
+                    "FII index futures position",
+                    (
+                        f"{inst.latest_fii_index_futures_contracts:,.0f} contracts; "
+                        f"L {inst.latest_fii_futures_long_pct:.2f}% / S {inst.latest_fii_futures_short_pct:.2f}%"
+                        if inst.latest_fii_index_futures_contracts is not None
+                        and inst.latest_fii_futures_long_pct is not None
+                        and inst.latest_fii_futures_short_pct is not None
+                        else inst.fii_futures_bias
+                    ),
+                    f"L {inst.fii_futures_5d_long_avg_pct or 0:.2f}% / S {inst.fii_futures_5d_short_avg_pct or 0:.2f}%",
+                    f"L {inst.fii_futures_10d_long_avg_pct or 0:.2f}% / S {inst.fii_futures_10d_short_avg_pct or 0:.2f}%",
+                    f"L {inst.fii_futures_15d_long_avg_pct or 0:.2f}% / S {inst.fii_futures_15d_short_avg_pct or 0:.2f}%",
+                    inst.fii_futures_bias,
                     f"{inst.confidence:.1f}% / {inst.status}",
-                    "Optional; cash data remains primary",
+                    "Contracts are quantity; direction uses Long/Short %; cash stays primary",
                 ],
                 [
                     "Verified event risk",
