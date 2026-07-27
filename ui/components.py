@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from html import escape
 from typing import Any
 
 import pandas as pd
@@ -9,6 +10,144 @@ import streamlit as st
 from analysis.evidence_matrix import build_compact_evidence_matrix
 from models import MarketLevel, MarketSnapshot, TimeframeIndicators
 
+
+def _barrier_sources(level: Any | None) -> str:
+    if level is None or not level.sources:
+        return "Data unavailable"
+    return " + ".join(str(item) for item in level.sources[:4])
+
+
+def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: str) -> str:
+    if level is None:
+        return (
+            f'<div class="bm-level {css_class} muted">'
+            f'<div class="bm-tag">{escape(fallback_label)}</div>'
+            '<div class="bm-zone">Unresolved</div></div>'
+        )
+    state = escape(str(level.state))
+    sources = escape(_barrier_sources(level))
+    strength_width = max(0.0, min(100.0, float(level.strength)))
+    pressure_width = max(0.0, min(100.0, float(level.break_pressure)))
+    return f"""
+    <div class="bm-level {css_class}">
+      <div class="bm-level-head">
+        <span class="bm-tag">{escape(level.label)} · {escape(level.side.title())}</span>
+        <span class="bm-state">{state}</span>
+      </div>
+      <div class="bm-zone">{level.lower:,.0f}–{level.upper:,.0f}</div>
+      <div class="bm-bars">
+        <div><span>Strength</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>
+        <div><span>Break Pressure</span><b>{level.break_pressure:.0f}/100</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>
+      </div>
+      <div class="bm-small">Distance {level.distance_points:,.0f} pts · Kyun: {sources}</div>
+    </div>
+    """
+
+
+def render_barrier_map(snapshot: MarketSnapshot) -> None:
+    item = snapshot.barrier_map
+    st.subheader("🧭 Live Barrier + Range Map")
+    st.caption(
+        "Yeh top live road-map Support/Resistance, OI flow, price structure, volume, Top-7, "
+        "market speed aur India VIX ko ek hi view me dikhata hai. Strength aur Break Pressure "
+        "evidence scores hain — guaranteed probability nahi."
+    )
+
+    range_item = item.trading_range
+    speed = item.market_speed
+    range_text = (
+        f"{range_item.lower:,.0f}–{range_item.upper:,.0f}"
+        if range_item.lower is not None and range_item.upper is not None
+        else "Unresolved"
+    )
+    remaining_move = (
+        f"±{item.vix_expected_remaining_move_points:,.0f} pts"
+        if item.vix_expected_remaining_move_points is not None
+        else "—"
+    )
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("NIFTY Now", f"{item.current_price:,.2f}" if item.current_price is not None else "—")
+    c2.metric("Probable Range", range_text)
+    c3.metric("Range Confidence", f"{range_item.confidence:.0f}/100")
+    c4.metric("Market Speed", f"{speed.state} {speed.score:.0f}/100")
+    c5.metric("Speed Direction", speed.direction)
+    c6.metric("VIX Remaining Move", remaining_move)
+
+    if speed.state == "DANGER":
+        st.error(
+            f"🚨 FAST MARKET DANGER — speed {speed.score:.0f}/100 ({speed.direction}). "
+            "Fresh option selling me extra caution; barrier break fast ho sakta hai."
+        )
+    elif speed.state == "FAST":
+        st.warning(
+            f"⚡ Market FAST hai — speed {speed.score:.0f}/100 ({speed.direction}). "
+            "Nearest barrier ki Break Pressure ko priority se dekho."
+        )
+
+    r2 = _barrier_level_html(item.next_resistance, css_class="res secondary", fallback_label="R2")
+    r1 = _barrier_level_html(item.nearest_resistance, css_class="res primary", fallback_label="R1")
+    s1 = _barrier_level_html(item.nearest_support, css_class="sup primary", fallback_label="S1")
+    s2 = _barrier_level_html(item.next_support, css_class="sup secondary", fallback_label="S2")
+    spot = f"{item.current_price:,.2f}" if item.current_price is not None else "—"
+    range_state = escape(range_item.state)
+    bias = escape(range_item.breakout_bias)
+    range_pos = f"{range_item.position_pct:.0f}%" if range_item.position_pct is not None else "—"
+    vix_daily = f"±{item.vix_expected_daily_move_points:,.0f} pts" if item.vix_expected_daily_move_points is not None else "—"
+    vix_5 = f"{speed.vix_change_5m_pct:+.1f}%" if speed.vix_change_5m_pct is not None else "warming"
+    vix_15 = f"{speed.vix_change_15m_pct:+.1f}%" if speed.vix_change_15m_pct is not None else "warming"
+    volume_text = f"{speed.volume_ratio:.2f}x" if speed.volume_ratio is not None else "warming"
+
+    st.markdown(
+        f"""
+<style>
+.bm-wrap{{border:1px solid rgba(128,128,128,.25);border-radius:16px;padding:14px;background:rgba(127,127,127,.035);margin:6px 0 10px}}
+.bm-level{{border-radius:12px;padding:10px 12px;margin:7px 0;border-left:6px solid}}
+.bm-level.res{{border-left-color:#d9534f;background:rgba(217,83,79,.08)}}
+.bm-level.sup{{border-left-color:#2e9d63;background:rgba(46,157,99,.08)}}
+.bm-level.secondary{{opacity:.84}}
+.bm-level.primary{{box-shadow:0 0 0 1px rgba(127,127,127,.10) inset}}
+.bm-level.muted{{opacity:.55}}
+.bm-level-head{{display:flex;justify-content:space-between;gap:12px;align-items:center}}
+.bm-tag{{font-size:.78rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase}}
+.bm-state{{font-size:.75rem;font-weight:700;opacity:.8}}
+.bm-zone{{font-size:1.45rem;font-weight:800;line-height:1.2;margin:3px 0 7px}}
+.bm-bars{{display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:.78rem}}
+.bm-bars>div>span{{opacity:.75;margin-right:6px}}
+.bm-bars b{{float:right}}
+.bm-track{{height:6px;border-radius:99px;background:rgba(127,127,127,.18);overflow:hidden;margin-top:4px}}
+.bm-fill{{height:100%;background:#6b7280;border-radius:99px}}
+.bm-fill.pressure{{background:#f59e0b}}
+.bm-small{{font-size:.78rem;opacity:.78;margin-top:7px}}
+.bm-spot{{margin:10px 0;padding:13px;border-radius:12px;text-align:center;border:2px solid rgba(80,130,255,.45);background:rgba(80,130,255,.08)}}
+.bm-spot .price{{font-size:1.55rem;font-weight:900}}
+.bm-road{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;font-size:.82rem}}
+.bm-road>div{{padding:8px;border-radius:9px;background:rgba(127,127,127,.07)}}
+@media (max-width:900px){{.bm-bars,.bm-road{{grid-template-columns:1fr}}}}
+</style>
+<div class="bm-wrap">
+  {r2}
+  {r1}
+  <div class="bm-spot">
+    <div>NIFTY CURRENT</div><div class="price">{spot}</div>
+    <div>{range_state} · Position {range_pos} · Break Bias {bias}</div>
+  </div>
+  {s1}
+  {s2}
+  <div class="bm-road">
+    <div><b>India VIX Risk</b><br>{escape(item.vix_risk)} · Daily move {vix_daily}</div>
+    <div><b>VIX Speed</b><br>5m {vix_5} · 15m {vix_15}</div>
+    <div><b>Option Shock</b><br>{speed.option_shock_score:.0f}/100 · Volume {volume_text}</div>
+  </div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info("🧠 **Barrier Brain:** " + item.summary)
+    if range_item.explanation:
+        st.caption(range_item.explanation)
+    if speed.reasons:
+        st.caption("Speed reasons: " + " | ".join(speed.reasons))
 
 def render_market_session(snapshot: MarketSnapshot) -> None:
     session = snapshot.market_session

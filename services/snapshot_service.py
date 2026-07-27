@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from analysis.barrier_map import calculate_barrier_map
 from analysis.candles import (
     aggregate_candles,
     candles_from_dhan,
@@ -624,6 +625,7 @@ class SnapshotService:
                     expiry=expiry,
                     spot=float(current_price) if current_price is not None else None,
                     frame=validated_option_frame,
+                    vix=self._positive_number((vix_quote or {}).get("last_price")),
                 )
             except Exception as exc:
                 option_state_error = str(exc)
@@ -774,6 +776,22 @@ class SnapshotService:
             levels=levels,
             options=option_intelligence,
             spot=float(current_price) if current_price is not None else 0.0,
+        )
+        barrier_map = calculate_barrier_map(
+            spot=float(current_price) if current_price is not None else 0.0,
+            captured_at=current,
+            market_session=market_session,
+            expiry=expiry,
+            candles_1m=candles_1m,
+            levels=levels,
+            indicators=indicators,
+            price_action=price_action,
+            core=core_evidence,
+            volume=volume,
+            options=option_intelligence,
+            heavyweights=heavyweights,
+            vix=vix_context,
+            option_history=option_history,
         )
 
         discipline_error: str | None = None
@@ -956,6 +974,7 @@ class SnapshotService:
             event_risk=event_risk,
             news_context=news_context,
             pre_touch_barriers=pre_touch_barriers,
+            barrier_map=barrier_map,
             decision=decision,
             trade_plan=trade_plan,
             execution_guard=execution_guard,
@@ -984,6 +1003,8 @@ class SnapshotService:
                 "decision_engine": "analysis.decision.calculate_final_decision",
                 "pre_touch_engine": "analysis.pre_touch_barriers.calculate_pre_touch_barriers",
                 "pre_touch_status": pre_touch_barriers.status,
+                "barrier_map_engine": "analysis.barrier_map.calculate_barrier_map",
+                "barrier_map_status": barrier_map.status,
                 "news_status": news_context.status,
                 "trade_plan_engine": "analysis.trade_plan.calculate_trade_plan",
                 "trade_plan_status": trade_plan.status,

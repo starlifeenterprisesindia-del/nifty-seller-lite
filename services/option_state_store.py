@@ -87,9 +87,9 @@ class OptionStateStore:
 
     @staticmethod
     def _fingerprint(
-        expiry: str, spot: float | None, rows: list[dict[str, Any]]
+        expiry: str, spot: float | None, rows: list[dict[str, Any]], vix: float | None = None
     ) -> str:
-        payload = {"expiry": expiry, "spot": spot, "rows": rows}
+        payload = {"expiry": expiry, "spot": spot, "vix": vix, "rows": rows}
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:20]
@@ -101,14 +101,17 @@ class OptionStateStore:
         expiry: str,
         spot: float | None,
         frame: pd.DataFrame,
+        vix: float | None = None,
     ) -> dict[str, Any]:
         rows = self.frame_rows(frame)
         clean_spot = self._clean_number(spot)
+        clean_vix = self._clean_number(vix)
         return {
             "captured_at": captured_at.isoformat(),
             "expiry": str(expiry),
             "spot": clean_spot,
-            "fingerprint": self._fingerprint(str(expiry), clean_spot, rows),
+            "vix": clean_vix,
+            "fingerprint": self._fingerprint(str(expiry), clean_spot, rows, clean_vix),
             "rows": rows,
         }
 

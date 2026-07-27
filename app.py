@@ -36,6 +36,7 @@ from ui.components import (
     render_news_context,
     render_pre_touch_barriers,
     render_best_protected_sells,
+    render_barrier_map,
     render_option_chain,
     render_option_flow_matrix,
     render_option_intelligence,
@@ -52,9 +53,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.9 Early Barrier + News + Protected Hedge Update — one canonical strategy brain, "
-    "pre-touch S/R warning, stronger FII/DII persistence, live news context and best CE/PE "
-    "sell with hedge. Read only; no order placement."
+    "V2.10 Live Barrier Roadmap — one canonical strategy brain plus top-screen Barrier + Range Map, "
+    "Barrier Strength, Break Pressure, next support/resistance, market-speed danger and India VIX "
+    "expected-move context. Read only; no order placement."
 )
 
 
@@ -411,6 +412,7 @@ if "snapshot" not in st.session_state or refresh:
 snapshot = st.session_state.snapshot
 render_market_session(snapshot)
 render_header(snapshot)
+render_barrier_map(snapshot)
 
 required_feed_keys = ("quotes", "candles", "option_chain")
 required_feed_states = {

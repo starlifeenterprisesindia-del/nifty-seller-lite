@@ -80,3 +80,20 @@ def test_store_clear_removes_active_file(tmp_path):
     assert store.path.exists()
     store.clear()
     assert not store.path.exists()
+
+
+def test_option_state_snapshot_can_store_vix(tmp_path):
+    store = OptionStateStore(tmp_path / "option_state.json")
+    now = datetime(2026, 7, 27, 11, 0, tzinfo=IST)
+    frame = pd.DataFrame(
+        [
+            {"strike": 25000, "side": "CE", "last_price": 100, "oi": 1000, "volume": 500},
+            {"strike": 25000, "side": "PE", "last_price": 90, "oi": 1100, "volume": 550},
+        ]
+    )
+    snapshot = store.make_snapshot(captured_at=now, expiry="2026-07-30", spot=25000, frame=frame, vix=14.25)
+    assert snapshot["vix"] == 14.25
+    _, appended = store.append(snapshot)
+    assert appended is True
+    loaded = store.load_session(captured_at=now, expiry="2026-07-30")
+    assert loaded[-1]["vix"] == 14.25

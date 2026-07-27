@@ -445,6 +445,57 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
 
+    roadmap = snapshot.barrier_map
+    story.append(_sub_title("Live Barrier + Range Map"))
+    roadmap_rows = []
+    for level in (
+        roadmap.next_resistance,
+        roadmap.nearest_resistance,
+        roadmap.nearest_support,
+        roadmap.next_support,
+    ):
+        if level is None:
+            continue
+        roadmap_rows.append(
+            [
+                level.label,
+                level.side,
+                f"{level.lower:,.2f} - {level.upper:,.2f}",
+                f"{level.strength:.1f}/100",
+                f"{level.break_pressure:.1f}/100",
+                level.state,
+                " | ".join(level.sources[:4]),
+            ]
+        )
+    if roadmap_rows:
+        story.append(
+            _table(
+                ["Level", "Side", "Zone", "Strength", "Break pressure", "State", "Why"],
+                roadmap_rows,
+                widths=[16 * mm, 24 * mm, 42 * mm, 25 * mm, 31 * mm, 36 * mm, 83 * mm],
+                compact=True,
+            )
+        )
+    range_item = roadmap.trading_range
+    speed = roadmap.market_speed
+    story.append(
+        _table(
+            ["Range", "Range conf.", "Position", "Break bias", "Speed", "VIX risk", "VIX rem. move"],
+            [[
+                f"{range_item.lower:,.2f} - {range_item.upper:,.2f}" if range_item.lower is not None and range_item.upper is not None else "-",
+                f"{range_item.confidence:.1f}/100",
+                f"{range_item.position_pct:.1f}%" if range_item.position_pct is not None else "-",
+                range_item.breakout_bias,
+                f"{speed.state} {speed.score:.1f}/100 {speed.direction}",
+                roadmap.vix_risk,
+                f"+/- {roadmap.vix_expected_remaining_move_points:.1f} pts" if roadmap.vix_expected_remaining_move_points is not None else "-",
+            ]],
+            widths=[45 * mm, 28 * mm, 24 * mm, 32 * mm, 48 * mm, 30 * mm, 42 * mm],
+            compact=True,
+        )
+    )
+    story.append(Paragraph(roadmap.summary, styles["Body"]))
+
     decision = snapshot.decision
     story.append(_section_title("3. Final One-Brain Decision"))
     decision_color = _GREEN if decision.final_action != "WAIT" else _WARN

@@ -1,4 +1,67 @@
-# Nifty Seller Lite — V2.9 Early Barrier + News + Protected Hedge Update
+# Nifty Seller Lite — V2.10 Live Barrier Roadmap + Speed/VIX
+
+## V2.10 changes
+
+### 1. Top-screen Live Barrier + Range Map
+A new display-only roadmap is rendered near the top of the app. It does not create a
+second strategy brain and cannot override the Final One-Brain Decision. It shows:
+- nearest and next resistance (R1/R2)
+- nearest and next support (S1/S2)
+- Barrier Strength 0–100
+- Break Pressure 0–100
+- probable current range + Range Confidence
+- position inside the range
+- upside/downside break bias and next range path
+
+Barrier Strength is an evidence score, **not** a guaranteed hold probability. It combines
+price-structure confluence, CE/PE OI wall/flow behaviour, recent reaction quality,
+3m/15m momentum, Top-7 direction and volume confirmation.
+
+### 2. Market Speed / Danger Meter
+The roadmap classifies the live tape as `NORMAL`, `ACTIVE`, `FAST` or `DANGER` and
+adds a separate speed direction (`UP`, `DOWN`, `MIXED`). The score combines:
+- 1m/3m/5m spot displacement versus current 3m ATR
+- futures relative-volume expansion
+- option-premium shock across the existing 1m/3m/5m option windows
+- India VIX regime and short-horizon VIX change when enough same-session snapshots exist
+- Top-7 synchronisation
+- opening/closing/expiry time-risk modifier
+
+The first 5/15 minutes of VIX-speed history can show `warming` until sufficient new
+snapshots are collected after deployment.
+
+### 3. India VIX expected-move context
+The roadmap uses the already fetched live India VIX value to calculate a one-trading-day
+volatility move estimate: `Spot × (VIX/100) / sqrt(252)`. During a confirmed live session,
+it also scales that move by the square root of the remaining fraction of the 375-minute
+NSE cash session. VIX is used as volatility/risk context, never as bullish/bearish direction.
+
+### 4. Barrier break path
+Once spot clears an old barrier zone, that old zone is no longer kept as the active barrier;
+the next valid R/S cluster is promoted. This makes the map answer “agar yeh toot gaya to
+next barrier kahan hai aur kitna strong hai?” without waiting for a separate manual chart.
+
+### 5. VIX telemetry persisted with bounded option history
+The existing same-day bounded option-state snapshots now also store the live VIX value.
+This allows 5m/15m VIX-speed calculations without adding another unbounded state file.
+Runtime state remains local/atomic and the app stays read-only.
+
+### 6. Audit PDF
+The full audit PDF now includes the Barrier + Range Map values, strength/break-pressure,
+range state, market-speed state and VIX remaining-move context.
+
+## Update deployment — replace only, no delete
+Use `V2_10_UPDATE_LIST.txt`. Upload only the listed files and replace matching files in
+the existing repository. Do **not** delete app folders or runtime JSON state files.
+
+Expected version:
+
+```text
+2.10.0_BARRIER_ROADMAP_SPEED_VIX
+```
+
+---
+
 
 Read-only Streamlit decision-support app built around one authoritative DhanHQ
 `MarketSnapshot` and exactly one canonical strategy brain:
@@ -72,7 +135,7 @@ Use `V2_9_UPDATE_LIST.txt`. Upload only the listed files to the existing reposit
 Expected version:
 
 ```text
-2.9.0_EARLY_BARRIER_NEWS_HEDGE_UPDATE
+2.9.1_FII_FUTURES_POSITION_FIX
 ```
 
 Decision-support only. Verify broker quotes, liquidity, margin, fills and hedge prices.

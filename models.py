@@ -355,6 +355,70 @@ class PreTouchBarrierBundle:
     status: str
 
 
+
+
+@dataclass(frozen=True)
+class BarrierMapLevel:
+    label: str
+    side: str
+    lower: float
+    upper: float
+    midpoint: float
+    strength: float
+    break_pressure: float
+    distance_points: float
+    state: str
+    sources: tuple[str, ...]
+    explanation: str
+
+
+@dataclass(frozen=True)
+class MarketSpeedContext:
+    score: float
+    state: str
+    direction: str
+    move_1m_points: float | None
+    move_3m_points: float | None
+    move_5m_points: float | None
+    vix_change_5m_pct: float | None
+    vix_change_15m_pct: float | None
+    volume_ratio: float | None
+    option_shock_score: float
+    reasons: tuple[str, ...]
+    status: str
+
+
+@dataclass(frozen=True)
+class BarrierRangeContext:
+    lower: float | None
+    upper: float | None
+    confidence: float
+    position_pct: float | None
+    state: str
+    upside_next_lower: float | None
+    upside_next_upper: float | None
+    downside_next_lower: float | None
+    downside_next_upper: float | None
+    breakout_bias: str
+    explanation: str
+
+
+@dataclass(frozen=True)
+class BarrierMap:
+    current_price: float | None
+    nearest_resistance: BarrierMapLevel | None
+    next_resistance: BarrierMapLevel | None
+    nearest_support: BarrierMapLevel | None
+    next_support: BarrierMapLevel | None
+    trading_range: BarrierRangeContext
+    market_speed: MarketSpeedContext
+    vix_expected_daily_move_points: float | None
+    vix_expected_remaining_move_points: float | None
+    vix_risk: str
+    summary: str
+    status: str
+
+
 @dataclass(frozen=True)
 class StrategyEvaluation:
     name: str
@@ -633,6 +697,7 @@ class MarketSnapshot:
     event_risk: EventRiskContext
     news_context: NewsContext
     pre_touch_barriers: PreTouchBarrierBundle
+    barrier_map: BarrierMap
     decision: FinalDecision
     trade_plan: TradePlanBundle
     execution_guard: ExecutionGuard
@@ -674,6 +739,7 @@ class MarketSnapshot:
                 "event_risk": asdict(self.event_risk),
                 "news_context": asdict(self.news_context),
                 "pre_touch_barriers": asdict(self.pre_touch_barriers),
+                "barrier_map": asdict(self.barrier_map),
                 "decision": asdict(self.decision),
                 "trade_plan": asdict(self.trade_plan),
                 "execution_guard": asdict(self.execution_guard),
