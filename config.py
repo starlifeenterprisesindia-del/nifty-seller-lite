@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.12.0_ACCURACY_CLARITY_RETENTION"
+    version: str = "2.13.0_SPOT_PREMIUM_CALCULATOR"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12

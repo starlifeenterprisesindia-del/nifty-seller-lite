@@ -32,3 +32,9 @@ scores liquidity, distance and credit/risk efficiency. It cannot change strategy
 ## Read-only execution
 No module places, modifies or exits broker orders. Execution Guard and Position Guardian
 remain deterministic read-only risk/discipline layers.
+
+## Spot-to-Premium utility boundary (V2.13)
+- `analysis/spot_premium_calculator.py` consumes only the already-fetched snapshot option chain plus manual user inputs.
+- It estimates scenario premiums and P&L; it never emits CE SELL / PE SELL / IRON CONDOR / WAIT strategy decisions.
+- It has no broker client, no network call, no state-store write and no order-placement path.
+- The only canonical strategy brain remains `analysis/decision.py::calculate_final_decision`.

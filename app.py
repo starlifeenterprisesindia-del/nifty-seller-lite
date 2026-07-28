@@ -45,6 +45,7 @@ from ui.components import (
     render_option_flow_matrix,
     render_option_intelligence,
     render_option_windows,
+    render_spot_premium_calculator,
     render_position_guardian,
     render_price_action,
     render_trade_plan,
@@ -57,7 +58,7 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.12 Accuracy + Clarity — one canonical strategy brain, compact mobile Main AI, strict news freshness, "
+    "V2.13 Spot Premium Calculator — one canonical strategy brain, compact mobile Main AI, strict news freshness, "
     "24-hour temporary-data cleanup, live Barrier + Range Map, protected hedge reference and India VIX context. "
     "Read only; no order placement."
 )
@@ -425,6 +426,7 @@ previous_snapshot = st.session_state.get("previous_snapshot")
 render_market_session(snapshot)
 render_main_ai_market_view(snapshot, previous_snapshot)
 render_barrier_map(snapshot)
+render_spot_premium_calculator(snapshot)
 render_evidence_matrix(snapshot)
 render_market_outlook(snapshot)
 

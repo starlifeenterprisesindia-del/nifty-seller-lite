@@ -1,0 +1,18 @@
+REPLACE / UPDATE
+app.py
+config.py
+ui/components.py
+README.md
+ARCHITECTURE.md
+
+ADD
+analysis/spot_premium_calculator.py
+tests/test_spot_premium_calculator.py
+V2_13_CHANGELOG.txt
+V2_13_UPDATE_LIST.txt
+V2_13_TEST_REPORT.txt
+DEPLOY_V2_13.txt
+
+DO NOT DELETE OR REPLACE
+data/
+.streamlit/secrets.toml

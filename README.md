@@ -1,4 +1,30 @@
-# Nifty Seller Lite — V2.12 Accuracy + Clarity + Retention
+# Nifty Seller Lite — V2.13 Spot-to-Premium Calculator
+
+## V2.13 changes
+
+### Manual-range Spot-to-Premium Calculator
+A new collapsed calculator sits below the Barrier Map. The user selects **CE/PE**, **BUY/SELL**, strike, entry premium, current premium, expected time and manually enters the lower/upper NIFTY range. It returns:
+- estimated option premium at lower, current and upper NIFTY levels
+- probable premium zone instead of a false exact guarantee
+- BUY position sell-exit price or SELL position buyback price
+- P&L per quantity, per lot and total lots
+- reliability score and live/reference-only status
+
+The estimator is anchored to the current same-expiry option chain. It combines a local option-chain moneyness shift with Delta/Gamma and Theta adjustment, then widens the result using IV/Vega, bid-ask spread and method disagreement. Missing Greeks fall back safely to chain-based estimation.
+
+### Architecture safety
+`analysis/spot_premium_calculator.py` is a separate read-only utility engine. It does not call Dhan directly, does not place orders and cannot change `analysis/decision.py::calculate_final_decision`, Main AI scores, Final Action or execution readiness.
+
+## V2.13 update deployment — replace/update only
+Use `V2_13_UPDATE_LIST.txt`. Replace matching files at the same paths and add the new calculator module. Do **not** delete the repository or runtime `data/` folder.
+
+Expected version:
+
+```text
+2.13.0_SPOT_PREMIUM_CALCULATOR
+```
+
+---
 
 ## V2.12 changes
 

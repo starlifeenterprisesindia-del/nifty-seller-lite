@@ -1,0 +1,15 @@
+V2.13 TEST REPORT
+
+Automated non-Streamlit tests: 147 passed.
+New Spot-to-Premium calculator tests: 7 passed.
+Python compileall: PASS.
+CE/PE direction behaviour: PASS.
+BUY/SELL P&L inversion: PASS.
+Manual current-premium anchoring: PASS.
+Live/reference reliability guard: PASS.
+Missing-Greeks safe fallback: PASS.
+Invalid manual-range validation: PASS.
+One-Brain/read-only calculator boundary: PASS.
+
+Environment limitation:
+Streamlit is not installed in the build container, so tests/test_app_smoke.py could not be collected here. All remaining 147 tests passed with that single Streamlit-only test excluded.

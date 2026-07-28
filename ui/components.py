@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from analysis.evidence_matrix import build_compact_evidence_matrix
+from analysis.spot_premium_calculator import calculate_spot_premium_range
 from models import MarketLevel, MarketSnapshot, TimeframeIndicators
 from services.summary_presenter import (
     best_existing_candidate,
@@ -150,6 +151,278 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         st.caption(range_item.explanation)
     if speed.reasons:
         st.caption("Speed reasons: " + " | ".join(speed.reasons))
+
+
+def _calculator_contract_row(snapshot: MarketSnapshot, side: str, strike: float) -> pd.Series | None:
+    frame = snapshot.option_chain
+    if frame.empty or not {"side", "strike"}.issubset(frame.columns):
+        return None
+    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    if rows.empty:
+        return None
+    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
+    rows = rows.dropna(subset=["strike"])
+    if rows.empty:
+        return None
+    idx = (rows["strike"] - float(strike)).abs().idxmin()
+    return rows.loc[idx]
+
+
+
+def _cell_float(row: pd.Series | None, name: str) -> float:
+    if row is None:
+        return 0.0
+    value = pd.to_numeric(pd.Series([row.get(name)]), errors="coerce").iloc[0]
+    return float(value) if pd.notna(value) else 0.0
+
+
+def _inr(value: float) -> str:
+    sign = "-" if value < 0 else ""
+    number = abs(float(value))
+    whole, dot, fraction = f"{number:.2f}".partition(".")
+    if len(whole) > 3:
+        tail = whole[-3:]
+        head = whole[:-3]
+        groups = []
+        while head:
+            groups.append(head[-2:])
+            head = head[:-2]
+        whole = ",".join(reversed(groups)) + "," + tail
+    return f"{sign}₹{whole}.{fraction}" if dot else f"{sign}₹{whole}"
+
+
+def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
+    with st.expander("🧮 Spot-to-Premium Calculator — Manual Range", expanded=False):
+        st.caption(
+            "Apni lower/upper NIFTY range khud bharo. Calculator live option chain, Delta, Gamma, "
+            "Theta, Vega, IV aur bid-ask ko use karke CE/PE BUY ya SELL ka probable exit premium "
+            "aur P&L zone nikalega. Yeh separate utility engine hai; Main AI decision ko touch nahi karta."
+        )
+
+        option_frame = snapshot.option_chain
+        chain_state = snapshot.feed_status.get("option_chain")
+        feed_state = str(getattr(chain_state, "use_state", "UNAVAILABLE") or "UNAVAILABLE").upper()
+        live_spot = float(snapshot.nifty_quote.get("last_price") or 0.0)
+        if option_frame.empty or live_spot <= 0:
+            st.warning("Option chain ya NIFTY price available nahi hai. Fresh snapshot ke baad calculator use karo.")
+            return
+
+        top1, top2, top3 = st.columns(3)
+        with top1:
+            side = st.selectbox("Option type", ["CE", "PE"], key="spc_side")
+        with top2:
+            position = st.selectbox("Position", ["SELL", "BUY"], key="spc_position")
+        side_rows = option_frame[option_frame["side"].astype(str).str.upper().eq(side)].copy()
+        side_rows["strike"] = pd.to_numeric(side_rows["strike"], errors="coerce")
+        strikes = sorted(float(value) for value in side_rows["strike"].dropna().unique())
+        if not strikes:
+            st.warning(f"{side} strikes option chain me available nahi hain.")
+            return
+        default_strike = min(strikes, key=lambda value: abs(value - live_spot))
+        with top3:
+            strike_key = f"spc_strike_{side}"
+            if strike_key in st.session_state and st.session_state[strike_key] not in strikes:
+                st.session_state.pop(strike_key, None)
+            strike = st.selectbox(
+                "Strike",
+                strikes,
+                index=strikes.index(default_strike),
+                format_func=lambda value: f"{value:,.0f} {side}",
+                key=strike_key,
+            )
+
+        row = _calculator_contract_row(snapshot, side, strike)
+        chain_price = _cell_float(row, "last_price")
+        bid = _cell_float(row, "top_bid_price")
+        ask = _cell_float(row, "top_ask_price")
+        delta = _cell_float(row, "delta")
+        gamma = _cell_float(row, "gamma")
+        theta = _cell_float(row, "theta")
+        iv = _cell_float(row, "implied_volatility")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Chain premium", f"₹{chain_price:,.2f}" if chain_price > 0 else "—")
+        m2.metric("Bid / Ask", f"₹{bid:,.2f} / ₹{ask:,.2f}" if bid or ask else "—")
+        m3.metric("Delta / Gamma", f"{delta:.3f} / {gamma:.5f}" if delta or gamma else "—")
+        m4.metric("IV / Theta", f"{iv:.2f} / {theta:.2f}" if iv or theta else "—")
+
+        contract_key = f"{side}_{int(round(strike))}"
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            use_live_spot = st.checkbox(
+                "Current NIFTY live snapshot se lo",
+                value=True,
+                key="spc_use_live_spot",
+            )
+            if use_live_spot:
+                current_spot = live_spot
+                st.caption(f"Current NIFTY: {current_spot:,.2f}")
+            else:
+                current_spot = st.number_input(
+                    "Manual current NIFTY",
+                    min_value=1.0,
+                    value=float(live_spot),
+                    step=1.0,
+                    key="spc_manual_current_spot",
+                )
+        with p2:
+            use_chain_price = st.checkbox(
+                "Current premium live chain se lo",
+                value=True,
+                key=f"spc_use_chain_{side}_{int(round(strike))}",
+            )
+            if use_chain_price:
+                current_premium = chain_price
+                st.caption(f"Current premium: ₹{current_premium:,.2f}")
+            else:
+                current_premium = st.number_input(
+                    "Current option premium",
+                    min_value=0.05,
+                    value=float(max(chain_price, 0.05)),
+                    step=0.05,
+                    key=f"spc_manual_current_{contract_key}",
+                )
+        with p3:
+            entry_premium = st.number_input(
+                "Tumhari entry premium",
+                min_value=0.05,
+                value=float(max(chain_price, 0.05)),
+                step=0.05,
+                key=f"spc_entry_{contract_key}",
+                help="BUY ki purchase price ya SELL ki sell price.",
+            )
+
+        default_lower = max(1.0, round((current_spot - 50.0) / 5.0) * 5.0)
+        default_upper = round((current_spot + 50.0) / 5.0) * 5.0
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            lower_spot = st.number_input(
+                "Lower NIFTY range",
+                min_value=1.0,
+                value=float(default_lower),
+                step=5.0,
+                key="spc_lower",
+                help="Apna support/target level khud bharo.",
+            )
+        with r2:
+            upper_spot = st.number_input(
+                "Upper NIFTY range",
+                min_value=1.0,
+                value=float(default_upper),
+                step=5.0,
+                key="spc_upper",
+                help="Apna resistance/target level khud bharo.",
+            )
+        with r3:
+            target_minutes = st.number_input(
+                "Range tak expected time (minutes)",
+                min_value=0,
+                max_value=1440,
+                value=15,
+                step=5,
+                key="spc_target_minutes",
+                help="0 ka matlab immediate move; zyada time par Theta adjust hoga.",
+            )
+
+        q1, q2 = st.columns(2)
+        with q1:
+            lots = st.number_input(
+                "Lots",
+                min_value=1,
+                max_value=100,
+                value=1,
+                step=1,
+                key="spc_lots",
+            )
+        with q2:
+            calculator_lot_size = st.number_input(
+                "Lot size",
+                min_value=1,
+                max_value=500,
+                value=int(snapshot.risk_profile.lot_size),
+                step=1,
+                key="spc_lot_size",
+            )
+
+        signature = (
+            snapshot.snapshot_id,
+            side,
+            position,
+            float(strike),
+            float(current_spot),
+            float(current_premium),
+            float(entry_premium),
+            float(lower_spot),
+            float(upper_spot),
+            int(target_minutes),
+            int(calculator_lot_size),
+            int(lots),
+            feed_state,
+        )
+        calculate = st.button("Calculate Premium Range", type="primary", width="stretch")
+        result = None
+        if calculate:
+            try:
+                result = calculate_spot_premium_range(
+                    option_chain=option_frame,
+                    side=side,
+                    position=position,
+                    strike=float(strike),
+                    current_spot=float(current_spot),
+                    current_premium=float(current_premium),
+                    entry_premium=float(entry_premium),
+                    lower_spot=float(lower_spot),
+                    upper_spot=float(upper_spot),
+                    target_minutes=int(target_minutes),
+                    lot_size=int(calculator_lot_size),
+                    lots=int(lots),
+                    feed_state=feed_state,
+                )
+                st.session_state.spc_result = result
+                st.session_state.spc_signature = signature
+            except Exception as exc:
+                st.error(f"Calculator input check karo: {exc}")
+        elif st.session_state.get("spc_signature") == signature:
+            result = st.session_state.get("spc_result")
+
+        if result is None:
+            st.info("Lower aur upper range bharne ke baad **Calculate Premium Range** dabao.")
+            return
+
+        if result.status == "LIVE ESTIMATE":
+            st.success(
+                f"LIVE option-chain estimate · Reliability {result.overall_reliability:.0f}/100"
+            )
+        else:
+            st.warning(
+                f"REFERENCE ONLY · Reliability {result.overall_reliability:.0f}/100 — broker premium verify karo."
+            )
+
+        table_rows = []
+        for estimate in (result.lower, result.current, result.upper):
+            table_rows.append(
+                {
+                    "NIFTY scenario": f"{estimate.label} · {estimate.target_spot:,.0f}",
+                    "Estimated premium": f"₹{estimate.best_price:,.2f}",
+                    "Probable zone": f"₹{estimate.low_price:,.2f}–₹{estimate.high_price:,.2f}",
+                    "Exit action": estimate.exit_action,
+                    "P&L / qty": _inr(estimate.pnl_per_quantity),
+                    f"P&L ({result.lots} lot)": _inr(estimate.total_pnl),
+                    "Result": estimate.outcome,
+                    "Reliability": f"{estimate.reliability:.0f}/100",
+                }
+            )
+        st.dataframe(table_rows, width="stretch", hide_index=True)
+
+        st.info("🧠 **Calculator Samajh:** " + result.summary)
+        st.caption(
+            f"Model inputs: Current {result.current_spot:,.2f} | {result.strike:,.0f} {result.side} "
+            f"{result.position} | Current premium ₹{result.current_premium:,.2f} | Entry ₹{result.entry_premium:,.2f} | "
+            f"Time {result.target_minutes} min | Delta {result.current_delta if result.current_delta is not None else '—'} | "
+            f"IV {result.current_iv if result.current_iv is not None else '—'}"
+        )
+        for warning in result.warnings:
+            st.caption("• " + warning)
 
 def render_market_session(snapshot: MarketSnapshot) -> None:
     session = snapshot.market_session

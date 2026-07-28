@@ -1,0 +1,20 @@
+V2.13.0 SPOT-TO-PREMIUM CALCULATOR
+
+ADDED
+- Manual lower/upper NIFTY range calculator for CE/PE and BUY/SELL positions.
+- Strike selector from the current snapshot option chain.
+- Live-chain or manually entered current premium.
+- Manual entry premium, expected range time, lots and lot size.
+- Estimated premium, probable premium zone, exit action and P&L at lower/current/upper NIFTY scenarios.
+- Reliability score, LIVE/REFERENCE state and simple Hinglish explanation.
+
+CALCULATION
+- Primary option-chain moneyness-shift interpolation using the same-expiry live chain.
+- Delta + Gamma cross-check.
+- Theta adjustment for the manually entered expected time.
+- IV/Vega, bid-ask spread and model disagreement used to create an honest probable zone.
+- Intrinsic-aware safe fallback when some Greeks are missing.
+
+SAFETY
+- Read-only utility; no API call, no state write and no order placement.
+- Does not change Main AI, Final One-Brain Decision or execution guard.
