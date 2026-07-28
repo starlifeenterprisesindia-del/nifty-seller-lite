@@ -1,0 +1,21 @@
+V2.12.0 ACCURACY + CLARITY + RETENTION
+
+1. Compact mobile Main AI cards; no oversized stacked top metrics.
+2. Direction is separated from action readiness:
+   - Rukh Evidence = existing matching Core Market evidence.
+   - Entry Readiness = existing Final One-Brain confidence after WAIT/fake-move discounts.
+3. Brain Score -> Strategy Suitability; Quality -> Strike + Hedge Quality.
+4. Main user screen hides raw required-feed names; detailed audit keeps them.
+5. News freshness hardening:
+   - <=90m READY
+   - 90-180m OLD / low weight
+   - >180m zero decision weight
+   - old calendar dates embedded in republished headlines rejected.
+6. Market session wording fixed:
+   - before 09:00 closed/not-open
+   - 09:00-09:15 official pre-open
+   - 09:15-15:30 live only with fresh quote + completed candle.
+7. Automatic 24-hour temporary-state cleanup without deleting FII/DII journal or manual trade/discipline state.
+8. New 2-page Quick Market Report alongside the detailed Full Audit PDF.
+9. Full Audit first page updated with Rukh Evidence / Entry Readiness terminology.
+10. Single canonical One-Brain architecture unchanged.

@@ -1,0 +1,16 @@
+V2.12 TEST REPORT
+
+Automated non-Streamlit tests: 140 passed.
+Python compileall: PASS.
+One-Brain architecture tests: PASS.
+News publication-time freshness tests: PASS.
+Republished old-date headline rejection: PASS.
+Market midnight/pre-open classification tests: PASS.
+24-hour housekeeping preservation/pruning test: PASS.
+Quick Market PDF generation: PASS.
+Full Audit PDF generation: PASS.
+Quick PDF visual render check (2 pages): PASS — no clipping/overlap observed.
+Full Audit page-1 visual render check: PASS — updated labels fit cleanly.
+
+Environment limitation:
+Streamlit is not installed in the build container, so tests/test_app_smoke.py could not be collected here. All remaining 140 tests passed with that single Streamlit-only test excluded.

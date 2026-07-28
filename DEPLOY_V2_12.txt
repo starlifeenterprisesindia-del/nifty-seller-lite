@@ -1,0 +1,17 @@
+V2.12 UPDATE-ONLY DEPLOY — REPLACE / UPDATE, DO NOT DELETE THE APP
+
+Expected version:
+2.12.0_ACCURACY_CLARITY_RETENTION
+
+Steps:
+1. Keep the existing repository and runtime data folder.
+2. Upload files listed in V2_12_UPDATE_LIST.txt to the same paths.
+3. Replace/overwrite matching files and add services/housekeeping.py + tests/test_housekeeping.py.
+4. Do NOT upload/delete runtime data/*.json from this package; update-only ZIP contains no runtime data.
+5. Reboot/redeploy Streamlit.
+6. On phone, verify the Main AI top cards render compactly two-across and no technical feed dump appears in the main card.
+7. During live market, verify News status never treats >180-minute headlines as fresh and VIX/Barrier values continue updating.
+8. Generate both Quick Market Report and Full Audit PDF once to verify downloads.
+
+Rollback:
+Use the previous V2.11 full source ZIP or prior Git commit. Runtime FII/DII backup JSON remains separately restorable.

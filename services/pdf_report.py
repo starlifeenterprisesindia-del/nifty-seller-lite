@@ -26,6 +26,7 @@ from models import MarketSnapshot
 from services.summary_presenter import (
     best_existing_candidate,
     brain_hinglish_line,
+    direction_evidence_score,
     plan_leg_text,
     required_live_feed_state,
 )
@@ -386,15 +387,15 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     speed = snapshot.barrier_map.market_speed
     story.append(
         _table(
-            ["NIFTY", "Market rukh", "Final action", "Decision conf.", "Market danger", "Live data", "Entry readiness"],
+            ["NIFTY", "Market rukh", "Rukh evidence", "Final action", "Entry readiness", "Market danger", "Data status"],
             [[
                 snapshot.nifty_quote.get("last_price"),
                 direction,
+                f"{direction_evidence_score(snapshot):.1f}/100",
                 snapshot.decision.final_action,
                 f"{snapshot.decision.decision_confidence:.1f}/100",
                 f"{speed.state} {speed.score:.1f}/100",
-                "PASS / LIVE" if feed_ok else feed_text,
-                snapshot.execution_guard.readiness,
+                "LIVE" if feed_ok else "REFERENCE ONLY",
             ]],
             widths=[31 * mm, 30 * mm, 34 * mm, 34 * mm, 38 * mm, 50 * mm, 40 * mm],
             compact=True,
@@ -429,7 +430,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         candidate_status = candidate_plan.status if candidate_selected else "REFERENCE ONLY"
         story.append(
             _table(
-                ["Protected setup", "Brain score", "Sell", "Hedge", "Credit pts", "Max risk pts", "Quality", "Status"],
+                ["Protected setup", "Strategy suitability", "Sell", "Hedge", "Credit pts", "Max risk pts", "Strike+hedge quality", "Status"],
                 [[
                     candidate_name,
                     _pct(candidate_score),
@@ -1778,6 +1779,239 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     )
     return buffer.getvalue()
 
+
+
+def _quick_page_decor(canvas: Any, document: Any, snapshot: MarketSnapshot) -> None:
+    canvas.saveState()
+    width, height = _PAGE_SIZE
+    canvas.setStrokeColor(_GRID)
+    canvas.line(15 * mm, height - 12 * mm, width - 15 * mm, height - 12 * mm)
+    canvas.setFont("Helvetica-Bold", 7)
+    canvas.setFillColor(_DARK)
+    canvas.drawString(15 * mm, height - 9 * mm, "Nifty Seller Lite - Quick Market Report")
+    canvas.setFont("Helvetica", 6.5)
+    canvas.setFillColor(colors.HexColor("#566273"))
+    canvas.drawRightString(
+        width - 15 * mm,
+        height - 9 * mm,
+        f"Snapshot {snapshot.snapshot_id[-12:]} | {snapshot.created_at.strftime('%d-%m-%Y %H:%M:%S IST')}",
+    )
+    canvas.line(15 * mm, 11 * mm, width - 15 * mm, 11 * mm)
+    canvas.drawString(15 * mm, 7 * mm, "Decision-support only. Same canonical One-Brain snapshot; no order placement.")
+    canvas.drawRightString(width - 15 * mm, 7 * mm, f"Page {document.page}")
+    canvas.restoreState()
+
+
+def build_quick_market_pdf(snapshot: MarketSnapshot) -> bytes:
+    """Build a compact 2-page decision report from the existing snapshot only."""
+
+    styles = _styles()
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=_PAGE_SIZE,
+        rightMargin=15 * mm,
+        leftMargin=15 * mm,
+        topMargin=17 * mm,
+        bottomMargin=15 * mm,
+        title=f"Nifty Seller Lite Quick {snapshot.snapshot_id}",
+        author="Nifty Seller Lite",
+        subject="Quick market decision summary",
+        pageCompression=1,
+    )
+    story: list[Any] = [
+        Paragraph("Nifty Seller Lite", styles["Title"]),
+        Paragraph("Quick Market Report", styles["Subtitle"]),
+    ]
+    story.append(
+        _table(
+            ["NIFTY", "Session", "Expiry", "Snapshot", "Mode"],
+            [[
+                snapshot.nifty_quote.get("last_price"),
+                snapshot.market_session.label,
+                snapshot.expiry or "-",
+                snapshot.snapshot_id[-12:],
+                "READ ONLY",
+            ]],
+            widths=[42 * mm, 78 * mm, 38 * mm, 52 * mm, 40 * mm],
+            compact=True,
+        )
+    )
+    story.append(Spacer(1, 3 * mm))
+    story.append(
+        _callout(
+            f"SESSION: {snapshot.market_session.label} - {snapshot.market_session.message}",
+            _GREEN if snapshot.market_session.is_live else _WARN,
+        )
+    )
+
+    direction = {"BULLISH": "UP", "BEARISH": "DOWN", "RANGE": "RANGE"}.get(
+        snapshot.decision.market_direction, snapshot.decision.market_direction
+    )
+    speed = snapshot.barrier_map.market_speed
+    feed_ok, _ = required_live_feed_state(snapshot)
+    story.append(_section_title("1. Main AI - Market View"))
+    story.append(
+        _table(
+            ["Market rukh", "Rukh evidence", "Final action", "Entry readiness", "Market danger", "Data"],
+            [[
+                direction,
+                f"{direction_evidence_score(snapshot):.1f}/100",
+                snapshot.decision.final_action,
+                f"{snapshot.decision.decision_confidence:.1f}/100",
+                f"{speed.state} {speed.score:.1f}/100 {speed.direction}",
+                "LIVE" if feed_ok else "REFERENCE ONLY",
+            ]],
+            widths=[38 * mm, 40 * mm, 44 * mm, 42 * mm, 50 * mm, 42 * mm],
+            compact=True,
+        )
+    )
+    story.append(Spacer(1, 2 * mm))
+    story.append(_callout("AI samajh: " + brain_hinglish_line(snapshot), _BLUE))
+
+    candidate_name, candidate_score, candidate_plan, candidate_selected = best_existing_candidate(snapshot)
+    story.append(_sub_title("Abhi ka Plan"))
+    if candidate_plan is not None and candidate_plan.available:
+        story.append(
+            _table(
+                ["Action", "Candidate", "Suitability", "Sell", "Hedge", "Quality", "Status"],
+                [[
+                    snapshot.decision.final_action,
+                    candidate_name,
+                    f"{candidate_score:.1f}/100",
+                    plan_leg_text(candidate_plan.short_legs),
+                    plan_leg_text(candidate_plan.hedge_legs),
+                    f"{candidate_plan.quality_score:.1f}/100",
+                    candidate_plan.status if candidate_selected else "REFERENCE ONLY",
+                ]],
+                widths=[36 * mm, 40 * mm, 36 * mm, 44 * mm, 44 * mm, 36 * mm, 43 * mm],
+                compact=True,
+            )
+        )
+        if not candidate_selected:
+            story.append(_paragraph("Final Action WAIT hai; candidate sirf reference hai, entry signal nahi.", styles["Body"]))
+    else:
+        story.append(_paragraph("Protected strike candidate abhi reliable tarah resolve nahi hua.", styles["Body"]))
+
+    story.append(_sub_title("Aage ka Road Map"))
+    levels = [
+        snapshot.barrier_map.next_resistance,
+        snapshot.barrier_map.nearest_resistance,
+        snapshot.barrier_map.nearest_support,
+        snapshot.barrier_map.next_support,
+    ]
+    level_rows = []
+    for item in levels:
+        if item is None:
+            continue
+        level_rows.append([
+            item.label,
+            item.side,
+            f"{item.lower:,.0f}-{item.upper:,.0f}",
+            f"{item.strength:.0f}/100",
+            f"{item.break_pressure:.0f}/100",
+            item.state,
+            " + ".join(item.sources[:3]),
+        ])
+    if level_rows:
+        story.append(
+            _table(
+                ["Level", "Side", "Zone", "Strength", "Break", "State", "Kyun"],
+                level_rows,
+                widths=[20 * mm, 32 * mm, 48 * mm, 31 * mm, 31 * mm, 48 * mm, 70 * mm],
+                compact=True,
+            )
+        )
+
+    r = snapshot.barrier_map.trading_range
+    inst = snapshot.institutional_context
+    news = snapshot.news_context
+    vix_daily = snapshot.barrier_map.vix_expected_daily_move_points
+    story.append(
+        _table(
+            ["Probable range", "Range conf.", "Break bias", "India VIX", "FII/DII", "News"],
+            [[
+                f"{r.lower:,.0f}-{r.upper:,.0f}" if r.lower is not None and r.upper is not None else "-",
+                f"{r.confidence:.0f}/100",
+                r.breakout_bias,
+                f"{snapshot.barrier_map.vix_risk}; daily +/-{vix_daily:.0f} pts" if vix_daily is not None else snapshot.barrier_map.vix_risk,
+                f"{inst.state}; {inst.observations}/15" if inst.observations else "MISSING",
+                f"{news.status}; {news.bias}/{news.risk_level}",
+            ]],
+            widths=[45 * mm, 34 * mm, 42 * mm, 54 * mm, 50 * mm, 48 * mm],
+            compact=True,
+        )
+    )
+
+    story.append(PageBreak())
+    story.append(_section_title("2. Main Evidence and Safety"))
+    matrix = build_compact_evidence_matrix(snapshot)
+    matrix_rows = []
+    for row in matrix:
+        matrix_rows.append([
+            row["Module"],
+            _pct(row.get("Bullish %")),
+            _pct(row.get("Bearish %")),
+            _pct(row.get("Neutral %")),
+            _pct(row.get("Confidence %")),
+            row["Result"],
+        ])
+    story.append(
+        _table(
+            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "Current result"],
+            matrix_rows,
+            widths=[44 * mm, 27 * mm, 27 * mm, 27 * mm, 31 * mm, 114 * mm],
+            compact=True,
+        )
+    )
+
+    story.append(_sub_title("5-15 Minute Conditional Outlook"))
+    outlook = snapshot.decision.outlook
+    story.append(
+        _table(
+            ["Bullish path", "Range path", "Bearish path", "Fake-move risk", "Signal state", "Invalidation", "Status"],
+            [[
+                f"{outlook.bullish_path_pct:.1f}%",
+                f"{outlook.range_path_pct:.1f}%",
+                f"{outlook.bearish_path_pct:.1f}%",
+                f"{outlook.fake_move_risk:.1f}% {outlook.fake_move_state}",
+                outlook.signal_state,
+                outlook.invalidation_text,
+                outlook.status,
+            ]],
+            widths=[35 * mm, 35 * mm, 35 * mm, 44 * mm, 52 * mm, 55 * mm, 35 * mm],
+            compact=True,
+        )
+    )
+
+    ready_windows = sum(window.status == "READY" for window in snapshot.option_intelligence.windows)
+    safety_rows = [
+        ["Required live feeds", "PASS / LIVE" if feed_ok else "REFERENCE / BLOCKED"],
+        ["Execution guard", snapshot.execution_guard.readiness],
+        ["Option flow reliability", f"{snapshot.option_intelligence.confidence:.1f}% | windows {ready_windows}/{CONFIG.execution_required_flow_windows}"],
+        ["3m / 15m", snapshot.price_action.relationship],
+        ["Signal persistence", snapshot.execution_guard.signal_state],
+        ["Risk budget", f"Rs. {snapshot.risk_profile.risk_budget_rupees:,.2f}"],
+        ["News freshness", f"{news.status} | newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else news.status],
+        ["FII/DII journal", f"{inst.observations}/15 sessions"],
+    ]
+    story.append(_sub_title("Safety Checklist"))
+    story.append(_table(["Check", "Current"], safety_rows, widths=[80 * mm, 170 * mm], compact=True))
+    story.append(Spacer(1, 3 * mm))
+    story.append(_callout("Quick report sirf current snapshot ko summarize karta hai. Full Audit PDF me raw/detail evidence available hai.", _BLUE))
+
+    document.build(
+        story,
+        onFirstPage=lambda canvas, doc: _quick_page_decor(canvas, doc, snapshot),
+        onLaterPages=lambda canvas, doc: _quick_page_decor(canvas, doc, snapshot),
+    )
+    return buffer.getvalue()
+
+
+def quick_pdf_filename(snapshot: MarketSnapshot) -> str:
+    timestamp = snapshot.created_at.strftime("%Y%m%d_%H%M%S")
+    short_id = snapshot.snapshot_id[-8:].replace("-", "")
+    return f"nifty_seller_lite_quick_{timestamp}_{short_id}.pdf"
 
 def audit_pdf_filename(snapshot: MarketSnapshot) -> str:
     timestamp = snapshot.created_at.strftime("%Y%m%d_%H%M%S")

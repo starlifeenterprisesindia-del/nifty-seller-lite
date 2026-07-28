@@ -55,3 +55,57 @@ def test_news_summary_marks_high_impact_risk():
     assert bias == "BEARISH"
     assert risk == "HIGH"
     assert "risk HIGH" in summary
+
+
+def test_republished_old_date_in_title_is_rejected_even_with_recent_pubdate():
+    published = (NOW - timedelta(minutes=10)).strftime("%a, %d %b %Y %H:%M:%S %z")
+    xml = f"""<?xml version='1.0' encoding='UTF-8'?>
+    <rss><channel><item>
+      <title>Stock Market Outlook Today, June 8: Sensex and Nifty - Example News</title>
+      <link>https://example.com/old</link>
+      <pubDate>{published}</pubDate>
+      <source>Example News</source>
+    </item></channel></rss>"""
+    assert MarketNewsService._parse_feed(xml, NOW) == []
+
+
+def test_cached_news_becomes_old_and_low_weight_after_90_minutes(tmp_path):
+    service = MarketNewsService(tmp_path / "news.json")
+    published = NOW - timedelta(minutes=120)
+    payload = {
+        "fetched_at": NOW.isoformat(),
+        "headlines": [{
+            "title": "RBI rate cut lifts Nifty as banks rally - Example News",
+            "source": "Example News",
+            "published_at": published.isoformat(),
+            "impact": "HIGH",
+            "bias": "BULLISH",
+            "link": "",
+        }],
+        "source": "test",
+    }
+    context = service._context_from_payload(payload, NOW)
+    assert context.status == "OLD"
+    assert context.risk_level == "MEDIUM"
+    assert "low-weight" in context.summary
+
+
+def test_news_older_than_180_minutes_has_zero_weight_status(tmp_path):
+    service = MarketNewsService(tmp_path / "news.json")
+    published = NOW - timedelta(minutes=181)
+    payload = {
+        "fetched_at": NOW.isoformat(),
+        "headlines": [{
+            "title": "Nifty falls on global risk - Example News",
+            "source": "Example News",
+            "published_at": published.isoformat(),
+            "impact": "HIGH",
+            "bias": "BEARISH",
+            "link": "",
+        }],
+        "source": "test",
+    }
+    context = service._context_from_payload(payload, NOW)
+    assert context.status == "UNAVAILABLE"
+    assert context.risk_level == "NONE"
+    assert not context.headlines

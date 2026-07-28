@@ -16,7 +16,13 @@ from services.discipline_store import DisciplineStore
 from services.instrument_master import InstrumentMaster
 from services.option_state_store import OptionStateStore
 from services.news_service import MarketNewsService
-from services.pdf_report import audit_pdf_filename, build_full_audit_pdf
+from services.housekeeping import run_housekeeping
+from services.pdf_report import (
+    audit_pdf_filename,
+    build_full_audit_pdf,
+    build_quick_market_pdf,
+    quick_pdf_filename,
+)
 from services.snapshot_service import SnapshotService
 from ui.components import (
     render_candles,
@@ -51,9 +57,9 @@ from ui.components import (
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.11 Main AI Consolidated — one canonical strategy brain, top-screen Hinglish market summary, "
-    "live Barrier + Range Map, protected hedge reference, market-speed danger, India VIX context and "
-    "clean collapsed evidence. Read only; no order placement."
+    "V2.12 Accuracy + Clarity — one canonical strategy brain, compact mobile Main AI, strict news freshness, "
+    "24-hour temporary-data cleanup, live Barrier + Range Map, protected hedge reference and India VIX context. "
+    "Read only; no order placement."
 )
 
 
@@ -68,6 +74,10 @@ def secret_value(name: str) -> str:
 
 client_id = secret_value("client_id")
 access_token = secret_value("access_token")
+
+# Quiet housekeeping on every rerun. It prunes only temporary/raw market state older
+# than 24h; FII/DII journal, manual discipline/trade state and learning summaries remain.
+run_housekeeping(datetime.now(ZoneInfo(IST_TIMEZONE)))
 state_store = OptionStateStore(Path(CONFIG.option_state_path))
 context_store = MarketContextStore(
     Path(CONFIG.market_context_path), Path(CONFIG.market_context_mirror_path)
@@ -418,42 +428,59 @@ render_barrier_map(snapshot)
 render_evidence_matrix(snapshot)
 render_market_outlook(snapshot)
 
-st.subheader("Main AI + Full Audit PDF")
+st.subheader("Download Reports")
 st.caption(
-    "PDF ke first page par Main AI Market View, Barrier/Range, final action aur protected setup aayega; "
-    "uske baad detailed audit evidence. Yeh isi authoritative snapshot ko freeze karta hai aur "
-    "Final One-Brain ko dobara calculate nahi karta."
+    "Quick Market Report daily use ke liye 2-page summary hai. Full Audit PDF detailed verification/debug ke liye hai. "
+    "Dono isi authoritative snapshot ko freeze karte hain; koi second Brain calculation nahi hoti."
 )
+
 pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
 if pdf_snapshot_key != snapshot.snapshot_id:
     st.session_state.pop("audit_pdf_bytes", None)
+    st.session_state.pop("quick_pdf_bytes", None)
     st.session_state.audit_pdf_snapshot_id = snapshot.snapshot_id
 
-pdf_left, pdf_right = st.columns([1, 2])
-with pdf_left:
-    generate_pdf = st.button(
-        "Generate Updated Main AI Audit PDF",
-        type="primary",
-        width="stretch",
+quick_col, full_col = st.columns(2)
+with quick_col:
+    generate_quick_pdf = st.button(
+        "Generate Quick Market Report", type="primary", width="stretch"
     )
-if generate_pdf:
-    try:
-        with st.spinner("Building audit PDF from the current snapshot only..."):
-            st.session_state.audit_pdf_bytes = build_full_audit_pdf(snapshot)
-        st.success("Audit PDF generated for this snapshot")
-    except Exception as exc:
-        st.error(f"Audit PDF not generated: {exc}")
-with pdf_right:
+    if generate_quick_pdf:
+        try:
+            with st.spinner("Building 2-page quick report from current snapshot only..."):
+                st.session_state.quick_pdf_bytes = build_quick_market_pdf(snapshot)
+            st.success("Quick Market Report ready")
+        except Exception as exc:
+            st.error(f"Quick report not generated: {exc}")
+    if st.session_state.get("quick_pdf_bytes"):
+        st.download_button(
+            "Download Quick Market Report",
+            data=st.session_state.quick_pdf_bytes,
+            file_name=quick_pdf_filename(snapshot),
+            mime="application/pdf",
+            width="stretch",
+        )
+
+with full_col:
+    generate_pdf = st.button(
+        "Generate Full Audit PDF", width="stretch"
+    )
+    if generate_pdf:
+        try:
+            with st.spinner("Building full audit PDF from the current snapshot only..."):
+                st.session_state.audit_pdf_bytes = build_full_audit_pdf(snapshot)
+            st.success("Full Audit PDF ready")
+        except Exception as exc:
+            st.error(f"Full Audit PDF not generated: {exc}")
     if st.session_state.get("audit_pdf_bytes"):
         st.download_button(
-            "Download Updated Main AI Audit PDF",
+            "Download Full Audit PDF",
             data=st.session_state.audit_pdf_bytes,
             file_name=audit_pdf_filename(snapshot),
             mime="application/pdf",
             width="stretch",
         )
-    else:
-        st.info("Generate the PDF after every important live-market checkpoint.")
+
 
 execution_expanded = (
     snapshot.market_session.is_live and snapshot.decision.final_action != "WAIT"

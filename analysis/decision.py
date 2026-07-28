@@ -170,12 +170,19 @@ def _event_adjustment(event: EventRiskContext) -> tuple[float, str | None]:
 
 
 def _news_adjustment(news: NewsContext | None) -> tuple[float, str | None]:
-    if news is None or news.status != "READY":
+    if news is None:
         return 0.0, None
-    if news.risk_level == "HIGH":
-        return 18.0, "Fresh high-impact market news is active"
-    if news.risk_level == "MEDIUM":
-        return 8.0, "Fresh medium-impact market news is active"
+    if news.status == "READY":
+        if news.risk_level == "HIGH":
+            return 18.0, "Fresh/recent high-impact market news is active"
+        if news.risk_level == "MEDIUM":
+            return 8.0, "Fresh/recent medium-impact market news is active"
+        return 0.0, None
+    if news.status == "OLD":
+        if news.risk_level == "HIGH":
+            return 4.0, "Older high-impact news exists; low decision weight"
+        if news.risk_level == "MEDIUM":
+            return 2.0, "Older market news exists; low decision weight"
     return 0.0, None
 
 
@@ -417,10 +424,16 @@ def _fake_move_risk(
     if news is not None and news.status == "READY":
         if news.risk_level == "HIGH":
             risk += 20
-            reasons.append("Fresh high-impact news can create a fast false move")
+            reasons.append("Fresh/recent high-impact news can create a fast false move")
         elif news.risk_level == "MEDIUM":
             risk += 8
-            reasons.append("Fresh market news adds short-term movement risk")
+            reasons.append("Fresh/recent market news adds short-term movement risk")
+    elif news is not None and news.status == "OLD":
+        if news.risk_level == "HIGH":
+            risk += 5
+            reasons.append("Older high-impact news is low-weight background risk")
+        elif news.risk_level == "MEDIUM":
+            risk += 2
 
     return round(clamp(risk, 0, 100), 1), tuple(dict.fromkeys(reasons))[:3]
 
@@ -701,6 +714,11 @@ def calculate_final_decision(
             condor -= 10
         elif news.risk_level == "MEDIUM":
             condor -= 4
+    elif news is not None and news.status == "OLD":
+        # Older headlines remain visible as background context only; they receive a
+        # deliberately small penalty and never behave like fresh market-moving news.
+        if news.risk_level == "HIGH":
+            condor -= 2
 
     ce = round(clamp(ce, 0, 100), 1)
     pe = round(clamp(pe, 0, 100), 1)

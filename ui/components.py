@@ -12,6 +12,7 @@ from models import MarketLevel, MarketSnapshot, TimeframeIndicators
 from services.summary_presenter import (
     best_existing_candidate,
     brain_hinglish_line,
+    direction_evidence_score,
     plan_leg_text,
     required_live_feed_state,
     snapshot_change_hinglish,
@@ -265,53 +266,85 @@ def _level_summary(level: Any | None, *, fallback: str) -> str:
     )
 
 
+def _compact_cards_html(cards: list[tuple[str, str, str]]) -> str:
+    """Render small responsive cards that stay two-across on narrow phones."""
+
+    blocks = []
+    for label, value, note in cards:
+        blocks.append(
+            '<div class="mai-card">'
+            f'<div class="mai-label">{escape(label)}</div>'
+            f'<div class="mai-value">{escape(value)}</div>'
+            f'<div class="mai-note">{escape(note)}</div>'
+            '</div>'
+        )
+    return (
+        '<style>'
+        '.mai-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:4px 0 12px}'
+        '.mai-card{min-width:0;border:1px solid rgba(127,127,127,.24);border-radius:12px;padding:10px 11px;background:rgba(127,127,127,.045)}'
+        '.mai-label{font-size:.76rem;opacity:.72;margin-bottom:4px}'
+        '.mai-value{font-size:1.18rem;font-weight:800;line-height:1.15;overflow-wrap:anywhere}'
+        '.mai-note{font-size:.70rem;opacity:.68;margin-top:4px;line-height:1.25}'
+        '@media (max-width:760px){.mai-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.mai-value{font-size:1.03rem}.mai-card{padding:9px}}'
+        '</style><div class="mai-grid">' + ''.join(blocks) + '</div>'
+    )
+
+
+def _render_compact_cards(cards: list[tuple[str, str, str]]) -> None:
+    html = _compact_cards_html(cards)
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+
+
 def render_main_ai_market_view(
     snapshot: MarketSnapshot, previous_snapshot: MarketSnapshot | None = None
 ) -> None:
     """Top-screen summary of the existing canonical MarketSnapshot.
 
-    This renderer never recalculates a strategy. It only condenses the already-built
-    Final One-Brain, Barrier Map, execution guard and supporting contexts.
+    No strategy is recalculated here. It only condenses the Final One-Brain, Barrier
+    Map, execution guard and background contexts into a phone-friendly view.
     """
 
     decision = snapshot.decision
     barrier = snapshot.barrier_map
     speed = barrier.market_speed
-    feed_ok, feed_text = required_live_feed_state(snapshot)
+    feed_ok, _feed_text = required_live_feed_state(snapshot)
     direction = {"BULLISH": "UP", "BEARISH": "DOWN", "RANGE": "RANGE"}.get(
         decision.market_direction, decision.market_direction
     )
+    direction_score = direction_evidence_score(snapshot)
     spot = snapshot.nifty_quote.get("last_price")
 
     st.subheader("🧠 Main AI — Market View")
     st.caption(
-        "Yeh koi second brain nahi hai. Neeche ki poori app ke same authoritative snapshot aur "
-        "Final One-Brain ko ek jagah simple Hinglish me summarize karta hai."
+        "Ek hi One-Brain ka compact view: pehle decision, phir reason, phir proof. "
+        "Neeche ke detailed sections audit/evidence ke liye hain."
     )
 
     with st.container(border=True):
-        top = st.columns(5)
-        top[0].metric("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—")
-        top[1].metric("Market Rukh", direction)
-        top[2].metric("Final Action", decision.final_action)
-        top[3].metric("Decision Confidence", f"{decision.decision_confidence:.0f}/100")
-        top[4].metric("Market Danger", f"{speed.state} {speed.score:.0f}/100 · {speed.direction}")
+        _render_compact_cards(
+            [
+                ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
+                ("Market Rukh", direction, f"Rukh evidence {direction_score:.0f}/100"),
+                ("Final Action", decision.final_action, "One-Brain final action"),
+                ("Entry Readiness", f"{decision.decision_confidence:.0f}/100", snapshot.execution_guard.readiness),
+                ("Market Danger", f"{speed.state} {speed.score:.0f}/100", f"Speed direction {speed.direction}"),
+                ("Data Status", "LIVE" if feed_ok else "REFERENCE ONLY", "Fresh entry only when required feeds are LIVE"),
+            ]
+        )
 
         st.info("🧠 **AI samajh:** " + brain_hinglish_line(snapshot))
 
-        data_text = "LIVE DATA PASS" if feed_ok else feed_text
-        readiness = snapshot.execution_guard.readiness
-        status_line = (
-            f"Data: {data_text}  |  Entry Readiness: {readiness}  |  "
-            f"Hedge: {'YES' if decision.hedge_required else 'NO'}  |  "
-            f"Expiry: {snapshot.expiry or '—'}  |  Snapshot: {snapshot.snapshot_id[-8:]}"
-        )
-        if feed_ok and readiness == "ENTRY READY":
-            st.success(status_line)
-        elif not feed_ok:
-            st.error(status_line)
+        # Keep technical feed names out of the main user screen. Full feed diagnostics
+        # remain available in the detailed evidence/PDF audit.
+        if feed_ok and snapshot.execution_guard.readiness == "ENTRY READY":
+            st.success("Data Status: LIVE PASS — required feeds fresh hain aur entry guard ready hai.")
+        elif snapshot.market_session.is_live:
+            st.warning("Data Status: LIVE session hai, lekin entry ke required checks abhi complete nahi hain.")
         else:
-            st.warning(status_line)
+            st.warning("Data Status: REFERENCE ONLY — market live nahi hai; fresh entry permitted nahi hai.")
 
         left, right = st.columns(2)
         with left:
@@ -326,14 +359,16 @@ def render_main_ai_market_view(
 
             if plan is not None and plan.available:
                 st.write(
-                    f"**{candidate_prefix}:** {name} | Brain score {score:.1f}% | "
-                    f"Quality {plan.quality_score:.1f}%"
+                    f"**{candidate_prefix}:** {name} | Strategy Suitability {score:.1f}/100 | "
+                    f"Strike + Hedge Quality {plan.quality_score:.1f}/100"
                 )
                 st.write(
                     f"Sell: **{plan_leg_text(plan.short_legs)}**  →  Hedge: **{plan_leg_text(plan.hedge_legs)}**"
                 )
                 if not is_selected:
-                    st.caption("Final Action WAIT hai; yeh sirf existing score ka reference candidate hai, entry signal nahi.")
+                    st.caption(
+                        "Final Action WAIT hai; yeh sirf reference candidate hai, entry signal nahi."
+                    )
             else:
                 st.write("Protected strike candidate abhi reliable tarah resolve nahi hua.")
             st.caption(f"Main blocker: {decision.blocker}")
@@ -353,7 +388,7 @@ def render_main_ai_market_view(
                     f"{barrier.next_support.upper:,.0f} hai (Strength {barrier.next_support.strength:.0f}/100)."
                 )
             else:
-                st.caption("Abhi dono taraf ke next barriers Live Barrier Map me track ho rahe hain.")
+                st.caption("Dono taraf ke next barriers Live Barrier Map me track ho rahe hain.")
 
         range_item = barrier.trading_range
         range_text = (
@@ -366,36 +401,58 @@ def render_main_ai_market_view(
             if barrier.vix_expected_daily_move_points is not None
             else "—"
         )
+        vix_speed_bits = []
+        if speed.vix_change_5m_pct is not None:
+            vix_speed_bits.append(f"5m {speed.vix_change_5m_pct:+.1f}%")
+        if speed.vix_change_15m_pct is not None:
+            vix_speed_bits.append(f"15m {speed.vix_change_15m_pct:+.1f}%")
+        vix_note = " · ".join(vix_speed_bits) if vix_speed_bits else "VIX speed warming"
+
         inst = snapshot.institutional_context
         if inst.observations <= 0:
-            inst_text = "MISSING / WARMING"
+            inst_text = "MISSING"
+            inst_note = "Data feed nahi kiya / unavailable"
         elif "FII SELLING / DII ABSORPTION" in inst.state:
-            inst_text = "FII SELL / DII BUY"
+            inst_text, inst_note = "FII SELL / DII BUY", f"{inst.observations}/15 sessions"
         elif "FII BUYING / DII SELLING" in inst.state:
-            inst_text = "FII BUY / DII SELL"
+            inst_text, inst_note = "FII BUY / DII SELL", f"{inst.observations}/15 sessions"
         elif "NET INSTITUTIONAL SUPPORT" in inst.state:
-            inst_text = "NET SUPPORT"
+            inst_text, inst_note = "NET SUPPORT", f"{inst.observations}/15 sessions"
         elif "NET INSTITUTIONAL PRESSURE" in inst.state:
-            inst_text = "NET PRESSURE"
+            inst_text, inst_note = "NET PRESSURE", f"{inst.observations}/15 sessions"
         else:
-            inst_text = "MIXED"
+            inst_text, inst_note = "MIXED", f"{inst.observations}/15 sessions"
         if inst.fii_futures_bias not in {"UNAVAILABLE", "BALANCED"}:
             inst_text += f" | FUT {inst.fii_futures_bias}"
+
         news = snapshot.news_context
-        news_text = f"{news.bias} / {news.risk_level}" if news.status == "READY" else news.status
-        strip = st.columns(5)
-        strip[0].metric("Probable Range", range_text)
-        strip[1].metric("Range Confidence", f"{range_item.confidence:.0f}/100")
-        strip[2].metric("India VIX Risk", f"{barrier.vix_risk} | {vix_daily}")
-        strip[3].metric("FII/DII", inst_text)
-        strip[4].metric("News", news_text)
+        if news.status == "READY":
+            news_text = f"{news.bias} / {news.risk_level}"
+            news_note = f"Recent · newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else "Recent"
+        elif news.status == "OLD":
+            news_text = "OLD / LOW WEIGHT"
+            news_note = f"Newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else "Old context"
+        else:
+            news_text = news.status
+            news_note = "Decision weight zero"
+
+        _render_compact_cards(
+            [
+                ("Probable Range", range_text, f"Confidence {range_item.confidence:.0f}/100"),
+                ("India VIX", f"{barrier.vix_risk} | {vix_daily}", vix_note),
+                ("FII/DII", inst_text, inst_note),
+                ("News", news_text, news_note),
+            ]
+        )
 
         st.markdown("**🔄 Last Snapshot Se Kya Badla**")
         changes = snapshot_change_items(snapshot, previous_snapshot)
         if changes:
-            cols = st.columns(len(changes))
-            for col, (label, value, delta) in zip(cols, changes):
-                col.metric(label, value, delta)
+            cards = [
+                (label, value, f"Badlav {delta}" if delta else "No comparable delta")
+                for label, value, delta in changes
+            ]
+            _render_compact_cards(cards)
         st.caption(snapshot_change_hinglish(snapshot, previous_snapshot))
 
 
@@ -414,12 +471,12 @@ def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
 
     row = {
         "Setup": name,
-        "Brain score %": score,
+        "Strategy suitability /100": score,
         "Sell": plan_leg_text(plan.short_legs),
         "Buy hedge": plan_leg_text(plan.hedge_legs),
         "Credit pts": plan.estimated_credit_points,
         "Max risk pts": plan.max_risk_points,
-        "Quality %": plan.quality_score,
+        "Strike + hedge quality /100": plan.quality_score,
         "Status": plan.status if is_selected else "REFERENCE ONLY",
     }
     st.dataframe(pd.DataFrame([row]), width="stretch", hide_index=True)
@@ -451,7 +508,7 @@ def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
                 "Buy hedge": f"{hedge.strike:,.0f} {hedge.side}" if hedge else "—",
                 "Credit pts": plan.estimated_credit_points,
                 "Max risk pts": plan.max_risk_points,
-                "Quality %": plan.quality_score,
+                "Strike + hedge quality /100": plan.quality_score,
                 "Status": plan.status,
             }
         )
@@ -476,8 +533,8 @@ def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
 def render_news_context(snapshot: MarketSnapshot) -> None:
     news = snapshot.news_context
     st.caption(
-        "Public market-news feed fresh headlines ko risk context ke liye use karta hai. "
-        "News unavailable/stale ho to uska decision weight zero rehta hai."
+        "News article ki publication time se freshness judge hoti hai. 90–180 min old news low weight hai; "
+        "180 min se purani/stale news ka decision weight zero rehta hai."
     )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("News Bias", news.bias)
@@ -489,6 +546,8 @@ def render_news_context(snapshot: MarketSnapshot) -> None:
     )
     if news.status == "READY":
         st.info(news.summary)
+    elif news.status == "OLD":
+        st.warning(f"News status: OLD / LOW WEIGHT — {news.summary}")
     else:
         st.warning(f"News status: {news.status} — {news.summary}")
     if news.headlines:

@@ -28,12 +28,19 @@ def classify_market_session(
         )
 
     current_time = now.time().replace(tzinfo=None)
+    if current_time < CONFIG.pre_open_start:
+        return MarketSession(
+            code="CLOSED_BEFORE_OPEN",
+            label="MARKET CLOSED — NEXT SESSION NOT OPEN",
+            is_live=False,
+            message="Cash market aur official pre-open abhi start nahi hue. Last available values reference-only hain.",
+        )
     if current_time < CONFIG.market_open:
         return MarketSession(
-            code="PRE_MARKET",
-            label="PRE-MARKET — LAST AVAILABLE DATA",
+            code="PRE_OPEN",
+            label="PRE-OPEN — REFERENCE DATA",
             is_live=False,
-            message="Market has not opened yet. Previous-session values are reference-only.",
+            message="Official pre-open window chal rahi hai; regular cash market 09:15 IST par open hota hai. Last completed-session values reference-only hain.",
         )
     if current_time > CONFIG.market_close:
         return MarketSession(

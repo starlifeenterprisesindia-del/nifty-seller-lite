@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -11,17 +12,17 @@ from xml.etree import ElementTree
 
 import requests
 
-from config import CONFIG, IST_TIMEZONE
+from config import CONFIG
 from models import NewsContext, NewsHeadline
 
 
 class MarketNewsService:
-    """Small public-RSS market-news reader with bounded file cache.
+    """Public-RSS market-news reader with strict publication-time freshness.
 
-    The news layer is informational/risk context only. It does not place trades and it
-    does not silently turn old headlines into live evidence. If all public feeds fail,
-    the returned state is UNAVAILABLE and the strategy brain gives the news layer zero
-    directional weight.
+    Fetch time is never treated as article freshness. Headlines older than the configured
+    stale threshold get zero strategy weight. Headlines in the OLD band remain visible
+    as low-weight context only. Explicit old dates inside a headline (for example a
+    republished "June 8" story in late July) are rejected even if RSS pubDate is recent.
     """
 
     QUERIES: tuple[str, ...] = (
@@ -32,69 +33,32 @@ class MarketNewsService:
     )
 
     HIGH_IMPACT = (
-        "rbi",
-        "repo rate",
-        "rate cut",
-        "rate hike",
-        "federal reserve",
-        "fed rate",
-        "powell",
-        "war",
-        "missile",
-        "attack",
-        "ceasefire",
-        "tariff",
-        "sanction",
-        "budget",
-        "inflation",
-        "gdp",
-        "crude oil",
-        "brent",
-        "rupee",
-        "us jobs",
-        "cpi",
+        "rbi", "repo rate", "rate cut", "rate hike", "federal reserve", "fed rate",
+        "powell", "war", "missile", "attack", "ceasefire", "tariff", "sanction",
+        "budget", "inflation", "gdp", "crude oil", "brent", "rupee", "us jobs", "cpi",
     )
     MEDIUM_IMPACT = (
-        "nifty",
-        "sensex",
-        "fii",
-        "dii",
-        "bank nifty",
-        "yield",
-        "dollar",
-        "earnings",
-        "results",
-        "guidance",
+        "nifty", "sensex", "fii", "dii", "bank nifty", "yield", "dollar", "earnings",
+        "results", "guidance",
     )
     BULLISH_WORDS = (
-        "rally",
-        "rises",
-        "gains",
-        "surges",
-        "rate cut",
-        "eases",
-        "cooling inflation",
-        "record high",
-        "inflows",
-        "ceasefire",
-        "stimulus",
-        "beats estimates",
+        "rally", "rises", "gains", "surges", "rate cut", "eases", "cooling inflation",
+        "record high", "inflows", "ceasefire", "stimulus", "beats estimates",
     )
     BEARISH_WORDS = (
-        "falls",
-        "slumps",
-        "drops",
-        "tumbles",
-        "selloff",
-        "rate hike",
-        "war",
-        "attack",
-        "tariff",
-        "sanction",
-        "inflation rises",
-        "crude surges",
-        "rupee hits record low",
+        "falls", "slumps", "drops", "tumbles", "selloff", "rate hike", "war", "attack",
+        "tariff", "sanction", "inflation rises", "crude surges", "rupee hits record low",
         "misses estimates",
+    )
+    MONTHS = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+        "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    }
+    _TITLE_DATE_RE = re.compile(
+        r"\b(" + "|".join(sorted(MONTHS, key=len, reverse=True)) + r")\s+(\d{1,2})(?:,?\s+(20\d{2}))?\b",
+        re.IGNORECASE,
     )
 
     def __init__(self, cache_path: str | Path | None = None):
@@ -128,11 +92,48 @@ class MarketNewsService:
 
     @staticmethod
     def _rss_url(query: str) -> str:
-        return (
-            "https://news.google.com/rss/search?q="
-            + quote_plus(query)
-            + "&hl=en-IN&gl=IN&ceid=IN:en"
-        )
+        return "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
+
+    @classmethod
+    def _explicit_title_date(cls, title: str, now: datetime) -> datetime | None:
+        match = cls._TITLE_DATE_RE.search(title or "")
+        if not match:
+            return None
+        month = cls.MONTHS.get(match.group(1).lower())
+        day = int(match.group(2))
+        year = int(match.group(3)) if match.group(3) else now.year
+        try:
+            candidate = datetime(year, month, day, tzinfo=now.tzinfo)
+        except (TypeError, ValueError):
+            return None
+        # At year turn, "Dec 31" on Jan 1 normally means the previous year.
+        if match.group(3) is None and candidate.date() > (now + timedelta(days=7)).date():
+            try:
+                candidate = candidate.replace(year=year - 1)
+            except ValueError:
+                return None
+        return candidate
+
+    @classmethod
+    def _title_date_is_stale(cls, title: str, now: datetime) -> bool:
+        explicit = cls._explicit_title_date(title, now)
+        if explicit is None:
+            return False
+        return (now.date() - explicit.date()).days > CONFIG.news_title_date_max_days
+
+    @staticmethod
+    def _freshness_status(newest_age_minutes: float | None) -> str:
+        if newest_age_minutes is None:
+            return "UNAVAILABLE"
+        if newest_age_minutes <= CONFIG.news_recent_minutes:
+            return "READY"
+        if newest_age_minutes <= CONFIG.news_stale_minutes:
+            return "OLD"
+        return "STALE"
+
+    @staticmethod
+    def _downgrade_risk_for_old(risk: str) -> str:
+        return {"HIGH": "MEDIUM", "MEDIUM": "LOW", "LOW": "LOW", "NONE": "NONE"}.get(risk, "LOW")
 
     def _write_cache(self, payload: dict[str, Any]) -> None:
         try:
@@ -163,6 +164,9 @@ class MarketNewsService:
         for raw in payload.get("headlines", []):
             if not isinstance(raw, dict):
                 continue
+            title = str(raw.get("title") or "").strip()
+            if not title or self._title_date_is_stale(title, now):
+                continue
             published = None
             try:
                 published = datetime.fromisoformat(str(raw.get("published_at")))
@@ -173,9 +177,11 @@ class MarketNewsService:
             age_minutes = None
             if published is not None:
                 age_minutes = max(0.0, (now - published.astimezone(now.tzinfo)).total_seconds() / 60.0)
+                if age_minutes > CONFIG.news_stale_minutes:
+                    continue
             headlines.append(
                 NewsHeadline(
-                    title=str(raw.get("title") or "").strip(),
+                    title=title,
                     source=str(raw.get("source") or "Unknown").strip(),
                     published_at=published,
                     age_minutes=round(age_minutes, 1) if age_minutes is not None else None,
@@ -184,19 +190,37 @@ class MarketNewsService:
                     link=str(raw.get("link") or ""),
                 )
             )
+
+        newest_age = min((item.age_minutes for item in headlines if item.age_minutes is not None), default=None)
+        status = self._freshness_status(newest_age)
+        # Re-summarize from the surviving, currently fresh-enough items so a cached READY
+        # payload cannot stay READY after time has moved on.
+        rows = [
+            {
+                "title": item.title,
+                "source": item.source,
+                "link": item.link,
+                "published_at": item.published_at.isoformat() if item.published_at else None,
+                "impact": item.impact,
+                "bias": item.bias,
+            }
+            for item in headlines
+        ]
+        bias, risk, summary = self._summarize(rows)
+        if status == "OLD":
+            risk = self._downgrade_risk_for_old(risk)
+            summary = "OLD / low-weight context. " + summary
+        elif status in {"STALE", "UNAVAILABLE"}:
+            bias, risk = "NEUTRAL", "NONE"
+            summary = "Fresh market-moving news available nahi hai; news decision weight zero hai."
         return NewsContext(
             as_of=now,
             headlines=tuple(headlines[: CONFIG.news_max_headlines]),
-            bias=str(payload.get("bias") or "NEUTRAL").upper(),
-            risk_level=str(payload.get("risk_level") or "NONE").upper(),
-            summary=str(payload.get("summary") or "No recent market-moving headline found."),
-            newest_age_minutes=(
-                min(
-                    (item.age_minutes for item in headlines if item.age_minutes is not None),
-                    default=None,
-                )
-            ),
-            status=str(payload.get("status") or "UNAVAILABLE").upper(),
+            bias=bias,
+            risk_level=risk,
+            summary=summary,
+            newest_age_minutes=newest_age,
+            status=status,
             source=str(payload.get("source") or "Google News RSS"),
         )
 
@@ -205,10 +229,10 @@ class MarketNewsService:
         root = ElementTree.fromstring(xml_text)
         rows: list[dict[str, Any]] = []
         now_utc = MarketNewsService._now_utc(now)
-        max_age_seconds = CONFIG.news_max_age_hours * 3600
+        max_age_seconds = CONFIG.news_stale_minutes * 60
         for item in root.findall(".//item"):
             title = (item.findtext("title") or "").strip()
-            if not title:
+            if not title or MarketNewsService._title_date_is_stale(title, now):
                 continue
             source = (item.findtext("source") or "").strip()
             if not source and " - " in title:
@@ -223,16 +247,18 @@ class MarketNewsService:
                 published = published.astimezone(now.tzinfo)
             except Exception:
                 published = None
-            if published is not None:
-                age_seconds = (now_utc - published.astimezone(timezone.utc)).total_seconds()
-                if age_seconds < -300 or age_seconds > max_age_seconds:
-                    continue
+            # Unknown publication time cannot be treated as fresh decision evidence.
+            if published is None:
+                continue
+            age_seconds = (now_utc - published.astimezone(timezone.utc)).total_seconds()
+            if age_seconds < -300 or age_seconds > max_age_seconds:
+                continue
             rows.append(
                 {
                     "title": title,
                     "source": source or "Unknown",
                     "link": link,
-                    "published_at": published.isoformat() if published is not None else None,
+                    "published_at": published.isoformat(),
                     "impact": MarketNewsService._impact(title),
                     "bias": MarketNewsService._headline_bias(title),
                 }
@@ -267,15 +293,11 @@ class MarketNewsService:
 
         rows: list[dict[str, Any]] = []
         failures = 0
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; NiftySellerLite/2.11; market-news-context)"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; NiftySellerLite/2.12; market-news-context)"}
         for query in self.QUERIES:
             try:
                 response = requests.get(
-                    self._rss_url(query),
-                    headers=headers,
-                    timeout=CONFIG.news_request_timeout_seconds,
+                    self._rss_url(query), headers=headers, timeout=CONFIG.news_request_timeout_seconds
                 )
                 response.raise_for_status()
                 rows.extend(self._parse_feed(response.text, now))
@@ -292,7 +314,27 @@ class MarketNewsService:
         clean = clean[: CONFIG.news_max_headlines]
 
         bias, risk, summary = self._summarize(clean)
-        status = "READY" if clean else "UNAVAILABLE" if failures == len(self.QUERIES) else "NO RECENT NEWS"
+        newest_age = None
+        if clean:
+            ages = []
+            for row in clean:
+                try:
+                    published = datetime.fromisoformat(str(row["published_at"]))
+                    if published.tzinfo is None:
+                        published = published.replace(tzinfo=now.tzinfo)
+                    ages.append(max(0.0, (now - published.astimezone(now.tzinfo)).total_seconds() / 60.0))
+                except Exception:
+                    continue
+            newest_age = min(ages, default=None)
+        status = self._freshness_status(newest_age)
+        if not clean:
+            status = "UNAVAILABLE" if failures == len(self.QUERIES) else "NO FRESH NEWS"
+            bias, risk = "NEUTRAL", "NONE"
+            summary = "Fresh market-moving news available nahi hai; news decision weight zero hai."
+        elif status == "OLD":
+            risk = self._downgrade_risk_for_old(risk)
+            summary = "OLD / low-weight context. " + summary
+
         payload = {
             "fetched_at": now.isoformat(),
             "headlines": clean,

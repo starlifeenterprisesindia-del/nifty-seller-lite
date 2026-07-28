@@ -1,4 +1,46 @@
-# Nifty Seller Lite — V2.11 Main AI Consolidated
+# Nifty Seller Lite — V2.12 Accuracy + Clarity + Retention
+
+## V2.12 changes
+
+### 1. Mobile-first Main AI clarity
+- Main AI top metrics now use compact responsive cards instead of oversized stacked Streamlit metrics.
+- `Decision Confidence` is presented as **Entry Readiness**, while **Rukh Evidence** separately exposes the matching Core Market bullish/bearish/range evidence already calculated by the canonical snapshot.
+- Technical feed names are removed from the main user card; detailed feed diagnostics remain in audit evidence.
+- `Brain score` is relabeled **Strategy Suitability** and `Quality` is relabeled **Strike + Hedge Quality** so neither looks like a profit probability.
+
+### 2. Strict news freshness
+- Article publication time, not RSS fetch time, controls freshness.
+- <=90 minutes: READY; 90–180 minutes: OLD / low weight; >180 minutes: zero decision weight.
+- Explicit old dates embedded in republished headlines are rejected (for example a June 8 story resurfacing in late July).
+- Main AI no longer calls stale headlines “fresh news”.
+
+### 3. Correct session wording
+- Before 09:00 IST: `MARKET CLOSED — NEXT SESSION NOT OPEN`.
+- 09:00–09:15 IST: separate `PRE-OPEN — REFERENCE DATA` state.
+- Regular live session still requires fresh quotes plus fresh completed candles.
+
+### 4. 24-hour automatic temporary-data cleanup
+On every app rerun, raw/temporary option snapshots, abandoned news cache and safe temp snapshot files older than 24 hours are pruned automatically.
+The cleanup does **not** delete the FII/DII 15-session journal, manual discipline/trade state, instrument master or compact learning summaries.
+
+### 5. Two report downloads
+- **Quick Market Report**: compact 2-page Main AI + Road Map + evidence/safety report for daily use.
+- **Full Audit PDF**: detailed immutable snapshot audit for verification/debugging.
+Both read the same authoritative snapshot and perform no independent strategy calculation.
+
+### 6. One-Brain architecture preserved
+`analysis/decision.py::calculate_final_decision` remains the single canonical strategy brain. The new labels, mobile cards, news guards, housekeeping and PDFs are presentation/safety layers only.
+
+## Update deployment — replace/update only
+Use `V2_12_UPDATE_LIST.txt`. Replace matching files at the same paths and add the new files. Do **not** delete the repository or the runtime `data/` folder.
+
+Expected version:
+
+```text
+2.12.0_ACCURACY_CLARITY_RETENTION
+```
+
+---
 
 ## V2.11 changes
 
@@ -49,7 +91,7 @@ files. Do **not** delete the repository or runtime data folder.
 Expected version:
 
 ```text
-2.11.0_MAIN_AI_CONSOLIDATED
+2.12.0_ACCURACY_CLARITY_RETENTION
 ```
 
 ---

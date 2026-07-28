@@ -60,3 +60,25 @@ def test_open_clock_with_fresh_quote_but_stale_candle_is_not_live():
     assert session.code == "CLOSED_OR_STALE_SESSION"
     assert not session.is_live
     assert "fresh completed candle" in session.message
+
+
+def test_midnight_is_closed_not_preopen():
+    session = classify_market_session(
+        datetime(2026, 7, 28, 0, 25, tzinfo=IST),
+        quote_age_seconds=10000,
+        has_current_day_candle=False,
+        candle_age_seconds=None,
+    )
+    assert session.code == "CLOSED_BEFORE_OPEN"
+    assert "NEXT SESSION NOT OPEN" in session.label
+
+
+def test_official_preopen_window_is_separate():
+    session = classify_market_session(
+        datetime(2026, 7, 28, 9, 5, tzinfo=IST),
+        quote_age_seconds=2,
+        has_current_day_candle=False,
+        candle_age_seconds=None,
+    )
+    assert session.code == "PRE_OPEN"
+    assert not session.is_live

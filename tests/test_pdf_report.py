@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from services.pdf_report import audit_pdf_filename, build_full_audit_pdf
+from services.pdf_report import (audit_pdf_filename, build_full_audit_pdf, build_quick_market_pdf, quick_pdf_filename)
 from services.snapshot_service import SnapshotService
 
 
@@ -104,3 +104,19 @@ def test_app_consolidates_status_in_main_ai_without_duplicate_top_sections():
     assert "render_best_protected_sells(snapshot)" not in text
     assert "Delete selected date" not in text
     assert 'NSL_SHOW_DEVELOPER_DATA' in text
+
+
+def test_quick_market_pdf_is_valid_and_compact():
+    snapshot = _snapshot_fixture()
+    pdf = build_quick_market_pdf(snapshot)
+    assert pdf.startswith(b"%PDF-")
+    assert len(pdf) > 5000
+    assert pdf.count(b"/Type /Page") >= 2
+    assert pdf.count(b"/Type /Page") < 6
+
+
+def test_quick_pdf_filename_is_snapshot_specific():
+    snapshot = _snapshot_fixture()
+    name = quick_pdf_filename(snapshot)
+    assert name.startswith("nifty_seller_lite_quick_20260719_133700_")
+    assert name.endswith(".pdf")

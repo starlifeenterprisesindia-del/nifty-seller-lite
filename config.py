@@ -21,12 +21,13 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.11.0_MAIN_AI_CONSOLIDATED"
+    version: str = "2.12.0_ACCURACY_CLARITY_RETENTION"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
     context_quote_max_age_seconds: int = 60
     candle_max_age_minutes: int = 5
+    pre_open_start: time = time(9, 0)
     market_open: time = time(9, 15)
     market_close: time = time(15, 30)
     nifty: InstrumentRef = InstrumentRef(
@@ -112,8 +113,17 @@ class AppConfig:
     news_cache_path: str = "data/news_cache.json"
     news_cache_ttl_seconds: int = 180
     news_request_timeout_seconds: int = 4
-    news_max_age_hours: int = 12
+    # News freshness is based on the article publication time, not RSS fetch time.
+    # READY <= 90m, OLD 90-180m (low weight), >180m gets zero decision weight.
+    news_fresh_minutes: int = 30
+    news_recent_minutes: int = 90
+    news_stale_minutes: int = 180
+    news_title_date_max_days: int = 2
     news_max_headlines: int = 12
+
+    # Automatic housekeeping. Raw/temporary market state is bounded to 24 hours.
+    # FII/DII journal, manual trade records and compact learning summaries are excluded.
+    temporary_data_retention_hours: int = 24
     decision_minimum_score: float = 62.0
     decision_minimum_margin: float = 8.0
     decision_wait_block_threshold: float = 60.0

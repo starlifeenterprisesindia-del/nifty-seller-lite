@@ -24,6 +24,21 @@ def required_live_feed_state(snapshot: MarketSnapshot) -> tuple[bool, str]:
     return ok, "PASS / LIVE" if ok else "BLOCKED — " + "; ".join(states)
 
 
+def direction_evidence_score(snapshot: MarketSnapshot) -> float:
+    """Presentation-only strength of the current directional core evidence.
+
+    This does not create another strategy score. It simply exposes the matching
+    bullish/bearish/range component already present in CoreMarketEvidence.
+    """
+
+    direction = snapshot.decision.market_direction
+    if direction == "BULLISH":
+        return float(snapshot.core_evidence.bullish_score)
+    if direction == "BEARISH":
+        return float(snapshot.core_evidence.bearish_score)
+    return float(snapshot.core_evidence.range_score)
+
+
 def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
     """Explain the existing canonical decision in simple Hinglish.
 
@@ -48,7 +63,11 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
             reasons.append("Top-7 heavy stocks positive hain")
         if "SUPPORT" in inst or "FII BUYING" in inst or "FUTURES LONG" in inst:
             reasons.append("FII/DII background support de raha hai")
-        base = "Market upar ja sakta hai"
+        base = (
+            "Market upar ja sakta hai"
+            if snapshot.market_session.is_live
+            else "Last available data ke hisaab se market ka rukh UP tha"
+        )
         barrier = snapshot.barrier_map.nearest_resistance
         barrier_text = (
             f" Lekin {barrier.lower:,.0f}–{barrier.upper:,.0f} ke paas resistance hai."
@@ -68,7 +87,11 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
                 reasons.append(f"FII futures me {short_pct:.1f}% short position hai")
             else:
                 reasons.append("FII side se pressure hai")
-        base = "Market neeche ja sakta hai"
+        base = (
+            "Market neeche ja sakta hai"
+            if snapshot.market_session.is_live
+            else "Last available data ke hisaab se market ka rukh DOWN tha"
+        )
         barrier = snapshot.barrier_map.nearest_support
         barrier_text = (
             f" Lekin {barrier.lower:,.0f}–{barrier.upper:,.0f} ke paas support hai."
@@ -76,7 +99,11 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
             else ""
         )
     else:
-        base = "Abhi market ka direction clear nahi hai"
+        base = (
+            "Abhi market ka direction clear nahi hai"
+            if snapshot.market_session.is_live
+            else "Last available data me market ka direction clear nahi tha"
+        )
         if "MIXED" in pa or "CONFLICT" in snapshot.price_action.relationship.upper():
             reasons.append("3m aur 15m Price Action ek jaisa signal nahi de rahe")
         if "MIXED" in option_bias or "RANGE" in option_bias:
@@ -86,17 +113,22 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
     news = snapshot.news_context
     if news.status == "READY" and news.risk_level in {"HIGH", "MEDIUM"}:
         if news.bias == "BEARISH":
-            reasons.append("fresh news me bearish risk hai")
+            reasons.append("recent news me bearish risk hai")
         elif news.bias == "BULLISH":
-            reasons.append("fresh news supportive hai")
+            reasons.append("recent news supportive hai")
         else:
-            reasons.append(f"fresh news risk {news.risk_level.lower()} hai")
+            reasons.append(f"recent news risk {news.risk_level.lower()} hai")
+    elif news.status == "OLD":
+        reasons.append("news purani hai isliye usko low weight diya gaya hai")
 
     if not reasons:
         reasons.append("available signals abhi mixed/limited hain")
     explanation = base + " kyunki " + ", ".join(reasons[:4]) + "." + barrier_text
     if decision.final_action == "WAIT":
-        explanation += " Isliye fresh entry ke liye abhi WAIT better hai jab tak confirmation strong na ho."
+        if snapshot.market_session.is_live:
+            explanation += " Isliye fresh entry ke liye abhi WAIT better hai jab tak confirmation strong na ho."
+        else:
+            explanation += " Market live nahi hai, isliye yeh reference-only reading hai; fresh entry permitted nahi hai."
     elif snapshot.execution_guard.readiness != "ENTRY READY":
         explanation += f" Setup {decision.final_action} hai, lekin entry abhi {snapshot.execution_guard.readiness} hai."
     return explanation
@@ -161,7 +193,7 @@ def snapshot_change_items(
     items: list[tuple[str, str, str | None]] = []
     items.append(
         (
-            "Decision Confidence",
+            "Entry Readiness",
             f"{snapshot.decision.decision_confidence:.0f}/100",
             f"{snapshot.decision.decision_confidence - previous.decision.decision_confidence:+.0f}",
         )
