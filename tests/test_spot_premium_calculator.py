@@ -178,4 +178,185 @@ def test_calculator_is_read_only_and_not_a_second_strategy_brain():
     assert "DhanClient(" not in module
     assert "requests." not in module
     assert "PLACE_ORDER" not in module.upper()
-    assert app.count("render_spot_premium_calculator(snapshot)") == 1
+    assert app.count("render_spot_premium_calculator(view_snapshot)") == 1
+
+
+def test_invalid_iv_is_ignored_safely():
+    frame = sample_chain()
+    frame.loc[(frame["side"] == "CE") & (frame["strike"] == 24050), "implied_volatility"] = 0.0
+    result = calculate_spot_premium_range(
+        option_chain=frame,
+        side="CE",
+        position="SELL",
+        strike=24050,
+        current_spot=24010,
+        current_premium=40,
+        entry_premium=40,
+        lower_spot=23980,
+        upper_spot=24060,
+        target_minutes=15,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+    )
+    assert result.current_iv is None
+    assert any("IV invalid/out-of-range" in warning for warning in result.warnings)
+
+
+def test_premium_breakdown_separates_intrinsic_and_time_value():
+    result = calculate_spot_premium_range(
+        option_chain=sample_chain(),
+        side="CE",
+        position="BUY",
+        strike=24000,
+        current_spot=24010,
+        current_premium=65,
+        entry_premium=65,
+        lower_spot=23980,
+        upper_spot=24060,
+        target_minutes=15,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+    )
+    assert result.current_intrinsic_value == 10
+    assert result.current_time_value == 55
+    assert result.current_time_value_share_pct == pytest.approx(84.6, abs=0.1)
+    assert result.current.intrinsic_value == 10
+    assert result.current.time_value == 55
+
+
+def test_positive_iv_change_raises_target_premium_when_vega_is_available():
+    base = calculate_spot_premium_range(
+        option_chain=sample_chain(),
+        side="CE",
+        position="BUY",
+        strike=24050,
+        current_spot=24010,
+        current_premium=40,
+        entry_premium=40,
+        lower_spot=23980,
+        upper_spot=24060,
+        target_minutes=15,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+        iv_change_points=0,
+    )
+    higher_iv = calculate_spot_premium_range(
+        option_chain=sample_chain(),
+        side="CE",
+        position="BUY",
+        strike=24050,
+        current_spot=24010,
+        current_premium=40,
+        entry_premium=40,
+        lower_spot=23980,
+        upper_spot=24060,
+        target_minutes=15,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+        iv_change_points=2,
+    )
+    assert higher_iv.upper.best_price > base.upper.best_price
+    assert higher_iv.upper.iv_effect == 16
+    assert higher_iv.target_iv == 16
+
+
+def test_negative_iv_change_lowers_time_value_but_not_below_intrinsic():
+    result = calculate_spot_premium_range(
+        option_chain=sample_chain(),
+        side="CE",
+        position="BUY",
+        strike=24000,
+        current_spot=24010,
+        current_premium=65,
+        entry_premium=65,
+        lower_spot=24005,
+        upper_spot=24150,
+        target_minutes=60,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+        iv_change_points=-10,
+    )
+    assert result.upper.best_price >= result.upper.intrinsic_value
+    assert result.upper.time_value >= 0
+
+
+def test_sideways_decay_shows_15_30_60_minutes_and_respects_intrinsic_floor():
+    result = calculate_spot_premium_range(
+        option_chain=sample_chain(),
+        side="CE",
+        position="SELL",
+        strike=24000,
+        current_spot=24010,
+        current_premium=65,
+        entry_premium=65,
+        lower_spot=23980,
+        upper_spot=24060,
+        target_minutes=15,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+    )
+    assert [item.minutes for item in result.decay_scenarios] == [15, 30, 60]
+    assert result.decay_scenarios[0].estimated_premium > result.decay_scenarios[-1].estimated_premium
+    assert all(item.estimated_premium >= item.intrinsic_value for item in result.decay_scenarios)
+    assert result.decay_scenarios[-1].total_pnl > result.decay_scenarios[0].total_pnl
+
+
+def test_driver_breakdown_exposes_spot_theta_iv_and_chain_components():
+    result = calculate_spot_premium_range(
+        option_chain=sample_chain(),
+        side="PE",
+        position="BUY",
+        strike=24050,
+        current_spot=24010,
+        current_premium=72,
+        entry_premium=72,
+        lower_spot=23980,
+        upper_spot=24060,
+        target_minutes=30,
+        lot_size=65,
+        lots=1,
+        feed_state="LIVE",
+        iv_change_points=1.5,
+    )
+    assert result.lower.spot_move_effect > 0
+    assert result.lower.theta_effect < 0
+    assert result.lower.iv_effect == 12
+    assert isinstance(result.lower.chain_smile_effect, float)
+
+
+def test_iv_change_that_makes_target_iv_non_positive_is_rejected():
+    with pytest.raises(ValueError, match="target IV zero/negative"):
+        calculate_spot_premium_range(
+            option_chain=sample_chain(),
+            side="CE",
+            position="SELL",
+            strike=24050,
+            current_spot=24010,
+            current_premium=40,
+            entry_premium=40,
+            lower_spot=23980,
+            upper_spot=24060,
+            target_minutes=15,
+            lot_size=65,
+            lots=1,
+            feed_state="LIVE",
+            iv_change_points=-14,
+        )
+
+
+def test_v214_ui_exposes_all_missing_premium_explainability_controls():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ui = (root / "ui" / "components.py").read_text(encoding="utf-8")
+    assert "Expected IV change (points)" in ui
+    assert "Premium Breakdown — Abhi" in ui
+    assert "Premium Kyun Badlega? — Contribution Breakdown" in ui
+    assert "Sideways Time Decay — NIFTY aur IV same rahe to" in ui
+    assert "Selected strike OI" in ui

@@ -1,0 +1,16 @@
+DEPLOY V2.14 COMBINED UPDATE
+
+1. Extract this ZIP.
+2. Open the extracted folder and upload its files/folders into the repository root.
+3. Allow matching paths to replace the existing files.
+4. Do not delete Streamlit Secrets or the runtime data/ folder.
+5. Commit message:
+   V2.14 Premium Explainability Combined Update
+6. After deployment, refresh the app and verify the header version:
+   2.14.0_PREMIUM_EXPLAINABILITY
+7. Open Spot-to-Premium Calculator and verify:
+   - Intrinsic Value + Time Value cards
+   - Expected IV change input
+   - Premium contribution table
+   - 15/30/60 minute sideways decay table
+8. Generate a fresh Quick PDF and Full Audit PDF to verify the earlier presentation-integrity fixes.

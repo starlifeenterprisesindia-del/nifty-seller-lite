@@ -9,11 +9,16 @@ import streamlit as st
 
 from analysis.evidence_matrix import build_compact_evidence_matrix
 from analysis.spot_premium_calculator import calculate_spot_premium_range
+from analysis.presentation_safety import (
+    candidate_invalidation_text,
+    display_main_blocker,
+    market_rukh_display,
+    normalized_news_display,
+    safe_brain_hinglish_line,
+)
 from models import MarketLevel, MarketSnapshot, TimeframeIndicators
 from services.summary_presenter import (
     best_existing_candidate,
-    brain_hinglish_line,
-    direction_evidence_score,
     plan_leg_text,
     required_live_feed_state,
     snapshot_change_hinglish,
@@ -192,11 +197,12 @@ def _inr(value: float) -> str:
 
 
 def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
-    with st.expander("🧮 Spot-to-Premium Calculator — Manual Range", expanded=False):
+    with st.expander("🧮 Spot-to-Premium Calculator — Range + IV + Time Value", expanded=False):
         st.caption(
-            "Apni lower/upper NIFTY range khud bharo. Calculator live option chain, Delta, Gamma, "
-            "Theta, Vega, IV aur bid-ask ko use karke CE/PE BUY ya SELL ka probable exit premium "
-            "aur P&L zone nikalega. Yeh separate utility engine hai; Main AI decision ko touch nahi karta."
+            "Apni lower/upper NIFTY range aur expected IV change khud bharo. Calculator live option chain, "
+            "Delta, Gamma, Theta, Vega, Dhan-chain IV aur bid-ask se probable premium/P&L zone banata hai. "
+            "Intrinsic Value + Time Value breakdown aur 15/30/60-minute sideways decay bhi dikhata hai. "
+            "Yeh read-only utility hai; Main AI decision ko touch nahi karta."
         )
 
         option_frame = snapshot.option_chain
@@ -238,13 +244,26 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
         delta = _cell_float(row, "delta")
         gamma = _cell_float(row, "gamma")
         theta = _cell_float(row, "theta")
+        vega = _cell_float(row, "vega")
         iv = _cell_float(row, "implied_volatility")
+        current_oi = _cell_float(row, "oi")
+        day_oi_change = _cell_float(row, "day_oi_change")
+        volume = _cell_float(row, "volume")
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Chain premium", f"₹{chain_price:,.2f}" if chain_price > 0 else "—")
         m2.metric("Bid / Ask", f"₹{bid:,.2f} / ₹{ask:,.2f}" if bid or ask else "—")
         m3.metric("Delta / Gamma", f"{delta:.3f} / {gamma:.5f}" if delta or gamma else "—")
-        m4.metric("IV / Theta", f"{iv:.2f} / {theta:.2f}" if iv or theta else "—")
+        m4.metric("Dhan IV / Theta / Vega", f"{iv:.2f} / {theta:.2f} / {vega:.2f}" if iv or theta or vega else "—")
+
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Selected strike OI", f"{current_oi:,.0f}" if current_oi else "—")
+        f2.metric("Day OI change", f"{day_oi_change:+,.0f}" if day_oi_change else "0")
+        f3.metric("Volume", f"{volume:,.0f}" if volume else "—")
+        st.caption(
+            "Demand/flow context: OI, OI change aur volume market participation dikhate hain. "
+            "Inka exact rupee effect alag se claim nahi kiya jata; live option-chain smile final price proxy hai."
+        )
 
         contract_key = f"{side}_{int(round(strike))}"
         p1, p2, p3 = st.columns(3)
@@ -294,7 +313,7 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
 
         default_lower = max(1.0, round((current_spot - 50.0) / 5.0) * 5.0)
         default_upper = round((current_spot + 50.0) / 5.0) * 5.0
-        r1, r2, r3 = st.columns(3)
+        r1, r2, r3, r4 = st.columns(4)
         with r1:
             lower_spot = st.number_input(
                 "Lower NIFTY range",
@@ -321,8 +340,22 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                 value=15,
                 step=5,
                 key="spc_target_minutes",
-                help="0 ka matlab immediate move; zyada time par Theta adjust hoga.",
+                help="0 immediate move; zyada time par Theta adjust hoga.",
             )
+        with r4:
+            iv_change_points = st.number_input(
+                "Expected IV change (points)",
+                min_value=-20.0,
+                max_value=20.0,
+                value=0.0,
+                step=0.5,
+                key="spc_iv_change_points",
+                help="Example: Dhan IV 10 se 12 expected ho to +2.0; 10 se 8 ho to -2.0.",
+            )
+            if iv > 0:
+                st.caption(f"Target IV: {iv + float(iv_change_points):.2f}")
+            else:
+                st.caption("Valid Dhan IV/Vega na ho to IV effect apply nahi hoga.")
 
         q1, q2 = st.columns(2)
         with q1:
@@ -355,6 +388,7 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
             float(lower_spot),
             float(upper_spot),
             int(target_minutes),
+            float(iv_change_points),
             int(calculator_lot_size),
             int(lots),
             feed_state,
@@ -374,6 +408,7 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                     lower_spot=float(lower_spot),
                     upper_spot=float(upper_spot),
                     target_minutes=int(target_minutes),
+                    iv_change_points=float(iv_change_points),
                     lot_size=int(calculator_lot_size),
                     lots=int(lots),
                     feed_state=feed_state,
@@ -386,17 +421,23 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
             result = st.session_state.get("spc_result")
 
         if result is None:
-            st.info("Lower aur upper range bharne ke baad **Calculate Premium Range** dabao.")
+            st.info("Range, time aur IV scenario bharne ke baad **Calculate Premium Range** dabao.")
             return
 
         if result.status == "LIVE ESTIMATE":
-            st.success(
-                f"LIVE option-chain estimate · Reliability {result.overall_reliability:.0f}/100"
-            )
+            st.success(f"LIVE option-chain estimate · Reliability {result.overall_reliability:.0f}/100")
         else:
             st.warning(
                 f"REFERENCE ONLY · Reliability {result.overall_reliability:.0f}/100 — broker premium verify karo."
             )
+
+        st.write("**Premium Breakdown — Abhi**")
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("Current premium", f"₹{result.current_premium:,.2f}")
+        b2.metric("Intrinsic Value", f"₹{result.current_intrinsic_value:,.2f}")
+        b3.metric("Time Value", f"₹{result.current_time_value:,.2f}")
+        b4.metric("Time Value share", f"{result.current_time_value_share_pct:.1f}%")
+        st.caption("Premium = Intrinsic Value + Time Value. Time Value me remaining time, IV aur demand/liquidity ka effect hota hai.")
 
         table_rows = []
         for estimate in (result.lower, result.current, result.upper):
@@ -405,6 +446,8 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                     "NIFTY scenario": f"{estimate.label} · {estimate.target_spot:,.0f}",
                     "Estimated premium": f"₹{estimate.best_price:,.2f}",
                     "Probable zone": f"₹{estimate.low_price:,.2f}–₹{estimate.high_price:,.2f}",
+                    "Intrinsic": f"₹{estimate.intrinsic_value:,.2f}",
+                    "Time Value": f"₹{estimate.time_value:,.2f}",
                     "Exit action": estimate.exit_action,
                     "P&L / qty": _inr(estimate.pnl_per_quantity),
                     f"P&L ({result.lots} lot)": _inr(estimate.total_pnl),
@@ -414,12 +457,58 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
             )
         st.dataframe(table_rows, width="stretch", hide_index=True)
 
+        st.write("**Premium Kyun Badlega? — Contribution Breakdown**")
+        driver_rows = []
+        for estimate in (result.lower, result.upper):
+            driver_rows.append(
+                {
+                    "Scenario": f"NIFTY {estimate.target_spot:,.0f}",
+                    "Spot effect (Delta+Gamma)": _inr(estimate.spot_move_effect),
+                    "Time effect (Theta)": _inr(estimate.theta_effect),
+                    "IV effect (Vega)": _inr(estimate.iv_effect),
+                    "Live chain/smile adjustment": _inr(estimate.chain_smile_effect),
+                    "Final premium": f"₹{estimate.best_price:,.2f}",
+                }
+            )
+        st.dataframe(driver_rows, width="stretch", hide_index=True)
+        st.caption(
+            "Live chain/smile adjustment actual same-expiry option prices ka residual hai. "
+            "Isme market demand, skew, liquidity aur model difference ka combined proxy aa sakta hai; "
+            "yeh OI/volume ka exact rupee attribution nahi hai."
+        )
+
+        st.write("**Sideways Time Decay — NIFTY aur IV same rahe to**")
+        decay_rows = []
+        for decay in result.decay_scenarios:
+            decay_rows.append(
+                {
+                    "After": f"{decay.minutes} min",
+                    "Estimated premium": f"₹{decay.estimated_premium:,.2f}",
+                    "Premium change": _inr(decay.premium_change),
+                    "Remaining Time Value": f"₹{decay.remaining_time_value:,.2f}",
+                    "P&L / qty": _inr(decay.pnl_per_quantity),
+                    f"P&L ({result.lots} lot)": _inr(decay.total_pnl),
+                    "Result": decay.outcome,
+                    "Reliability": f"{decay.reliability:.0f}/100",
+                }
+            )
+        st.dataframe(decay_rows, width="stretch", hide_index=True)
+        st.caption("Sideways table Theta-only hai: spot aur IV same maane gaye hain. Real market me IV/bid-ask badalne se result alag ho sakta hai.")
+
         st.info("🧠 **Calculator Samajh:** " + result.summary)
+        target_iv_text = f"{result.target_iv:.2f}" if result.target_iv is not None else "—"
         st.caption(
             f"Model inputs: Current {result.current_spot:,.2f} | {result.strike:,.0f} {result.side} "
             f"{result.position} | Current premium ₹{result.current_premium:,.2f} | Entry ₹{result.entry_premium:,.2f} | "
             f"Time {result.target_minutes} min | Delta {result.current_delta if result.current_delta is not None else '—'} | "
-            f"IV {result.current_iv if result.current_iv is not None else '—'}"
+            f"Theta {result.current_theta if result.current_theta is not None else '—'} | "
+            f"Vega {result.current_vega if result.current_vega is not None else '—'} | "
+            f"Dhan IV {result.current_iv if result.current_iv is not None else '—'} → Target IV {target_iv_text}"
+        )
+        st.caption(
+            "IV/Greeks source note: calculator Dhan option-chain values use karta hai. "
+            "HDFC Sky/Zerodha/Angel ka IV model, interest rate, timestamp ya rounding alag ho sakta hai; "
+            "exact IV parity expected nahi hai. Premium/bid-ask ko final verification mano."
         )
         for warning in result.warnings:
             st.caption("• " + warning)
@@ -584,10 +673,7 @@ def render_main_ai_market_view(
     barrier = snapshot.barrier_map
     speed = barrier.market_speed
     feed_ok, _feed_text = required_live_feed_state(snapshot)
-    direction = {"BULLISH": "UP", "BEARISH": "DOWN", "RANGE": "RANGE"}.get(
-        decision.market_direction, decision.market_direction
-    )
-    direction_score = direction_evidence_score(snapshot)
+    direction, direction_score, direction_note = market_rukh_display(snapshot)
     spot = snapshot.nifty_quote.get("last_price")
 
     st.subheader("🧠 Main AI — Market View")
@@ -600,7 +686,7 @@ def render_main_ai_market_view(
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
-                ("Market Rukh", direction, f"Rukh evidence {direction_score:.0f}/100"),
+                ("Market Rukh", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
                 ("Final Action", decision.final_action, "One-Brain final action"),
                 ("Entry Readiness", f"{decision.decision_confidence:.0f}/100", snapshot.execution_guard.readiness),
                 ("Market Danger", f"{speed.state} {speed.score:.0f}/100", f"Speed direction {speed.direction}"),
@@ -608,7 +694,7 @@ def render_main_ai_market_view(
             ]
         )
 
-        st.info("🧠 **AI samajh:** " + brain_hinglish_line(snapshot))
+        st.info("🧠 **AI samajh:** " + safe_brain_hinglish_line(snapshot))
 
         # Keep technical feed names out of the main user screen. Full feed diagnostics
         # remain available in the detailed evidence/PDF audit.
@@ -642,9 +728,12 @@ def render_main_ai_market_view(
                     st.caption(
                         "Final Action WAIT hai; yeh sirf reference candidate hai, entry signal nahi."
                     )
+                invalidation = candidate_invalidation_text(snapshot, name)
+                if invalidation:
+                    st.caption("Invalidation: " + invalidation)
             else:
                 st.write("Protected strike candidate abhi reliable tarah resolve nahi hua.")
-            st.caption(f"Main blocker: {decision.blocker}")
+            st.caption(f"Main blocker: {display_main_blocker(snapshot)}")
 
         with right:
             st.markdown("**🧭 Aage ka Road Map**")
@@ -699,15 +788,12 @@ def render_main_ai_market_view(
             inst_text += f" | FUT {inst.fii_futures_bias}"
 
         news = snapshot.news_context
-        if news.status == "READY":
-            news_text = f"{news.bias} / {news.risk_level}"
-            news_note = f"Recent · newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else "Recent"
-        elif news.status == "OLD":
-            news_text = "OLD / LOW WEIGHT"
-            news_note = f"Newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else "Old context"
+        news_display = normalized_news_display(news)
+        if news_display.status == "READY":
+            news_text = f"{news_display.bias} / {news_display.risk}"
         else:
-            news_text = news.status
-            news_note = "Decision weight zero"
+            news_text = news_display.status
+        news_note = news_display.note
 
         _render_compact_cards(
             [
@@ -755,6 +841,9 @@ def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
     st.dataframe(pd.DataFrame([row]), width="stretch", hide_index=True)
     if snapshot.decision.final_action == "WAIT":
         st.info("Final Action WAIT hai — yeh strike pair sirf reference hai, entry signal nahi.")
+    invalidation = candidate_invalidation_text(snapshot, name)
+    if invalidation:
+        st.caption("Invalidation: " + invalidation)
 
 
 def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
@@ -809,20 +898,21 @@ def render_news_context(snapshot: MarketSnapshot) -> None:
         "News article ki publication time se freshness judge hoti hai. 90–180 min old news low weight hai; "
         "180 min se purani/stale news ka decision weight zero rehta hai."
     )
+    news_display = normalized_news_display(news)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("News Bias", news.bias)
-    c2.metric("News Risk", news.risk_level)
+    c1.metric("News Bias", news_display.bias)
+    c2.metric("News Risk", news_display.risk)
     c3.metric("Headlines", len(news.headlines))
     c4.metric(
         "Newest Age",
         f"{news.newest_age_minutes:.0f} min" if news.newest_age_minutes is not None else "—",
     )
-    if news.status == "READY":
-        st.info(news.summary)
-    elif news.status == "OLD":
-        st.warning(f"News status: OLD / LOW WEIGHT — {news.summary}")
+    if news_display.status == "READY":
+        st.info(f"News status: READY — {news_display.note}. {news.summary}")
+    elif news_display.status.startswith("OLD"):
+        st.warning(f"News status: {news_display.status} — {news_display.note}")
     else:
-        st.warning(f"News status: {news.status} — {news.summary}")
+        st.warning(f"News status: {news_display.status} — {news_display.note}")
     if news.headlines:
         rows = []
         for item in news.headlines:
@@ -867,7 +957,7 @@ def render_decision(snapshot: MarketSnapshot) -> None:
     else:
         st.success(message)
 
-    st.info("🧠 **Brain samjha raha hai:** " + brain_hinglish_line(snapshot))
+    st.info("🧠 **Brain samjha raha hai:** " + safe_brain_hinglish_line(snapshot))
 
     left, right = st.columns(2)
     with left:
@@ -876,7 +966,7 @@ def render_decision(snapshot: MarketSnapshot) -> None:
             st.write(f"• {reason}")
     with right:
         st.write("**Main blocker**")
-        st.write(f"• {item.blocker}")
+        st.write(f"• {display_main_blocker(snapshot)}")
 
     with st.expander("Decision evidence & cautions", expanded=False):
         rows = []

@@ -1,0 +1,27 @@
+Nifty Seller Lite V2.14.0_PREMIUM_EXPLAINABILITY
+
+COMBINED PACKAGE
+- Includes all V2.13.1 Presentation Integrity fixes; the older patch does not need to be uploaded first.
+
+PRESENTATION INTEGRITY
+- Correct support/resistance wording from Barrier Map sides.
+- MIXED core tape remains MIXED; option-flow lean is separate.
+- Old/stale news cannot become displayed Main Blocker.
+- Consistent screen/Quick PDF/Full Audit presentation copy.
+- Correct PE SELL support-break and CE SELL resistance-break invalidation.
+- Safe Dhan-chain IV/Greeks validation and broker-model explanation.
+
+PREMIUM EXPLAINABILITY
+- Visible Current Premium = Intrinsic Value + Time Value.
+- Time Value share percentage.
+- Expected IV change input and target IV display.
+- Vega x IV-change scenario adjustment.
+- Delta+Gamma, Theta, Vega and chain/smile contribution table.
+- 15/30/60-minute sideways Theta decay table.
+- Selected strike OI, day OI change and volume context.
+- Intrinsic-value floor on all estimates.
+- No false exact rupee attribution from OI/volume.
+
+SAFETY
+- Read-only utility; no broker/network/order path.
+- Canonical analysis/decision.py remains the only strategy brain.

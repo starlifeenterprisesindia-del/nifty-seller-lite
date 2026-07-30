@@ -1,27 +1,34 @@
-# Nifty Seller Lite — V2.13 Spot-to-Premium Calculator
+# Nifty Seller Lite — V2.14 Premium Explainability (Combined Update)
 
-## V2.13 changes
+## Combined fixes included
 
-### Manual-range Spot-to-Premium Calculator
-A new collapsed calculator sits below the Barrier Map. The user selects **CE/PE**, **BUY/SELL**, strike, entry premium, current premium, expected time and manually enters the lower/upper NIFTY range. It returns:
-- estimated option premium at lower, current and upper NIFTY levels
-- probable premium zone instead of a false exact guarantee
-- BUY position sell-exit price or SELL position buyback price
-- P&L per quantity, per lot and total lots
-- reliability score and live/reference-only status
+This package starts from V2.13 Spot Premium Calculator and already includes the earlier V2.13.1 Presentation Integrity corrections, so the user does not need to upload the older patch first.
 
-The estimator is anchored to the current same-expiry option chain. It combines a local option-chain moneyness shift with Delta/Gamma and Theta adjustment, then widens the result using IV/Vega, bid-ask spread and method disagreement. Missing Greeks fall back safely to chain-based estimation.
+- Support/resistance wording is generated from the actual Barrier Map side.
+- A mixed core tape is displayed as **MIXED**; option-flow lean is explained separately.
+- Old/stale news is normalized and cannot become the displayed Main Blocker.
+- PE SELL and CE SELL reference candidates show correct support/resistance invalidation.
+- Screen, Quick PDF and Full Audit PDF use the same presentation-safe copy of the canonical snapshot.
+- Dhan-chain IV/Greeks are range-validated and broker IV differences are explained.
 
-### Architecture safety
-`analysis/spot_premium_calculator.py` is a separate read-only utility engine. It does not call Dhan directly, does not place orders and cannot change `analysis/decision.py::calculate_final_decision`, Main AI scores, Final Action or execution readiness.
+## V2.14 premium explainability additions
 
-## V2.13 update deployment — replace/update only
-Use `V2_13_UPDATE_LIST.txt`. Replace matching files at the same paths and add the new calculator module. Do **not** delete the repository or runtime `data/` folder.
+- Current premium is split visibly into **Intrinsic Value + Time Value** with Time Value share %.
+- Manual **Expected IV change (points)** input applies `Vega × IV change` to lower/upper scenarios.
+- The result exposes separate premium drivers: Delta+Gamma spot effect, Theta time effect, Vega IV effect and live chain/smile adjustment.
+- A 15/30/60-minute sideways table estimates Theta decay while assuming spot and IV stay unchanged.
+- Selected-strike OI, day OI change and volume are shown as demand/participation context. The app does not claim a false exact rupee attribution from OI/volume; the same-expiry live chain is used as the market-price proxy.
+- Every target estimate is floored at intrinsic value, so future Time Value cannot become negative.
+- The calculator stays read-only and cannot change One-Brain Final Action.
+
+## Deployment — replace/update only
+
+Use `V2_14_UPDATE_LIST.txt`. Upload the extracted files at the same repository paths and replace matching files. Add `analysis/presentation_safety.py` if it is not already present. Do **not** delete Streamlit Secrets or the runtime `data/` folder.
 
 Expected version:
 
 ```text
-2.13.0_SPOT_PREMIUM_CALCULATOR
+2.14.0_PREMIUM_EXPLAINABILITY
 ```
 
 ---

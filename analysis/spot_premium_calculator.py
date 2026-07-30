@@ -22,6 +22,26 @@ class PremiumRangeEstimate:
     reliability: float
     methods: tuple[str, ...]
     notes: tuple[str, ...]
+    intrinsic_value: float
+    time_value: float
+    spot_move_effect: float
+    theta_effect: float
+    iv_effect: float
+    chain_smile_effect: float
+
+
+@dataclass(frozen=True)
+class SidewaysDecayEstimate:
+    minutes: int
+    estimated_premium: float
+    premium_change: float
+    intrinsic_value: float
+    remaining_time_value: float
+    pnl_per_quantity: float
+    total_pnl: float
+    outcome: str
+    reliability: float
+    note: str
 
 
 @dataclass(frozen=True)
@@ -45,9 +65,15 @@ class SpotPremiumCalculation:
     current_gamma: float | None
     current_theta: float | None
     current_vega: float | None
+    iv_change_points: float
+    target_iv: float | None
+    current_intrinsic_value: float
+    current_time_value: float
+    current_time_value_share_pct: float
     lower: PremiumRangeEstimate
     current: PremiumRangeEstimate
     upper: PremiumRangeEstimate
+    decay_scenarios: tuple[SidewaysDecayEstimate, ...]
     overall_reliability: float
     status: str
     summary: str
@@ -62,6 +88,12 @@ def _number(value: Any) -> float | None:
     if not isfinite(result):
         return None
     return result
+
+
+def _intrinsic_value(*, side: str, strike: float, spot: float) -> float:
+    if side == "CE":
+        return max(0.0, spot - strike)
+    return max(0.0, strike - spot)
 
 
 def _contract_row(frame: pd.DataFrame, *, strike: float, side: str) -> pd.Series | None:
@@ -129,8 +161,8 @@ def _chain_shift_estimate(
     if rows.empty:
         return None, None
 
-    # Keep approximately the same moneyness. This lets the live option-chain smile
-    # anchor the estimate instead of relying on a fixed Delta alone.
+    # Keep approximately the same moneyness. The same-expiry live smile therefore
+    # anchors the estimate instead of relying on a fixed Delta alone.
     equivalent_strike = strike * current_spot / target_spot
     price = _interpolate(
         [(float(row.strike), float(row.last_price)) for row in rows.itertuples()],
@@ -146,6 +178,28 @@ def _chain_shift_estimate(
     return max(0.0, price), equivalent_strike
 
 
+def _greek_components(
+    *,
+    current_spot: float,
+    target_spot: float,
+    delta: float | None,
+    gamma: float | None,
+    theta: float | None,
+    target_minutes: int,
+    vega: float | None,
+    iv_change_points: float,
+) -> tuple[float, float, float]:
+    move = target_spot - current_spot
+    spot_effect = 0.0
+    if delta is not None:
+        spot_effect = delta * move
+        if gamma is not None:
+            spot_effect += 0.5 * gamma * move * move
+    theta_effect = theta * (target_minutes / 1440.0) if theta is not None and target_minutes > 0 else 0.0
+    iv_effect = vega * iv_change_points if vega is not None else 0.0
+    return spot_effect, theta_effect, iv_effect
+
+
 def _greek_estimate(
     *,
     side: str,
@@ -157,22 +211,26 @@ def _greek_estimate(
     gamma: float | None,
     theta: float | None,
     target_minutes: int,
+    vega: float | None,
+    iv_change_points: float,
 ) -> float | None:
     if delta is None:
         return None
-    move = target_spot - current_spot
-    price = current_premium + delta * move
-    if gamma is not None:
-        price += 0.5 * gamma * move * move
-    if theta is not None and target_minutes > 0:
-        price += theta * (target_minutes / 1440.0)
-    intrinsic = max(0.0, target_spot - strike) if side == "CE" else max(0.0, strike - target_spot)
-    return max(intrinsic, price, 0.0)
+    spot_effect, theta_effect, iv_effect = _greek_components(
+        current_spot=current_spot,
+        target_spot=target_spot,
+        delta=delta,
+        gamma=gamma,
+        theta=theta,
+        target_minutes=target_minutes,
+        vega=vega,
+        iv_change_points=iv_change_points,
+    )
+    intrinsic = _intrinsic_value(side=side, strike=strike, spot=target_spot)
+    return max(intrinsic, current_premium + spot_effect + theta_effect + iv_effect, 0.0)
 
 
-def _position_pnl(
-    *, position: str, entry_premium: float, estimated_premium: float
-) -> float:
+def _position_pnl(*, position: str, entry_premium: float, estimated_premium: float) -> float:
     if position == "BUY":
         return estimated_premium - entry_premium
     return entry_premium - estimated_premium
@@ -200,11 +258,26 @@ def _estimate_one(
     gamma: float | None,
     theta: float | None,
     vega: float | None,
+    iv_change_points: float,
     feed_state: str,
+    anchor_current: bool = False,
 ) -> PremiumRangeEstimate:
-    if abs(target_spot - current_spot) < 1e-9:
+    intrinsic = _intrinsic_value(side=side, strike=strike, spot=target_spot)
+    spot_effect, theta_effect, iv_effect = _greek_components(
+        current_spot=current_spot,
+        target_spot=target_spot,
+        delta=delta,
+        gamma=gamma,
+        theta=theta,
+        target_minutes=target_minutes,
+        vega=vega,
+        iv_change_points=iv_change_points,
+    )
+
+    if anchor_current:
         estimates = [("CURRENT PREMIUM", current_premium)]
         equivalent_strike = strike
+        spot_effect = theta_effect = iv_effect = 0.0
     else:
         chain_estimate, equivalent_strike = _chain_shift_estimate(
             frame,
@@ -217,6 +290,8 @@ def _estimate_one(
             theta=theta,
             target_minutes=target_minutes,
         )
+        if chain_estimate is not None:
+            chain_estimate = max(intrinsic, chain_estimate + iv_effect)
         greek_estimate = _greek_estimate(
             side=side,
             strike=strike,
@@ -227,25 +302,23 @@ def _estimate_one(
             gamma=gamma,
             theta=theta,
             target_minutes=target_minutes,
+            vega=vega,
+            iv_change_points=iv_change_points,
         )
-        estimates = []
+        estimates: list[tuple[str, float]] = []
         if chain_estimate is not None:
             estimates.append(("OPTION CHAIN SHIFT", chain_estimate))
         if greek_estimate is not None:
-            estimates.append(("DELTA + GAMMA", greek_estimate))
+            estimates.append(("DELTA + GAMMA + THETA + VEGA", greek_estimate))
         if not estimates:
-            # Last-resort intrinsic-aware linear fallback. It is deliberately low
-            # reliability and is only used when the chain row has incomplete Greeks.
             fallback_delta = 0.5 if side == "CE" else -0.5
             fallback = current_premium + fallback_delta * (target_spot - current_spot)
-            intrinsic = (
-                max(0.0, target_spot - strike)
-                if side == "CE"
-                else max(0.0, strike - target_spot)
-            )
+            if theta is not None:
+                fallback += theta_effect
+            if vega is not None:
+                fallback += iv_effect
             estimates.append(("LOW-CONFIDENCE FALLBACK", max(intrinsic, fallback, 0.0)))
 
-    # Chain-shift receives more weight because it uses the actual same-expiry smile.
     weighted_total = 0.0
     weight_total = 0.0
     for method, value in estimates:
@@ -254,7 +327,7 @@ def _estimate_one(
             weight = 1.0
         weighted_total += value * weight
         weight_total += weight
-    best = max(0.0, weighted_total / max(weight_total, 1e-9))
+    best = max(intrinsic, weighted_total / max(weight_total, 1e-9), 0.0)
 
     method_values = [value for _, value in estimates]
     disagreement = (max(method_values) - min(method_values)) / 2.0 if len(method_values) > 1 else 0.0
@@ -265,9 +338,8 @@ def _estimate_one(
     iv_uncertainty = abs(vega or 0.0) * iv_shift_points
     movement_uncertainty = abs(target_spot - current_spot) * 0.015
     half_width = max(0.75, best * 0.025, spread_half, iv_uncertainty, disagreement, movement_uncertainty)
-    # Avoid a misleadingly enormous band while still keeping a useful uncertainty zone.
     half_width = min(half_width, max(3.0, best * 0.35 + 2.0))
-    low = max(0.0, best - half_width)
+    low = max(intrinsic, best - half_width)
     high = best + half_width
 
     pnl_per_quantity = _position_pnl(
@@ -286,7 +358,7 @@ def _estimate_one(
     methods = tuple(method for method, _ in estimates)
     if "OPTION CHAIN SHIFT" in methods:
         reliability += 28.0
-    if "DELTA + GAMMA" in methods:
+    if "DELTA + GAMMA + THETA + VEGA" in methods:
         reliability += 18.0
     if iv is not None and vega is not None:
         reliability += 8.0
@@ -301,6 +373,8 @@ def _estimate_one(
         reliability -= min(20.0, (move_points - 200.0) / 10.0)
     if target_minutes > 120:
         reliability -= min(15.0, (target_minutes - 120.0) / 20.0)
+    if abs(iv_change_points) > 5.0:
+        reliability -= min(15.0, (abs(iv_change_points) - 5.0) * 2.0)
     if disagreement > max(2.0, best * 0.12):
         reliability -= 12.0
     if equivalent_strike is None:
@@ -309,11 +383,18 @@ def _estimate_one(
     if feed_state != "LIVE":
         reliability = min(reliability, 48.0)
 
+    # Residual versus the pure Greek path represents the live chain/smile adjustment.
+    greek_path = max(intrinsic, current_premium + spot_effect + theta_effect + iv_effect, 0.0)
+    chain_smile_effect = best - greek_path if not anchor_current else 0.0
+    time_value = max(0.0, best - intrinsic)
+
     notes: list[str] = []
     if equivalent_strike is not None and "OPTION CHAIN SHIFT" in methods:
         notes.append(f"Chain proxy strike {equivalent_strike:,.1f}")
     if target_minutes > 0 and theta is not None:
         notes.append(f"Theta adjusted for {target_minutes} min")
+    if abs(iv_change_points) > 1e-9 and vega is not None:
+        notes.append(f"IV scenario {iv_change_points:+.2f} points")
     if feed_state != "LIVE":
         notes.append("Reference-only option-chain data")
     if "LOW-CONFIDENCE FALLBACK" in methods:
@@ -333,6 +414,57 @@ def _estimate_one(
         reliability=round(reliability, 1),
         methods=methods,
         notes=tuple(notes),
+        intrinsic_value=round(intrinsic, 2),
+        time_value=round(time_value, 2),
+        spot_move_effect=round(spot_effect, 2),
+        theta_effect=round(theta_effect, 2),
+        iv_effect=round(iv_effect, 2),
+        chain_smile_effect=round(chain_smile_effect, 2),
+    )
+
+
+def _sideways_decay_estimate(
+    *,
+    side: str,
+    position: str,
+    strike: float,
+    current_spot: float,
+    current_premium: float,
+    entry_premium: float,
+    theta: float | None,
+    minutes: int,
+    lot_size: int,
+    lots: int,
+    feed_state: str,
+) -> SidewaysDecayEstimate:
+    intrinsic = _intrinsic_value(side=side, strike=strike, spot=current_spot)
+    theta_effect = theta * (minutes / 1440.0) if theta is not None else 0.0
+    estimated = max(intrinsic, current_premium + theta_effect, 0.0)
+    pnl_per_quantity = _position_pnl(
+        position=position, entry_premium=entry_premium, estimated_premium=estimated
+    )
+    total_pnl = pnl_per_quantity * lot_size * lots
+    if pnl_per_quantity > 0.25:
+        outcome = "PROFIT ZONE"
+    elif pnl_per_quantity < -0.25:
+        outcome = "LOSS ZONE"
+    else:
+        outcome = "NEAR ENTRY"
+    reliability = 72.0 if theta is not None and feed_state == "LIVE" else 38.0
+    note = "Spot aur IV same maan kar Theta-only estimate"
+    if theta is None:
+        note = "Theta unavailable; premium unchanged reference"
+    return SidewaysDecayEstimate(
+        minutes=minutes,
+        estimated_premium=round(estimated, 2),
+        premium_change=round(estimated - current_premium, 2),
+        intrinsic_value=round(intrinsic, 2),
+        remaining_time_value=round(max(0.0, estimated - intrinsic), 2),
+        pnl_per_quantity=round(pnl_per_quantity, 2),
+        total_pnl=round(total_pnl, 2),
+        outcome=outcome,
+        reliability=reliability,
+        note=note,
     )
 
 
@@ -351,6 +483,7 @@ def calculate_spot_premium_range(
     lot_size: int,
     lots: int,
     feed_state: str = "UNAVAILABLE",
+    iv_change_points: float = 0.0,
 ) -> SpotPremiumCalculation:
     side = str(side).upper().strip()
     position = str(position).upper().strip()
@@ -370,6 +503,9 @@ def calculate_spot_premium_range(
     for name, value in numeric_values.items():
         if _number(value) is None or float(value) <= 0:
             raise ValueError(f"{name} valid positive number hona chahiye")
+    iv_change = _number(iv_change_points)
+    if iv_change is None or not -50.0 <= iv_change <= 50.0:
+        raise ValueError("Expected IV change -50 se +50 points ke beech hona chahiye")
     if lower_spot >= upper_spot:
         raise ValueError("Lower range, upper range se chhoti honi chahiye")
     if target_minutes < 0 or target_minutes > 1440:
@@ -382,11 +518,24 @@ def calculate_spot_premium_range(
     chain_contract_price = _number(row.get("last_price")) if row is not None else None
     bid = _number(row.get("top_bid_price")) if row is not None else None
     ask = _number(row.get("top_ask_price")) if row is not None else None
-    iv = _number(row.get("implied_volatility")) if row is not None else None
-    delta = _number(row.get("delta")) if row is not None else None
-    gamma = _number(row.get("gamma")) if row is not None else None
-    theta = _number(row.get("theta")) if row is not None else None
-    vega = _number(row.get("vega")) if row is not None else None
+    raw_iv = _number(row.get("implied_volatility")) if row is not None else None
+    raw_delta = _number(row.get("delta")) if row is not None else None
+    raw_gamma = _number(row.get("gamma")) if row is not None else None
+    raw_theta = _number(row.get("theta")) if row is not None else None
+    raw_vega = _number(row.get("vega")) if row is not None else None
+
+    # Different brokers can publish different IV/Greeks because their model inputs,
+    # timestamp and rounding differ. Invalid fields become missing and safe fallbacks
+    # take over; they must never crash or silently create extreme prices.
+    iv = raw_iv if raw_iv is not None and 0.0 < raw_iv <= 200.0 else None
+    delta = raw_delta if raw_delta is not None and -1.05 <= raw_delta <= 1.05 else None
+    gamma = raw_gamma if raw_gamma is not None and 0.0 <= raw_gamma <= 1.0 else None
+    theta = raw_theta if raw_theta is not None and -5000.0 <= raw_theta <= 5000.0 else None
+    vega = raw_vega if raw_vega is not None and 0.0 <= raw_vega <= 5000.0 else None
+
+    target_iv = round(iv + iv_change, 2) if iv is not None else None
+    if target_iv is not None and target_iv <= 0.0:
+        raise ValueError("Expected IV change se target IV zero/negative ho rahi hai")
 
     shared = dict(
         side=side,
@@ -395,7 +544,6 @@ def calculate_spot_premium_range(
         current_spot=float(current_spot),
         current_premium=float(current_premium),
         entry_premium=float(entry_premium),
-        target_minutes=int(target_minutes),
         lot_size=int(lot_size),
         lots=int(lots),
         frame=frame,
@@ -409,25 +557,82 @@ def calculate_spot_premium_range(
         vega=vega,
         feed_state=feed_state,
     )
-    lower = _estimate_one(label="LOWER RANGE", target_spot=float(lower_spot), **shared)
-    current = _estimate_one(label="CURRENT SPOT", target_spot=float(current_spot), **shared)
-    upper = _estimate_one(label="UPPER RANGE", target_spot=float(upper_spot), **shared)
+    lower = _estimate_one(
+        label="LOWER RANGE",
+        target_spot=float(lower_spot),
+        target_minutes=int(target_minutes),
+        iv_change_points=float(iv_change),
+        **shared,
+    )
+    current = _estimate_one(
+        label="CURRENT SPOT NOW",
+        target_spot=float(current_spot),
+        target_minutes=0,
+        iv_change_points=0.0,
+        anchor_current=True,
+        **shared,
+    )
+    upper = _estimate_one(
+        label="UPPER RANGE",
+        target_spot=float(upper_spot),
+        target_minutes=int(target_minutes),
+        iv_change_points=float(iv_change),
+        **shared,
+    )
+
+    decay_scenarios = tuple(
+        _sideways_decay_estimate(
+            side=side,
+            position=position,
+            strike=float(strike),
+            current_spot=float(current_spot),
+            current_premium=float(current_premium),
+            entry_premium=float(entry_premium),
+            theta=theta,
+            minutes=minutes,
+            lot_size=int(lot_size),
+            lots=int(lots),
+            feed_state=feed_state,
+        )
+        for minutes in (15, 30, 60)
+    )
+
+    current_intrinsic = _intrinsic_value(side=side, strike=float(strike), spot=float(current_spot))
+    current_time_value = max(0.0, float(current_premium) - current_intrinsic)
+    time_share = current_time_value / float(current_premium) * 100.0 if current_premium > 0 else 0.0
 
     overall_reliability = round(min(lower.reliability, upper.reliability), 1)
     status = "LIVE ESTIMATE" if feed_state == "LIVE" else "REFERENCE ONLY"
     favorable = max((lower, upper), key=lambda item: item.total_pnl)
     adverse = min((lower, upper), key=lambda item: item.total_pnl)
     action_word = "sell-exit" if position == "BUY" else "buyback"
+    iv_text = ""
+    if abs(iv_change) > 1e-9:
+        iv_text = f"; IV scenario {iv_change:+.2f} points"
     summary = (
         f"{strike:,.0f} {side} {position}: {favorable.label.title()} {favorable.target_spot:,.0f} par "
         f"{action_word} best estimate ₹{favorable.best_price:,.2f} aur total P&L ₹{favorable.total_pnl:,.0f}; "
-        f"adverse side {adverse.target_spot:,.0f} par estimate ₹{adverse.best_price:,.2f} aur P&L ₹{adverse.total_pnl:,.0f}."
+        f"adverse side {adverse.target_spot:,.0f} par estimate ₹{adverse.best_price:,.2f} aur P&L ₹{adverse.total_pnl:,.0f}"
+        f"{iv_text}."
     )
 
     warnings: list[str] = [
         "Estimated zone guarantee nahi hai; IV, speed, bid-ask aur liquidity se actual premium badal sakta hai.",
+        "Dhan chain IV/Greeks aur dusre broker ke IV/Greeks exact match karna zaroori nahi; premium/bid-ask final verify karo.",
+        "Demand/OI/volume ko exact rupee contribution nahi diya gaya; live chain/smile adjustment uska market-price proxy hai.",
         "Calculator Main AI ke BUY/SELL/WAIT decision ko change nahi karta.",
     ]
+    if raw_iv is not None and iv is None:
+        warnings.append("Dhan chain IV invalid/out-of-range tha; IV ko ignore karke safe fallback use hua.")
+    if raw_delta is not None and delta is None:
+        warnings.append("Dhan chain Delta invalid/out-of-range tha; Delta ko ignore kiya gaya.")
+    if float(current_premium) + 0.05 < current_intrinsic:
+        warnings.append(
+            "Current premium intrinsic value se neeche hai; quote/spot timestamp mismatch ho sakta hai. "
+            "Broker bid-ask aur spot dobara verify karo."
+        )
+    if abs(iv_change) > 1e-9 and vega is None:
+        warnings.append("IV scenario diya gaya, lekin valid Vega nahi mila; IV effect apply nahi hua.")
     if row is None:
         warnings.append("Selected strike ka exact option-chain row nahi mila; reliability low rahegi.")
     if not (lower_spot <= current_spot <= upper_spot):
@@ -455,9 +660,15 @@ def calculate_spot_premium_range(
         current_gamma=gamma,
         current_theta=theta,
         current_vega=vega,
+        iv_change_points=round(float(iv_change), 2),
+        target_iv=target_iv,
+        current_intrinsic_value=round(current_intrinsic, 2),
+        current_time_value=round(current_time_value, 2),
+        current_time_value_share_pct=round(time_share, 1),
         lower=lower,
         current=current,
         upper=upper,
+        decay_scenarios=decay_scenarios,
         overall_reliability=overall_reliability,
         status=status,
         summary=summary,

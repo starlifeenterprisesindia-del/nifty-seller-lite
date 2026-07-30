@@ -8,6 +8,10 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from analysis.position_guardian import create_trade_record
+from analysis.presentation_safety import (
+    install_runtime_presentation_patches,
+    prepare_snapshot_for_presentation,
+)
 from config import CONFIG, IST_TIMEZONE
 from models import Credentials, RiskProfile
 from services.context_store import MarketContextStore
@@ -55,10 +59,12 @@ from ui.components import (
 )
 
 
+install_runtime_presentation_patches()
+
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.13 Spot Premium Calculator — one canonical strategy brain, compact mobile Main AI, strict news freshness, "
+    "V2.14 Premium Explainability — one canonical strategy brain, compact mobile Main AI, strict news freshness, "
     "24-hour temporary-data cleanup, live Barrier + Range Map, protected hedge reference and India VIX context. "
     "Read only; no order placement."
 )
@@ -422,13 +428,21 @@ if "snapshot" not in st.session_state or refresh:
 
 snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
+# Presentation copy only: scores, strikes, final action and execution readiness remain
+# authoritative. It normalizes contradictory labels/reasons for screen and PDF output.
+view_snapshot = prepare_snapshot_for_presentation(snapshot)
+previous_view_snapshot = (
+    prepare_snapshot_for_presentation(previous_snapshot)
+    if previous_snapshot is not None
+    else None
+)
 
-render_market_session(snapshot)
-render_main_ai_market_view(snapshot, previous_snapshot)
-render_barrier_map(snapshot)
-render_spot_premium_calculator(snapshot)
-render_evidence_matrix(snapshot)
-render_market_outlook(snapshot)
+render_market_session(view_snapshot)
+render_main_ai_market_view(view_snapshot, previous_view_snapshot)
+render_barrier_map(view_snapshot)
+render_spot_premium_calculator(view_snapshot)
+render_evidence_matrix(view_snapshot)
+render_market_outlook(view_snapshot)
 
 st.subheader("Download Reports")
 st.caption(
@@ -450,7 +464,7 @@ with quick_col:
     if generate_quick_pdf:
         try:
             with st.spinner("Building 2-page quick report from current snapshot only..."):
-                st.session_state.quick_pdf_bytes = build_quick_market_pdf(snapshot)
+                st.session_state.quick_pdf_bytes = build_quick_market_pdf(view_snapshot)
             st.success("Quick Market Report ready")
         except Exception as exc:
             st.error(f"Quick report not generated: {exc}")
@@ -470,7 +484,7 @@ with full_col:
     if generate_pdf:
         try:
             with st.spinner("Building full audit PDF from the current snapshot only..."):
-                st.session_state.audit_pdf_bytes = build_full_audit_pdf(snapshot)
+                st.session_state.audit_pdf_bytes = build_full_audit_pdf(view_snapshot)
             st.success("Full Audit PDF ready")
         except Exception as exc:
             st.error(f"Full Audit PDF not generated: {exc}")
@@ -491,10 +505,10 @@ with st.expander(
     "Detailed Brain Decision, Protected Planner & Execution",
     expanded=execution_expanded,
 ):
-    render_decision(snapshot)
-    render_trade_plan(snapshot)
-    render_execution_guard(snapshot)
-    render_position_guardian(snapshot)
+    render_decision(view_snapshot)
+    render_trade_plan(view_snapshot)
+    render_execution_guard(view_snapshot)
+    render_position_guardian(view_snapshot)
 
     st.write("**Manual one-trade journal**")
     maximum_mark_lots = max(1, snapshot.execution_guard.allowed_lots)
@@ -582,7 +596,7 @@ with st.expander(
 
 with st.expander("Detailed Core Market Evidence", expanded=False):
     st.subheader("Core Market Evidence")
-    render_core_evidence(snapshot)
+    render_core_evidence(view_snapshot)
 
     core_tabs = st.tabs(
         [
@@ -594,19 +608,19 @@ with st.expander("Detailed Core Market Evidence", expanded=False):
         ]
     )
     with core_tabs[0]:
-        render_price_action(snapshot)
+        render_price_action(view_snapshot)
     with core_tabs[1]:
-        render_levels(snapshot)
+        render_levels(view_snapshot)
     with core_tabs[2]:
-        render_volume(snapshot)
+        render_volume(view_snapshot)
     with core_tabs[3]:
-        render_indicators(snapshot)
+        render_indicators(view_snapshot)
     with core_tabs[4]:
-        render_feed_status(snapshot)
+        render_feed_status(view_snapshot)
 
 with st.expander("Detailed Options Intelligence", expanded=False):
     st.subheader("Options Intelligence — Evidence Only")
-    render_option_intelligence(snapshot)
+    render_option_intelligence(view_snapshot)
     option_tabs = st.tabs(
         [
             "Premium + OI + Volume Flow",
@@ -619,19 +633,19 @@ with st.expander("Detailed Options Intelligence", expanded=False):
         ]
     )
     with option_tabs[0]:
-        render_option_flow_matrix(snapshot)
+        render_option_flow_matrix(view_snapshot)
     with option_tabs[1]:
-        render_option_windows(snapshot)
+        render_option_windows(view_snapshot)
     with option_tabs[2]:
-        render_walls_and_pcr(snapshot)
+        render_walls_and_pcr(view_snapshot)
     with option_tabs[3]:
-        render_heavyweight_intelligence(snapshot)
+        render_heavyweight_intelligence(view_snapshot)
     with option_tabs[4]:
-        render_vix_context(snapshot)
+        render_vix_context(view_snapshot)
     with option_tabs[5]:
-        render_market_context(snapshot)
+        render_market_context(view_snapshot)
     with option_tabs[6]:
-        render_news_context(snapshot)
+        render_news_context(view_snapshot)
 
 if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":
     with st.expander("Developer Raw Market Data (screen only)", expanded=False):
@@ -645,19 +659,19 @@ if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":
             ]
         )
         with market_tabs[0]:
-            render_candles(snapshot)
+            render_candles(view_snapshot)
         with market_tabs[1]:
-            render_option_chain(snapshot)
+            render_option_chain(view_snapshot)
         with market_tabs[2]:
-            render_heavyweights(snapshot)
+            render_heavyweights(view_snapshot)
         with market_tabs[3]:
             left, right = st.columns(2)
             left.write("**India VIX quote**")
-            left.json(snapshot.vix_quote or {"status": "not resolved"})
+            left.json(view_snapshot.vix_quote or {"status": "not resolved"})
             right.write("**Nearest NIFTY future quote**")
-            right.json(snapshot.nifty_future_quote or {"status": "not resolved"})
+            right.json(view_snapshot.nifty_future_quote or {"status": "not resolved"})
         with market_tabs[4]:
-            st.json(snapshot.public_summary())
+            st.json(view_snapshot.public_summary())
 
 st.info(
     "Decision-support only. Strategy scores are independent suitability percentages; "

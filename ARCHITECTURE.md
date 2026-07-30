@@ -33,8 +33,20 @@ scores liquidity, distance and credit/risk efficiency. It cannot change strategy
 No module places, modifies or exits broker orders. Execution Guard and Position Guardian
 remain deterministic read-only risk/discipline layers.
 
-## Spot-to-Premium utility boundary (V2.13)
+## Spot-to-Premium utility boundary (V2.14)
 - `analysis/spot_premium_calculator.py` consumes only the already-fetched snapshot option chain plus manual user inputs.
 - It estimates scenario premiums and P&L; it never emits CE SELL / PE SELL / IRON CONDOR / WAIT strategy decisions.
 - It has no broker client, no network call, no state-store write and no order-placement path.
 - The only canonical strategy brain remains `analysis/decision.py::calculate_final_decision`.
+
+- V2.14 adds an explainability layer inside the same read-only utility: intrinsic/time-value split, scenario IV change through Vega, Theta-only sideways decay and component-level premium drivers.
+- OI/volume are presented as participation context only. The calculator does not fabricate an exact OI-to-rupee coefficient; the actual same-expiry option-chain smile remains the demand/liquidity price proxy.
+- All estimates preserve the intrinsic-value floor.
+
+
+## Presentation integrity boundary (V2.13.1)
+- `analysis/presentation_safety.py` consumes the already-built `MarketSnapshot` and creates a deep-copied view for UI/PDF rendering only.
+- It normalizes contradictory direction, barrier, news and blocker wording without changing strategy scores, Final Action, strikes, risk budget or execution readiness.
+- The authoritative session-state snapshot remains untouched and is still used for the manual one-trade journal.
+- Quick and Full PDF builders receive the same presentation-safe snapshot used by the screen, preserving One-Brain consistency.
+- Old news cannot become the displayed primary blocker; fresh verified news can still appear as risk context.
