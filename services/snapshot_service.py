@@ -25,6 +25,7 @@ from analysis.market_context import calculate_market_context
 from analysis.market_risk import calculate_vix_context
 from analysis.option_chain import option_chain_to_frame, select_atm_window
 from analysis.option_intelligence import calculate_option_intelligence
+from analysis.patterns import calculate_pattern_evidence
 from analysis.price_action import calculate_price_action_bundle
 from analysis.position_guardian import calculate_position_guardian
 from analysis.pre_touch_barriers import calculate_pre_touch_barriers
@@ -588,6 +589,7 @@ class SnapshotService:
             candles_3m,
             candles_15m,
         )
+        patterns = calculate_pattern_evidence(candles_3m, levels, volume)
         core_evidence = calculate_core_market_evidence(
             price_action,
             indicators,
@@ -825,6 +827,7 @@ class SnapshotService:
             option_chain_live=statuses["option_chain"].use_state == "LIVE",
             price_action=price_action,
             volume=volume,
+            patterns=patterns,
             signal_history=discipline_state.signal_history,
             as_of=current,
             current_price=(float(current_price) if current_price is not None else None),
@@ -984,6 +987,7 @@ class SnapshotService:
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
+            patterns=patterns,
             metadata={
                 "version": CONFIG.version,
                 "read_only": True,

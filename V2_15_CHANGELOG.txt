@@ -1,0 +1,24 @@
+Nifty Seller Lite V2.15.0_PATTERN_CONFIRMATION
+
+1. Added completed 3-minute W/M pattern detection.
+   - W = bullish structure; M = bearish structure.
+   - Uses confirmed swings, neckline, freshness and ATR-based symmetry/depth checks.
+   - Support validates W; resistance validates M.
+
+2. Added special 3-minute candlestick evidence.
+   - Bull/Bear Engulfing, Hammer, Shooting Star, Morning Star, Evening Star and level-based Doji.
+   - Noisy Hammer/Shooting Star/Doji shapes in the middle of a range are suppressed.
+
+3. Connected both pattern modules to the existing Final One-Brain.
+   - No separate BUY/SELL/WAIT action.
+   - W/M maximum adjustment: 8 points.
+   - Special candle maximum adjustment: 4 points.
+   - Combined cap: 12 points.
+   - Conflicting evidence is reduced and adds WAIT/fake-move caution.
+
+4. Kept the screen compact.
+   - Added only two rows: 3M W/M Pattern and Special Candle.
+   - Current Result text is short Hinglish.
+   - Existing evidence results were shortened for mobile/desktop table space.
+
+5. Added pattern tests and One-Brain bounded-weight tests.

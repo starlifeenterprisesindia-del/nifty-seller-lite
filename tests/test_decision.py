@@ -13,6 +13,8 @@ from models import (
     MarketSession,
     OIWall,
     OptionIntelligence,
+    PatternEvidenceBundle,
+    PatternSignal,
     PCRBundle,
     VixContext,
 )
@@ -405,3 +407,70 @@ def test_unavailable_option_chain_zeroes_all_seller_setup_scores():
     assert result.iron_condor.status == "UNAVAILABLE"
     assert result.final_action == "WAIT"
     assert result.outlook.range_path_pct == 100.0
+
+
+def _pattern_signal(
+    *,
+    name: str,
+    direction: str,
+    confidence: float,
+    stage: str = "CONFIRMED",
+) -> PatternSignal:
+    bullish = 80.0 if direction == "BULLISH" else 8.0
+    bearish = 80.0 if direction == "BEARISH" else 8.0
+    neutral = 12.0 if direction in {"BULLISH", "BEARISH"} else 100.0
+    return PatternSignal(
+        family="TEST",
+        name=name,
+        direction=direction,
+        stage=stage,
+        strength="VERY STRONG",
+        confidence=confidence,
+        bullish_score=bullish if direction != "NEUTRAL" else 0.0,
+        bearish_score=bearish if direction != "NEUTRAL" else 0.0,
+        neutral_score=neutral,
+        level_label="S" if direction == "BULLISH" else "R",
+        level_value=24300.0,
+        neckline=24340.0 if name in {"W", "M"} else None,
+        age_candles=0,
+        reasons=("test pattern",),
+        status="READY",
+    )
+
+
+def _pattern_bundle(wm_direction: str, candle_direction: str) -> PatternEvidenceBundle:
+    wm = _pattern_signal(name="W" if wm_direction == "BULLISH" else "M", direction=wm_direction, confidence=90.0)
+    candle_name = "BULL ENGULF" if candle_direction == "BULLISH" else "BEAR ENGULF"
+    candle = _pattern_signal(name=candle_name, direction=candle_direction, confidence=90.0)
+    combined = wm_direction if wm_direction == candle_direction else "MIXED"
+    return PatternEvidenceBundle(
+        as_of=NOW,
+        wm_3m=wm,
+        candle_3m=candle,
+        combined_direction=combined,
+        combined_confidence=90.0,
+        status="READY",
+    )
+
+
+def test_pattern_confirmation_is_bounded_inside_same_brain():
+    baseline = calculate_final_decision(**common_kwargs())
+    kwargs = common_kwargs()
+    kwargs["patterns"] = _pattern_bundle("BULLISH", "BULLISH")
+    result = calculate_final_decision(**kwargs)
+
+    increase = result.pe_sell.score - baseline.pe_sell.score
+    assert 0.0 < increase <= 12.0
+    assert result.final_action in {"PE SELL WITH HEDGE", "WAIT"}
+    assert result.hedge_required is True
+
+
+def test_conflicting_wm_and_candle_add_wait_caution_not_a_second_action():
+    kwargs = common_kwargs()
+    kwargs["patterns"] = _pattern_bundle("BULLISH", "BEARISH")
+    result = calculate_final_decision(**kwargs)
+
+    assert result.wait_need.score >= 14.0
+    cautions = result.ce_sell.cautions + result.pe_sell.cautions + result.iron_condor.cautions
+    assert any("W/M and candle evidence conflict" in item for item in cautions)
+    assert result.final_action in {"PE SELL WITH HEDGE", "CE SELL WITH HEDGE", "IRON CONDOR WITH HEDGE", "WAIT"}

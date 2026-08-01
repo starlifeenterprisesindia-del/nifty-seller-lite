@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.14.0_PREMIUM_EXPLAINABILITY"
+    version: str = "2.15.0_PATTERN_CONFIRMATION"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -143,6 +143,13 @@ class AppConfig:
     fake_move_medium_threshold: float = 40.0
     fake_move_high_threshold: float = 65.0
     outlook_current_weight: float = 0.65
+
+    # Completed 3-minute W/M and special-candle evidence. These are bounded
+    # confirmations inside the same canonical brain, never separate actions.
+    pattern_min_brain_confidence: float = 45.0
+    pattern_wm_max_adjustment: float = 8.0
+    pattern_candle_max_adjustment: float = 4.0
+    pattern_combined_max_adjustment: float = 12.0
 
     # Read-only strike-planner settings. This planner consumes the final one-brain
     # action and cannot change strategy scores or place orders.

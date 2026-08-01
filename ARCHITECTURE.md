@@ -1,4 +1,4 @@
-# Architecture — V2.9 Early Barrier + News + Protected Hedge Update
+# Architecture — V2.15 Pattern Confirmation
 
 ## One authoritative snapshot
 `services/snapshot_service.py` builds one `MarketSnapshot`. Screen, PDF, decision,
@@ -8,6 +8,16 @@ all consume that same snapshot.
 ## One canonical strategy brain
 `analysis/decision.py::calculate_final_decision` remains the only CE Sell / PE Sell /
 Iron Condor / WAIT selector. No new module may override its final action.
+
+## Bounded 3-minute pattern evidence
+`analysis/patterns.py` reads completed 3-minute candles only. It detects recent W/M
+structure and a small high-quality set of special candles, then validates them against
+support/resistance, freshness and volume context. The module emits evidence only.
+
+The canonical brain applies a maximum 8-point W/M adjustment and 4-point candle
+adjustment, with a combined 12-point cap. Forming W/M patterns receive reduced weight,
+conflicting W/M/candle evidence increases WAIT/fake-move caution, and no pattern can
+independently create a strategy action.
 
 ## Early barrier layer
 `analysis/pre_touch_barriers.py` combines existing support/resistance structure with

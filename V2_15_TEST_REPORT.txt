@@ -1,0 +1,34 @@
+Nifty Seller Lite V2.15.0_PATTERN_CONFIRMATION
+Pattern Confirmation Test Report
+Date: 2026-08-01 IST
+
+AUTOMATED TESTS
+- Command: python -m compileall -q .
+- Result: PASS
+- Command: pytest -q --ignore=tests/test_app_smoke.py
+- Result: 167 passed
+
+FOCUSED COVERAGE
+- Confirmed 3-minute W near support
+- Confirmed 3-minute M near resistance
+- Bullish Engulfing near support
+- Mid-range Doji noise suppression
+- Pattern evidence added to the canonical snapshot
+- W/M brain adjustment capped at 8 points
+- Special-candle brain adjustment capped at 4 points
+- Combined pattern adjustment capped at 12 points
+- Forming W/M receives reduced weight
+- Conflicting W/M and candle evidence adds WAIT/fake-move caution
+- No pattern module emits an independent BUY/SELL/WAIT action
+- All Features matrix contains eight compact rows
+- Existing PDF and summary-presentation tests remain passing
+
+STATIC / ARCHITECTURE CHECKS
+- Final One-Brain remains the only strategy action selector.
+- Pattern detection reads completed 3-minute candles only.
+- Support validates W and resistance validates M.
+- Noisy single-candle shapes in the middle of a range are suppressed.
+- Current Result text stays compact and Hinglish-friendly.
+
+LIMITATION
+- The Streamlit app smoke test was not run in this sandbox because the Streamlit package is not installed and the package index is unavailable. The complete non-Streamlit automated suite passed. Run the normal Streamlit smoke check after deployment with requirements.txt installed.

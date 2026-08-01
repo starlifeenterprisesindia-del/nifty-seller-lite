@@ -494,7 +494,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     )
     story.append(
         Paragraph(
-            "Directional percentages are evidence mix, not profit probability. The compact matrix is display-only.",
+            "Directional percentages are evidence mix, not profit probability. W/M and Special Candle are bounded confirmations inside the same Final One-Brain; no row creates a separate action.",
             styles["Body"],
         )
     )

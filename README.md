@@ -1,4 +1,29 @@
-# Nifty Seller Lite — V2.14 Premium Explainability (Combined Update)
+# Nifty Seller Lite — V2.15 Pattern Confirmation
+
+## V2.15 pattern confirmation additions
+
+- Completed **3-minute W/M structure** detection: W is bullish, M is bearish.
+- W is strengthened only near support; M is strengthened only near resistance.
+- Neckline confirmation, ATR-based symmetry/depth, freshness and volume context reduce false/noisy patterns.
+- Added a small **Special Candle** set: Bull/Bear Engulfing, Hammer, Shooting Star, Morning Star, Evening Star and level-based Doji.
+- Noisy single-candle shapes in the middle of a range are hidden to keep the app quiet.
+- Both modules feed the existing Final One-Brain as bounded evidence only: W/M max 8 points, candle max 4 points, combined cap 12 points.
+- Conflicting W/M and candle evidence is reduced and increases WAIT/fake-move caution.
+- The All Features table now has two compact rows and short Hinglish Current Result text. No row gives a separate action.
+
+## Deployment
+
+Use `V2_15_UPDATE_LIST.txt`, or deploy the complete extracted repository. Preserve Streamlit Secrets and the runtime `data/` folder.
+
+Expected version:
+
+```text
+2.15.0_PATTERN_CONFIRMATION
+```
+
+---
+
+## V2.14 Premium Explainability (included)
 
 ## Combined fixes included
 

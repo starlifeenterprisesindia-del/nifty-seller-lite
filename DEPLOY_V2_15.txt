@@ -1,0 +1,13 @@
+DEPLOY V2.15 PATTERN CONFIRMATION
+
+1. Back up Streamlit Secrets and the runtime data/ folder.
+2. Upload the extracted repository contents at the same paths.
+3. Replace matching source files and add analysis/patterns.py.
+4. Do not upload or overwrite .streamlit/secrets.toml.
+5. Restart/reboot the Streamlit app.
+6. Confirm sidebar version:
+   2.15.0_PATTERN_CONFIRMATION
+7. Confirm All Features table shows:
+   - 3M W/M Pattern
+   - Special Candle
+8. Confirm all actions still come only from Final One-Brain Decision.

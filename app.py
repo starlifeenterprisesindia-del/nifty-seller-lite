@@ -64,8 +64,8 @@ install_runtime_presentation_patches()
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.14 Premium Explainability — one canonical strategy brain, compact mobile Main AI, strict news freshness, "
-    "24-hour temporary-data cleanup, live Barrier + Range Map, protected hedge reference and India VIX context. "
+    "V2.15 Pattern Confirmation — one canonical strategy brain with bounded 3-minute W/M and special-candle evidence, "
+    "compact Hinglish results, live Barrier + Range Map, protected hedge reference and India VIX context. "
     "Read only; no order placement."
 )
 

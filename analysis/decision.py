@@ -16,6 +16,7 @@ from models import (
     MarketSession,
     NewsContext,
     OptionIntelligence,
+    PatternEvidenceBundle,
     PriceActionBundle,
     StrategyEvaluation,
     VixContext,
@@ -186,6 +187,70 @@ def _news_adjustment(news: NewsContext | None) -> tuple[float, str | None]:
     return 0.0, None
 
 
+def _pattern_adjustments(
+    patterns: PatternEvidenceBundle | None,
+) -> tuple[float, float, float, float, bool, tuple[str, ...]]:
+    """Return bounded pattern evidence for the canonical brain.
+
+    W/M and candle shapes come from the same completed 3-minute price stream, so
+    their combined impact is capped and reduced when they conflict. They never
+    emit an action or bypass the normal score, WAIT and fake-move gates.
+    """
+
+    if patterns is None or patterns.status != "READY":
+        return 0.0, 0.0, 0.0, 0.0, False, ()
+
+    effects: list[tuple[str, float, str]] = []
+    wm = patterns.wm_3m
+    if (
+        wm.status == "READY"
+        and wm.direction in {"BULLISH", "BEARISH"}
+        and wm.confidence >= CONFIG.pattern_min_brain_confidence
+    ):
+        stage_factor = 1.0 if wm.stage == "CONFIRMED" else 0.35
+        points = CONFIG.pattern_wm_max_adjustment * (wm.confidence / 100.0) * stage_factor
+        effects.append((wm.direction, points, f"3m {wm.name} {wm.stage.lower()}"))
+
+    candle = patterns.candle_3m
+    if (
+        candle.status == "READY"
+        and candle.direction in {"BULLISH", "BEARISH"}
+        and candle.confidence >= CONFIG.pattern_min_brain_confidence
+    ):
+        points = CONFIG.pattern_candle_max_adjustment * (candle.confidence / 100.0)
+        effects.append((candle.direction, points, f"3m {candle.name}"))
+
+    neutral_wait = 0.0
+    if (
+        candle.status == "READY"
+        and candle.direction == "NEUTRAL"
+        and candle.name == "DOJI"
+        and candle.confidence >= CONFIG.pattern_min_brain_confidence
+    ):
+        neutral_wait = 3.0
+
+    if not effects:
+        return 0.0, 0.0, 0.0, neutral_wait, False, ()
+
+    directions = {item[0] for item in effects}
+    conflict = len(directions) > 1
+    if conflict:
+        effects = [(direction, points * 0.60, label) for direction, points, label in effects]
+
+    bull = sum(points for direction, points, _ in effects if direction == "BULLISH")
+    bear = sum(points for direction, points, _ in effects if direction == "BEARISH")
+    total = bull + bear
+    if total > CONFIG.pattern_combined_max_adjustment and total > 0:
+        scale = CONFIG.pattern_combined_max_adjustment / total
+        bull *= scale
+        bear *= scale
+
+    condor = min(2.0, (bull + bear) * 0.20) if conflict else 0.0
+    wait = neutral_wait + (4.0 if conflict else 0.0)
+    notes = tuple(label for _, _, label in effects)
+    return round(bear, 2), round(bull, 2), round(condor, 2), wait, conflict, notes
+
+
 def _status(score: float, cautions: list[str]) -> str:
     if score >= 75 and not cautions:
         return "STRONG"
@@ -326,6 +391,7 @@ def _fake_move_risk(
     market_session: MarketSession,
     price_action: PriceActionBundle | None,
     volume: VolumeBundle | None,
+    patterns: PatternEvidenceBundle | None,
     history: list[dict[str, Any]],
     score_gap: float,
 ) -> tuple[float, tuple[str, ...]]:
@@ -344,6 +410,22 @@ def _fake_move_risk(
         if pa_direction and pa_direction not in {direction, "RANGE"}:
             risk += 15
             reasons.append("Price-action direction opposes the current score leader")
+
+    if patterns is not None and patterns.status == "READY":
+        wm_direction = patterns.wm_3m.direction
+        candle_direction = patterns.candle_3m.direction
+        usable_directions = {
+            item
+            for item in (wm_direction, candle_direction)
+            if item in {"BULLISH", "BEARISH"}
+        }
+        if len(usable_directions) > 1:
+            risk += 10
+            reasons.append("3-minute W/M and candle evidence conflict")
+        pattern_direction = patterns.combined_direction
+        if pattern_direction in {"BULLISH", "BEARISH"} and pattern_direction != direction:
+            risk += 10
+            reasons.append("3-minute pattern evidence opposes the score leader")
 
     core_direction = _directional_label(core.market_state)
     option_direction = _directional_label(options.market_bias)
@@ -639,6 +721,7 @@ def calculate_final_decision(
     news: NewsContext | None = None,
     price_action: PriceActionBundle | None = None,
     volume: VolumeBundle | None = None,
+    patterns: PatternEvidenceBundle | None = None,
     signal_history: tuple[dict[str, Any], ...] = (),
     as_of: datetime | None = None,
     current_price: float | None = None,
@@ -688,6 +771,18 @@ def calculate_final_decision(
     ce += ce_adjust
     pe += pe_adjust
     condor += condor_adjust
+
+    (
+        pattern_ce,
+        pattern_pe,
+        pattern_condor,
+        pattern_wait,
+        pattern_conflict,
+        _pattern_notes,
+    ) = _pattern_adjustments(patterns)
+    ce += pattern_ce
+    pe += pattern_pe
+    condor += pattern_condor
 
     if core.move_stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
         ce -= 6
@@ -771,6 +866,9 @@ def calculate_final_decision(
             blockers.append("VIX risk is elevated")
         if inst_caution:
             wait += 4
+        wait += pattern_wait
+        if pattern_conflict:
+            blockers.append("3-minute W/M and candle evidence conflict")
         wait += event_wait
         wait += news_wait
         if event_blocker:
@@ -801,6 +899,11 @@ def calculate_final_decision(
         ce_cautions.append(news_blocker)
         pe_cautions.append(news_blocker)
         condor_cautions.append(news_blocker)
+    if pattern_conflict:
+        pattern_warning = "3-minute W/M and candle evidence conflict"
+        ce_cautions.append(pattern_warning)
+        pe_cautions.append(pattern_warning)
+        condor_cautions.append(pattern_warning)
 
     unavailable_reason = ("Option chain unavailable — seller setup not scored",)
     ce_eval = StrategyEvaluation(
@@ -890,6 +993,7 @@ def calculate_final_decision(
         market_session=market_session,
         price_action=price_action,
         volume=volume,
+        patterns=patterns,
         history=history,
         score_gap=score_gap,
     )

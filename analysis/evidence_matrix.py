@@ -4,7 +4,7 @@ from math import floor
 from typing import Any
 
 from analysis.technical_utils import clamp
-from models import MarketSnapshot, TimeframeIndicators
+from models import MarketSnapshot, PatternSignal, TimeframeIndicators
 
 
 def _normalise(
@@ -199,6 +199,167 @@ def _feed_confidence(snapshot: MarketSnapshot) -> float:
     return round(clamp(base, 0.0, 100.0), 1)
 
 
+def _short_structure(value: str) -> str:
+    upper = str(value or "").upper()
+    if "BULLISH HH/HL" in upper:
+        return "HH/HL UP"
+    if "BEARISH LH/LL" in upper:
+        return "LH/LL DOWN"
+    if "RANGE" in upper:
+        return "RANGE"
+    if "MIXED" in upper or "TRANSITION" in upper:
+        return "MIXED"
+    return "NA"
+
+
+def _short_direction(value: str) -> str:
+    upper = str(value or "").upper()
+    if "BULL" in upper:
+        return "BULLISH"
+    if "BEAR" in upper:
+        return "BEARISH"
+    if "RANGE" in upper or "MIXED" in upper or "FLAT" in upper:
+        return "MIXED"
+    if "MISSING" in upper or "UNAVAILABLE" in upper or "INVALID" in upper:
+        return "NA"
+    return upper[:18] if upper else "NA"
+
+
+def _short_persistence(value: str) -> str:
+    upper = str(value or "").upper()
+    if "WARMING" in upper:
+        return "WARMING"
+    if "PERSISTENT" in upper:
+        return "STABLE"
+    if "UNAVAILABLE" in upper:
+        return "NA"
+    return upper[:14]
+
+
+def _short_pcr(value: str) -> str:
+    upper = str(value or "").upper()
+    if "PE OI" in upper or "BULLISH SUPPORT" in upper:
+        return "PE OI HIGH"
+    if "CE OI" in upper or "BEARISH" in upper:
+        return "CE OI HIGH"
+    if "BALANCED" in upper or "NEUTRAL" in upper:
+        return "PCR BALANCED"
+    return "PCR NA" if "UNAVAILABLE" in upper else f"PCR {upper[:12]}"
+
+
+def _short_ema(value: str) -> str:
+    upper = str(value or "").upper()
+    if "BULLISH ALIGNED" in upper:
+        return "TREND UP"
+    if "BEARISH ALIGNED" in upper:
+        return "TREND DOWN"
+    if "BULLISH STRUCTURE" in upper:
+        return "STRUCTURE UP"
+    if "BEARISH STRUCTURE" in upper:
+        return "STRUCTURE DOWN"
+    return "MIXED" if "MIXED" in upper else "NEUTRAL"
+
+
+def _short_position(value: str) -> str:
+    upper = str(value or "").upper()
+    if "NEAR SUPPORT" in upper:
+        return "SUPPORT PAAS"
+    if "NEAR RESISTANCE" in upper:
+        return "RESIST PAAS"
+    if "BETWEEN" in upper:
+        return "LEVELS KE BEECH"
+    return "LEVEL NA" if "UNAVAILABLE" in upper else upper[:18]
+
+
+def _short_volume(value: str) -> str:
+    upper = str(value or "").upper()
+    if "BULLISH" in upper:
+        return "BUYING"
+    if "BEARISH" in upper:
+        return "SELLING"
+    if "WEAK" in upper or "LOW" in upper:
+        return "VOLUME WEAK"
+    if "UNAVAILABLE" in upper:
+        return "VOLUME NA"
+    return "VOLUME MIXED"
+
+
+def _short_heavy(value: str) -> str:
+    upper = str(value or "").upper()
+    if "BROAD BULLISH" in upper:
+        return "BULLISH"
+    if "NARROW BULLISH" in upper:
+        return "SLIGHT UP"
+    if "BROAD BEARISH" in upper:
+        return "BEARISH"
+    if "NARROW BEARISH" in upper:
+        return "SLIGHT DOWN"
+    if "MIXED" in upper or "FLAT" in upper:
+        return "MIXED"
+    return "NA"
+
+
+def _short_institutional(value: str) -> str:
+    upper = str(value or "").upper()
+    if "SUPPORT" in upper or "BUYING" in upper:
+        return "SUPPORT"
+    if "PRESSURE" in upper or "SELLING" in upper:
+        return "PRESSURE"
+    if "MISSING" in upper or "UNAVAILABLE" in upper:
+        return "NA"
+    return "MIXED"
+
+
+def _blank_pattern(family: str, name: str) -> PatternSignal:
+    return PatternSignal(
+        family=family,
+        name=name,
+        direction="NEUTRAL",
+        stage="NONE",
+        strength="NONE",
+        confidence=0.0,
+        bullish_score=0.0,
+        bearish_score=0.0,
+        neutral_score=100.0,
+        level_label="",
+        level_value=None,
+        neckline=None,
+        age_candles=None,
+        reasons=(),
+        status="UNAVAILABLE",
+    )
+
+
+def _wm_result(item: PatternSignal) -> str:
+    if item.name == "NO VALID W/M" or item.direction == "NEUTRAL":
+        return "KOI VALID W/M NAHI"
+    state = "UP" if item.direction == "BULLISH" else "DOWN"
+    if item.stage == "FORMING":
+        head = f"{item.name} BAN RAHA"
+    else:
+        head = f"{item.name} {state} · {item.strength}"
+    parts = [head]
+    if item.level_value is not None:
+        level_prefix = "S" if item.direction == "BULLISH" else "R"
+        parts.append(f"{level_prefix} {item.level_value:,.0f}")
+    if item.neckline is not None:
+        parts.append(f"NL {item.neckline:,.0f}")
+    return " · ".join(parts)
+
+
+def _candle_result(item: PatternSignal) -> str:
+    if item.name == "NO IMPORTANT CANDLE":
+        return "KOI IMPORTANT CANDLE NAHI"
+    parts = [item.name]
+    if item.direction == "NEUTRAL":
+        parts.append("NEUTRAL")
+    else:
+        parts.append(item.strength)
+    if item.level_value is not None:
+        parts.append("SUPPORT" if item.direction == "BULLISH" else "RESIST")
+    return " · ".join(parts)
+
+
 def _row(
     module: str,
     bullish: float | None,
@@ -218,7 +379,7 @@ def _row(
 
 
 def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, Any]]:
-    """Build a six-row display matrix without influencing the final decision brain."""
+    """Build eight compact rows from the same authoritative snapshot."""
 
     pa3 = snapshot.price_action.three_minute
     pa15 = snapshot.price_action.fifteen_minute
@@ -239,8 +400,8 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
         ]
     )
     price_result = (
-        f"{_dominant_label(price_bull, price_bear, price_neutral)} | "
-        f"3m {pa3.structure}; 15m {pa15.structure}"
+        f"{_dominant_label(price_bull, price_bear, price_neutral)} · "
+        f"3m {_short_structure(pa3.structure)} · 15m {_short_structure(pa15.structure)}"
     )
 
     options = snapshot.option_intelligence
@@ -249,8 +410,8 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
     )
     windows_ready = sum(item.status == "READY" for item in options.windows)
     option_result = (
-        f"{options.market_bias} | {options.persistence}; windows {windows_ready}/3; "
-        f"PCR {options.pcr.state}"
+        f"{_short_direction(options.market_bias)} · {_short_persistence(options.persistence)} · "
+        f"{windows_ready}/3 · {_short_pcr(options.pcr.state)}"
     )
 
     ind3 = _indicator_vote(snapshot.indicators.three_minute)
@@ -287,9 +448,8 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
         else 0.0
     )
     indicator_result = (
-        f"{_dominant_label(indicator_bull, indicator_bear, indicator_neutral)} | "
-        f"15m {snapshot.indicators.fifteen_minute.ema_state}, "
-        f"{snapshot.indicators.fifteen_minute.macd_state}, {snapshot.indicators.fifteen_minute.rsi_state}"
+        f"{_dominant_label(indicator_bull, indicator_bear, indicator_neutral)} · "
+        f"15m {_short_ema(snapshot.indicators.fifteen_minute.ema_state)}"
     )
 
     level_scores = _level_scores(snapshot)
@@ -300,10 +460,14 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
     levels_confidence = (
         70.0 if snapshot.levels.status == "READY" else 0.0
     ) * 0.45 + snapshot.volume.confidence * 0.55
+    up_room = snapshot.levels.upside_room
+    down_room = snapshot.levels.downside_room
+    up_text = f"{up_room:.0f}" if up_room is not None else "—"
+    down_text = f"{down_room:.0f}" if down_room is not None else "—"
     levels_result = (
-        f"{snapshot.levels.current_position} | {snapshot.volume.overall_view}; "
-        f"room ↑{snapshot.levels.upside_room if snapshot.levels.upside_room is not None else '—'} "
-        f"↓{snapshot.levels.downside_room if snapshot.levels.downside_room is not None else '—'}"
+        f"{_short_position(snapshot.levels.current_position)} · "
+        f"{_short_volume(snapshot.volume.overall_view)} · "
+        f"UP {up_text} / DN {down_text}"
     )
 
     heavy_scores = _heavyweight_scores(snapshot)
@@ -315,7 +479,10 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
         snapshot.heavyweights.confidence * 0.70
         + snapshot.institutional_context.confidence * 0.30
     )
-    support_result = f"Top-7 {snapshot.heavyweights.state} | FII/DII {snapshot.institutional_context.state}"
+    support_result = (
+        f"TOP-7 {_short_heavy(snapshot.heavyweights.state)} · "
+        f"FII/DII {_short_institutional(snapshot.institutional_context.state)}"
+    )
 
     vix = snapshot.vix_context
     news = getattr(snapshot, "news_context", None)
@@ -327,9 +494,24 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
         news_text = f"; news OLD low-weight/{news.bias}"
     else:
         news_text = f"; news {news.status}"
-    risk_result = (
-        f"{snapshot.market_session.label} | VIX {vix.seller_environment}; "
-        f"event {snapshot.event_risk.level}{news_text}"
+    session_text = "MARKET LIVE" if snapshot.market_session.is_live else "MARKET CLOSED"
+    vix_text = _short_direction(vix.seller_environment)
+    if "BALANCED" in str(vix.seller_environment).upper():
+        vix_text = "NORMAL"
+    risk_result = f"{session_text} · VIX {vix_text} · EVENT {snapshot.event_risk.level}"
+    if news_text and "HIGH" in news_text.upper():
+        risk_result += " · NEWS HIGH"
+
+    patterns = getattr(snapshot, "patterns", None)
+    wm = (
+        patterns.wm_3m
+        if patterns is not None
+        else _blank_pattern("3M W/M", "NO VALID W/M")
+    )
+    candle = (
+        patterns.candle_3m
+        if patterns is not None
+        else _blank_pattern("3M CANDLE", "NO IMPORTANT CANDLE")
     )
 
     return [
@@ -340,6 +522,22 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
             price_neutral,
             snapshot.price_action.confidence,
             price_result,
+        ),
+        _row(
+            "3M W/M Pattern",
+            wm.bullish_score,
+            wm.bearish_score,
+            wm.neutral_score,
+            wm.confidence,
+            _wm_result(wm),
+        ),
+        _row(
+            "Special Candle",
+            candle.bullish_score,
+            candle.bearish_score,
+            candle.neutral_score,
+            candle.confidence,
+            _candle_result(candle),
         ),
         _row(
             "OI & Options Flow",

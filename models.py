@@ -104,6 +104,35 @@ class PriceActionBundle:
 
 
 @dataclass(frozen=True)
+class PatternSignal:
+    family: str
+    name: str
+    direction: str
+    stage: str
+    strength: str
+    confidence: float
+    bullish_score: float
+    bearish_score: float
+    neutral_score: float
+    level_label: str
+    level_value: float | None
+    neckline: float | None
+    age_candles: int | None
+    reasons: tuple[str, ...]
+    status: str
+
+
+@dataclass(frozen=True)
+class PatternEvidenceBundle:
+    as_of: datetime | None
+    wm_3m: PatternSignal
+    candle_3m: PatternSignal
+    combined_direction: str
+    combined_confidence: float
+    status: str
+
+
+@dataclass(frozen=True)
 class MarketLevel:
     label: str
     side: str
@@ -707,6 +736,7 @@ class MarketSnapshot:
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
+    patterns: PatternEvidenceBundle | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def public_summary(self) -> dict[str, Any]:
@@ -729,6 +759,7 @@ class MarketSnapshot:
                     "15m": asdict(self.indicators.fifteen_minute),
                 },
                 "price_action": asdict(self.price_action),
+                "patterns": asdict(self.patterns) if self.patterns is not None else None,
                 "levels": asdict(self.levels),
                 "volume": asdict(self.volume),
                 "core_evidence": asdict(self.core_evidence),

@@ -16,7 +16,7 @@ def _indicator(ema: str, macd: str, rsi: str):
     )
 
 
-def test_compact_matrix_has_six_rows_and_normalized_directional_scores():
+def test_compact_matrix_has_eight_rows_and_normalized_directional_scores():
     snapshot = SimpleNamespace(
         price_action=SimpleNamespace(
             three_minute=SimpleNamespace(
@@ -87,18 +87,20 @@ def test_compact_matrix_has_six_rows_and_normalized_directional_scores():
     rows = build_compact_evidence_matrix(snapshot)
     assert [row["Module"] for row in rows] == [
         "Price Action",
+        "3M W/M Pattern",
+        "Special Candle",
         "OI & Options Flow",
         "EMA / MACD / RSI",
         "Levels & Volume",
         "Top-7 & FII/DII",
         "VIX / Data / Event Risk",
     ]
-    assert len(rows) == 6
-    for row in rows[:5]:
+    assert len(rows) == 8
+    for row in rows[:7]:
         total = row["Bullish %"] + row["Bearish %"] + row["Neutral %"]
         assert round(total, 1) == 100.0
     assert rows[-1]["Bullish %"] is None
-    assert "VIX DATA UNAVAILABLE" in rows[-1]["Result"]
+    assert "VIX NA" in rows[-1]["Result"]
 
 
 def test_directional_rounding_always_totals_exactly_100():

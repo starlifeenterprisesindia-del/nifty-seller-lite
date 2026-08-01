@@ -545,9 +545,9 @@ def render_header(snapshot: MarketSnapshot) -> None:
 def render_evidence_matrix(snapshot: MarketSnapshot) -> None:
     st.subheader("All Features — Compact Evidence")
     st.caption(
-        "Six compact rows cover every active feature. Directional percentages inside each "
-        "row add to 100 and are evidence mix, not profit probability. This table is display-only "
-        "and cannot change the Final One-Brain Decision."
+        "8 compact rows same snapshot ki evidence dikhati hain. W/M aur Special Candle "
+        "bounded confirmation ke roop mein Final One-Brain mein shamil hain; koi row "
+        "alag BUY/SELL/WAIT action nahi deti."
     )
     rows = build_compact_evidence_matrix(snapshot)
     st.dataframe(
