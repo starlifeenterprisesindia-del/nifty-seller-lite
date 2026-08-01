@@ -1,0 +1,40 @@
+V2.17.1 FINAL DEPLOYMENT — SIMPLE VIEW + DE-DUP + CLOUD JOURNAL
+
+A. Upload code
+1. Do not upload the earlier V2.17 ZIP.
+2. Extract the V2.17.1 FINAL update-only ZIP.
+3. Drag its contents into the GitHub app repository root.
+4. Replace matching files and commit:
+   Add V2.17.1 final simple view and de-dup
+5. Reboot the Streamlit app.
+
+B. What changed on screen
+- Main AI owns the one final action.
+- Top-3 planner stays directly below it.
+- Detailed section now has one combined All-5 Strategy Audit table instead of repeating the full decision card and full planner.
+- Position Guardian remains hidden until a trade is actually recorded.
+- Manual journal appears only when ENTRY READY or a trade is open.
+- Reports are kept at the bottom in a closed expander.
+
+C. Optional permanent FII/DII cloud setup
+1. Create a separate PRIVATE GitHub repository, for example:
+   nifty-seller-private-data
+2. Create a fine-grained personal access token restricted to that repository.
+3. Give only repository Contents: Read and write permission.
+4. In Streamlit: Manage app > Settings > Secrets, append:
+
+[fii_dii_cloud]
+owner = "YOUR_GITHUB_USERNAME"
+repo = "nifty-seller-private-data"
+token = "YOUR_FINE_GRAINED_TOKEN"
+path = "fii_dii_15_sessions.json"
+branch = "main"
+
+5. Save Secrets and reboot once.
+6. Open FII/DII journal. Status should show CLOUD + LOCAL SAFE.
+7. Save one date or press Sync cloud now. The JSON file is created automatically.
+
+Never put the token in GitHub code, screenshots or chat. Preserve existing [dhan] secrets.
+
+D. Without cloud secrets
+The app still works with local primary + mirror files and manual backup/restore, but a Streamlit deployment replacement can still remove local runtime data.

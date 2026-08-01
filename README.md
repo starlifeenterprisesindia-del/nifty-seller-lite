@@ -1,4 +1,38 @@
-# Nifty Seller Lite — V2.16 AI Strategy Planner
+# Nifty Seller Lite — V2.17.1 Simple View + De-dup Final
+
+## V2.17 additions
+
+- Main screen is reorganized around one prominent **Final One-Brain** card.
+- The selected valid setup is soft green; WAIT stays soft amber and never looks like an entry approval.
+- The existing AI Strategy Planner appears immediately below the Brain and shows only the **top 3** setups on the normal screen.
+- A compact nearest Resistance / NIFTY / Support strip replaces the large always-open Barrier Map. The full map remains inside detailed evidence.
+- Risk controls, evidence/outlook and reports are collapsed by default to reduce visual noise.
+- W/M, Special Candle, FII/DII and data/entry status remain visible as small evidence cards without creating separate actions.
+- FII/DII now supports an optional private GitHub cloud journal. Local primary + mirror files remain as fallback.
+- Cloud and local rows merge date-wise; blank numeric inputs cannot erase already saved valid FII/DII values.
+- A cloud failure shows **CLOUD FAILED · LOCAL SAFE** and does not block local saving.
+
+Expected version:
+
+```text
+2.17.1_SIMPLE_VIEW_DEDUP_FINAL
+```
+
+### Optional Streamlit Secrets for permanent FII/DII storage
+
+```toml
+[fii_dii_cloud]
+owner = "YOUR_GITHUB_USERNAME"
+repo = "nifty-seller-private-data"
+token = "YOUR_FINE_GRAINED_TOKEN"
+path = "fii_dii_15_sessions.json"
+branch = "main"
+```
+
+Create a separate private data repository and give the fine-grained token access only to that repository with Contents read/write permission. Do not commit the token or `.streamlit/secrets.toml`.
+
+---
+
 
 ## V2.16 AI strategy planner additions
 

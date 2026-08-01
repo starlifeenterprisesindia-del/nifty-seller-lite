@@ -1,0 +1,16 @@
+V2.17.1 FINAL TEST REPORT
+
+- Python compileall: PASS
+- Automated tests excluding Streamlit AppTest: 180 passed
+- Main screen / top-3 ordering: PASS
+- Repeated full Planner removed from detailed screen: PASS
+- Combined All-5 Strategy Audit: PASS
+- Idle Position Guardian and journal noise suppression: PASS
+- Directional buy evidence de-dup gate: PASS
+- W/M + Special Candle combined cap and Single-Brain tests: PASS
+- FII/DII cloud restore and local fallback tests: PASS
+- Blank update preservation: PASS
+- One-Brain architecture tests: PASS
+
+Environment limitation:
+Streamlit is not installed in this test container, so tests/test_app_smoke.py could not run here. Source compilation and all other 180 tests passed.

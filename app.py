@@ -18,6 +18,7 @@ from services.context_store import MarketContextStore
 from services.dhan_client import DhanClient
 from services.discipline_store import DisciplineStore
 from services.instrument_master import InstrumentMaster
+from services.github_journal import GitHubJsonJournal
 from services.option_state_store import OptionStateStore
 from services.news_service import MarketNewsService
 from services.housekeeping import run_housekeeping
@@ -44,6 +45,7 @@ from ui.components import (
     render_market_session,
     render_news_context,
     render_barrier_map,
+    render_compact_barrier_map,
     render_main_ai_market_view,
     render_option_chain,
     render_option_flow_matrix,
@@ -62,11 +64,22 @@ from ui.components import (
 install_runtime_presentation_patches()
 
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
+st.markdown(
+    """
+    <style>
+    .block-container{padding-top:1.25rem;padding-bottom:2rem;max-width:1600px}
+    h1{font-size:2.35rem!important;margin-bottom:.15rem!important}
+    h2{margin-top:1rem!important}
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.65rem}
+    @media(max-width:760px){.block-container{padding:.8rem .75rem 1.5rem}h1{font-size:1.85rem!important}}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.16 AI Strategy Planner — one canonical brain compares CE Buy, PE Buy, CE Sell, PE Sell and Iron Condor, "
-    "then resolves a compact strike/hedge plan with green BEST highlighting and strict WAIT safety. "
-    "Read only; no order placement."
+    "V2.17.1 Simple Trading View Final — ek hi One-Brain, de-duplicated evidence, compact top view, "
+    "top-3 strategy planner aur strict WAIT safety. Read only; no order placement."
 )
 
 
@@ -79,6 +92,29 @@ def secret_value(name: str) -> str:
     return os.getenv(f"DHAN_{name.upper()}", "")
 
 
+def cloud_journal_values() -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        if "fii_dii_cloud" in st.secrets:
+            section = st.secrets["fii_dii_cloud"]
+            for key in ("owner", "repo", "token", "path", "branch"):
+                if key in section:
+                    values[key] = str(section[key])
+    except Exception:
+        pass
+    env_map = {
+        "owner": "NSL_FII_DII_GITHUB_OWNER",
+        "repo": "NSL_FII_DII_GITHUB_REPO",
+        "token": "NSL_FII_DII_GITHUB_TOKEN",
+        "path": "NSL_FII_DII_GITHUB_PATH",
+        "branch": "NSL_FII_DII_GITHUB_BRANCH",
+    }
+    for key, env_name in env_map.items():
+        if not values.get(key) and os.getenv(env_name):
+            values[key] = str(os.getenv(env_name))
+    return values
+
+
 client_id = secret_value("client_id")
 access_token = secret_value("access_token")
 
@@ -86,8 +122,13 @@ access_token = secret_value("access_token")
 # than 24h; FII/DII journal, manual discipline/trade state and learning summaries remain.
 run_housekeeping(datetime.now(ZoneInfo(IST_TIMEZONE)))
 state_store = OptionStateStore(Path(CONFIG.option_state_path))
+cloud_journal = GitHubJsonJournal.from_mapping(
+    cloud_journal_values(), timeout_seconds=CONFIG.market_context_cloud_timeout_seconds
+)
 context_store = MarketContextStore(
-    Path(CONFIG.market_context_path), Path(CONFIG.market_context_mirror_path)
+    Path(CONFIG.market_context_path),
+    Path(CONFIG.market_context_mirror_path),
+    cloud_backend=cloud_journal,
 )
 discipline_store = DisciplineStore(Path(CONFIG.discipline_state_path))
 news_service = MarketNewsService(Path(CONFIG.news_cache_path))
@@ -141,7 +182,7 @@ with st.sidebar:
                 width="stretch",
                 disabled=not confirm_history,
             )
-    with st.expander("Risk & one-trade discipline", expanded=True):
+    with st.expander("Risk & one-trade discipline", expanded=False):
         capital_rupees = st.number_input(
             "Trading capital ₹",
             min_value=10000.0,
@@ -205,6 +246,20 @@ with st.sidebar:
         )
         context_key = context_date.isoformat()
         saved_context = context_store.get(context_date) or {}
+        cloud_state = context_store.sync_status()
+        if cloud_state.label == "CLOUD SYNC OK":
+            st.success("FII/DII Sync: CLOUD + LOCAL SAFE")
+        elif cloud_state.label.startswith("CLOUD FAILED"):
+            st.warning("FII/DII Sync: CLOUD FAILED · LOCAL BACKUP SAFE")
+        else:
+            st.info("FII/DII Sync: LOCAL BACKUP")
+        st.caption(cloud_state.message)
+        sync_context_now = st.button(
+            "Sync cloud now",
+            width="stretch",
+            disabled=not context_store.cloud_enabled,
+            key="sync_fii_dii_cloud_now",
+        )
 
         def context_text(value: object) -> str:
             return "" if value is None else str(value)
@@ -268,8 +323,8 @@ with st.sidebar:
         )
         st.caption(
             "One row per trading date. Same date updates only that row; a new date adds a row. "
-            "Latest 15 sessions primary + mirror atomic files me save hote hain aur read par merge hote hain. "
-            "Missing stays missing, never zero. Cash ₹ crore me hai; Index Futures contracts + Long/Short % me save hote hain."
+            "Latest 15 sessions local primary + mirror me save hote hain; cloud configured ho to private journal se auto-sync bhi hote hain. "
+            "Blank value purane valid number ko erase nahi karti. Cash ₹ crore me hai; Index Futures contracts + Long/Short % me save hote hain."
         )
 
         saved_rows = list(reversed(context_store.load()))
@@ -309,6 +364,14 @@ with st.sidebar:
             disabled=context_backup is None,
         )
 
+    if sync_context_now:
+        try:
+            context_store.sync_now()
+            st.session_state.pop("snapshot", None)
+            st.success("FII/DII cloud aur local journal sync ho gaye")
+            st.rerun()
+        except Exception as exc:
+            st.warning(f"Cloud sync nahi hua; local backup safe hai: {exc}")
     if save_context:
         try:
             context_store.upsert(
@@ -439,162 +502,124 @@ previous_view_snapshot = (
 
 render_market_session(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
-render_barrier_map(view_snapshot)
+render_trade_plan(view_snapshot, compact=True, max_rows=3)
+render_compact_barrier_map(view_snapshot)
 render_spot_premium_calculator(view_snapshot)
-render_evidence_matrix(view_snapshot)
-render_market_outlook(view_snapshot)
 
-st.subheader("Download Reports")
-st.caption(
-    "Quick Market Report daily use ke liye 2-page summary hai. Full Audit PDF detailed verification/debug ke liye hai. "
-    "Dono isi authoritative snapshot ko freeze karte hain; koi second Brain calculation nahi hoti."
-)
-
-pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
-if pdf_snapshot_key != snapshot.snapshot_id:
-    st.session_state.pop("audit_pdf_bytes", None)
-    st.session_state.pop("quick_pdf_bytes", None)
-    st.session_state.audit_pdf_snapshot_id = snapshot.snapshot_id
-
-quick_col, full_col = st.columns(2)
-with quick_col:
-    generate_quick_pdf = st.button(
-        "Generate Quick Market Report", type="primary", width="stretch"
-    )
-    if generate_quick_pdf:
-        try:
-            with st.spinner("Building 2-page quick report from current snapshot only..."):
-                st.session_state.quick_pdf_bytes = build_quick_market_pdf(view_snapshot)
-            st.success("Quick Market Report ready")
-        except Exception as exc:
-            st.error(f"Quick report not generated: {exc}")
-    if st.session_state.get("quick_pdf_bytes"):
-        st.download_button(
-            "Download Quick Market Report",
-            data=st.session_state.quick_pdf_bytes,
-            file_name=quick_pdf_filename(snapshot),
-            mime="application/pdf",
-            width="stretch",
-        )
-
-with full_col:
-    generate_pdf = st.button(
-        "Generate Full Audit PDF", width="stretch"
-    )
-    if generate_pdf:
-        try:
-            with st.spinner("Building full audit PDF from the current snapshot only..."):
-                st.session_state.audit_pdf_bytes = build_full_audit_pdf(view_snapshot)
-            st.success("Full Audit PDF ready")
-        except Exception as exc:
-            st.error(f"Full Audit PDF not generated: {exc}")
-    if st.session_state.get("audit_pdf_bytes"):
-        st.download_button(
-            "Download Full Audit PDF",
-            data=st.session_state.audit_pdf_bytes,
-            file_name=audit_pdf_filename(snapshot),
-            mime="application/pdf",
-            width="stretch",
-        )
-
+with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):
+    render_evidence_matrix(view_snapshot)
+    render_market_outlook(view_snapshot)
 
 execution_expanded = (
     snapshot.market_session.is_live and snapshot.decision.final_action != "WAIT"
 )
 with st.expander(
-    "Detailed Brain Decision, Protected Planner & Execution",
+    "Strategy Audit, Execution Guard & Trade Monitor",
     expanded=execution_expanded,
 ):
-    render_decision(view_snapshot)
-    render_trade_plan(view_snapshot)
+    # The top screen already owns the final action and top-3 planner.  This section
+    # provides one combined all-5 audit table instead of repeating both full cards.
+    render_decision(view_snapshot, audit_only=True)
     render_execution_guard(view_snapshot)
-    render_position_guardian(view_snapshot)
 
-    st.write("**Manual one-trade journal**")
-    maximum_mark_lots = max(1, snapshot.execution_guard.allowed_lots)
-    planned_lots = st.number_input(
-        "Lots to record when trade is taken",
-        min_value=1,
-        max_value=maximum_mark_lots,
-        value=1,
-        step=1,
-        disabled=snapshot.execution_guard.readiness != "ENTRY READY",
+    guardian_active = snapshot.position_guardian.status != "IDLE"
+    if guardian_active:
+        render_position_guardian(view_snapshot)
+
+    journal_needed = (
+        snapshot.execution_guard.readiness == "ENTRY READY"
+        or snapshot.discipline_state.trades_taken >= 1
+        or snapshot.discipline_state.last_outcome == "OPEN"
     )
-    trade_col, target_col, sl_col = st.columns(3)
-    with trade_col:
-        mark_trade = st.button(
-            "Mark current trade taken",
-            disabled=(
-                snapshot.execution_guard.readiness != "ENTRY READY"
-                or snapshot.discipline_state.trades_taken >= 1
-            ),
-            width="stretch",
+    if journal_needed:
+        with st.expander("Manual one-trade journal", expanded=guardian_active):
+            maximum_mark_lots = max(1, snapshot.execution_guard.allowed_lots)
+            planned_lots = st.number_input(
+                "Lots to record when trade is taken",
+                min_value=1,
+                max_value=maximum_mark_lots,
+                value=1,
+                step=1,
+                disabled=snapshot.execution_guard.readiness != "ENTRY READY",
+            )
+            trade_col, target_col, sl_col = st.columns(3)
+            with trade_col:
+                mark_trade = st.button(
+                    "Mark current trade taken",
+                    disabled=(
+                        snapshot.execution_guard.readiness != "ENTRY READY"
+                        or snapshot.discipline_state.trades_taken >= 1
+                    ),
+                    width="stretch",
+                )
+            with target_col:
+                mark_target = st.button(
+                    "Target / manual exit — lock day",
+                    disabled=(
+                        snapshot.discipline_state.trades_taken < 1
+                        or snapshot.discipline_state.last_outcome != "OPEN"
+                    ),
+                    width="stretch",
+                )
+            with sl_col:
+                mark_sl = st.button(
+                    "SL hit — lock day",
+                    disabled=(
+                        snapshot.discipline_state.trades_taken < 1
+                        or snapshot.discipline_state.last_outcome != "OPEN"
+                    ),
+                    width="stretch",
+                )
+            try:
+                if mark_trade:
+                    trade_record = create_trade_record(
+                        captured_at=snapshot.created_at,
+                        decision=snapshot.decision,
+                        trade_plan=snapshot.trade_plan,
+                        execution_guard=snapshot.execution_guard,
+                        lots=int(planned_lots),
+                        lot_size=snapshot.risk_profile.lot_size,
+                        spot=snapshot.nifty_quote.get("last_price"),
+                    )
+                    discipline_store.mark_trade(
+                        session_date=snapshot.created_at.date(),
+                        action=snapshot.decision.final_action,
+                        trade_record=trade_record,
+                    )
+                    st.session_state.pop("snapshot", None)
+                    st.rerun()
+                if mark_target:
+                    discipline_store.mark_outcome(
+                        session_date=snapshot.created_at.date(),
+                        outcome="TARGET / MANUAL EXIT",
+                        exit_debit_points=snapshot.position_guardian.current_debit_points,
+                        realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
+                        captured_at=snapshot.created_at,
+                    )
+                    st.session_state.pop("snapshot", None)
+                    st.rerun()
+                if mark_sl:
+                    discipline_store.mark_outcome(
+                        session_date=snapshot.created_at.date(),
+                        outcome="SL HIT",
+                        exit_debit_points=snapshot.position_guardian.current_debit_points,
+                        realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
+                        captured_at=snapshot.created_at,
+                    )
+                    st.session_state.pop("snapshot", None)
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Discipline journal not updated: {exc}")
+            st.caption(
+                "Journal manually marked trade ko monitor karta hai; broker order place, modify ya exit nahi karta."
+            )
+    else:
+        st.caption(
+            "Manual trade journal tab dikhega jab setup ENTRY READY ho ya koi trade open record ho."
         )
-    with target_col:
-        mark_target = st.button(
-            "Target / manual exit — lock day",
-            disabled=(
-                snapshot.discipline_state.trades_taken < 1
-                or snapshot.discipline_state.last_outcome != "OPEN"
-            ),
-            width="stretch",
-        )
-    with sl_col:
-        mark_sl = st.button(
-            "SL hit — lock day",
-            disabled=(
-                snapshot.discipline_state.trades_taken < 1
-                or snapshot.discipline_state.last_outcome != "OPEN"
-            ),
-            width="stretch",
-        )
-    try:
-        if mark_trade:
-            trade_record = create_trade_record(
-                captured_at=snapshot.created_at,
-                decision=snapshot.decision,
-                trade_plan=snapshot.trade_plan,
-                execution_guard=snapshot.execution_guard,
-                lots=int(planned_lots),
-                lot_size=snapshot.risk_profile.lot_size,
-                spot=snapshot.nifty_quote.get("last_price"),
-            )
-            discipline_store.mark_trade(
-                session_date=snapshot.created_at.date(),
-                action=snapshot.decision.final_action,
-                trade_record=trade_record,
-            )
-            st.session_state.pop("snapshot", None)
-            st.rerun()
-        if mark_target:
-            discipline_store.mark_outcome(
-                session_date=snapshot.created_at.date(),
-                outcome="TARGET / MANUAL EXIT",
-                exit_debit_points=snapshot.position_guardian.current_debit_points,
-                realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
-                captured_at=snapshot.created_at,
-            )
-            st.session_state.pop("snapshot", None)
-            st.rerun()
-        if mark_sl:
-            discipline_store.mark_outcome(
-                session_date=snapshot.created_at.date(),
-                outcome="SL HIT",
-                exit_debit_points=snapshot.position_guardian.current_debit_points,
-                realized_pnl_rupees=snapshot.position_guardian.unrealized_pnl_rupees,
-                captured_at=snapshot.created_at,
-            )
-            st.session_state.pop("snapshot", None)
-            st.rerun()
-    except Exception as exc:
-        st.error(f"Discipline journal not updated: {exc}")
-    st.caption(
-        "The journal is local to the current Streamlit deployment filesystem. It freezes "
-        "the manually marked protected setup for monitoring, but never places, modifies or "
-        "exits a broker order."
-    )
 
 with st.expander("Detailed Core Market Evidence", expanded=False):
+    render_barrier_map(view_snapshot)
     st.subheader("Core Market Evidence")
     render_core_evidence(view_snapshot)
 
@@ -646,6 +671,57 @@ with st.expander("Detailed Options Intelligence", expanded=False):
         render_market_context(view_snapshot)
     with option_tabs[6]:
         render_news_context(view_snapshot)
+
+with st.expander("Download Reports", expanded=False):
+    st.caption(
+        "Quick Market Report daily use ke liye 2-page summary hai. Full Audit PDF detailed verification/debug ke liye hai. "
+        "Dono isi authoritative snapshot ko freeze karte hain; koi second Brain calculation nahi hoti."
+    )
+
+    pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
+    if pdf_snapshot_key != snapshot.snapshot_id:
+        st.session_state.pop("audit_pdf_bytes", None)
+        st.session_state.pop("quick_pdf_bytes", None)
+        st.session_state.audit_pdf_snapshot_id = snapshot.snapshot_id
+
+    quick_col, full_col = st.columns(2)
+    with quick_col:
+        generate_quick_pdf = st.button(
+            "Generate Quick Market Report", type="primary", width="stretch"
+        )
+        if generate_quick_pdf:
+            try:
+                with st.spinner("Building 2-page quick report from current snapshot only..."):
+                    st.session_state.quick_pdf_bytes = build_quick_market_pdf(view_snapshot)
+                st.success("Quick Market Report ready")
+            except Exception as exc:
+                st.error(f"Quick report not generated: {exc}")
+        if st.session_state.get("quick_pdf_bytes"):
+            st.download_button(
+                "Download Quick Market Report",
+                data=st.session_state.quick_pdf_bytes,
+                file_name=quick_pdf_filename(snapshot),
+                mime="application/pdf",
+                width="stretch",
+            )
+
+    with full_col:
+        generate_pdf = st.button("Generate Full Audit PDF", width="stretch")
+        if generate_pdf:
+            try:
+                with st.spinner("Building full audit PDF from the current snapshot only..."):
+                    st.session_state.audit_pdf_bytes = build_full_audit_pdf(view_snapshot)
+                st.success("Full Audit PDF ready")
+            except Exception as exc:
+                st.error(f"Full Audit PDF not generated: {exc}")
+        if st.session_state.get("audit_pdf_bytes"):
+            st.download_button(
+                "Download Full Audit PDF",
+                data=st.session_state.audit_pdf_bytes,
+                file_name=audit_pdf_filename(snapshot),
+                mime="application/pdf",
+                width="stretch",
+            )
 
 if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":
     with st.expander("Developer Raw Market Data (screen only)", expanded=False):

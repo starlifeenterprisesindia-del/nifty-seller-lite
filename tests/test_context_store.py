@@ -157,3 +157,107 @@ def test_context_store_rejects_bad_futures_percentage_pair(tmp_path):
             fii_futures_short_pct=80.0,
             event_risk="NONE",
         )
+
+
+class FakeCloudJournal:
+    enabled = True
+    location = "owner/private-data:fii.json"
+
+    def __init__(self, entries=None, fail=False):
+        self.entries = list(entries or [])
+        self.fail = fail
+        self.sha = "sha-1" if self.entries else None
+        self.write_calls = 0
+
+    def read(self):
+        from services.github_journal import GitHubJournalError, GitHubJournalSnapshot
+
+        if self.fail:
+            raise GitHubJournalError("offline")
+        return GitHubJournalSnapshot(
+            data={"schema_version": 1, "entries": list(self.entries)},
+            sha=self.sha,
+            exists=bool(self.sha),
+        )
+
+    def write(self, data, *, sha):
+        from services.github_journal import GitHubJournalError
+
+        if self.fail:
+            raise GitHubJournalError("offline")
+        self.write_calls += 1
+        self.entries = list(data["entries"])
+        self.sha = f"sha-{self.write_calls + 1}"
+        return self.sha
+
+
+def test_context_store_cloud_sync_survives_new_local_filesystem(tmp_path):
+    cloud = FakeCloudJournal()
+    first = MarketContextStore(
+        tmp_path / "first" / "context.json",
+        cloud_backend=cloud,
+        cloud_pull_ttl_seconds=0,
+    )
+    first.upsert(
+        session_date=date(2026, 8, 1),
+        fii_cash_net=-123.4,
+        dii_cash_net=456.7,
+        event_risk="NONE",
+    )
+    assert cloud.write_calls >= 1
+
+    second = MarketContextStore(
+        tmp_path / "fresh-deployment" / "context.json",
+        cloud_backend=cloud,
+        cloud_pull_ttl_seconds=0,
+    )
+    rows = second.load()
+    assert rows[0]["date"] == "2026-08-01"
+    assert rows[0]["fii_cash_net"] == -123.4
+    assert second.sync_status().label == "CLOUD SYNC OK"
+
+
+def test_context_store_cloud_failure_keeps_local_data(tmp_path):
+    cloud = FakeCloudJournal(fail=True)
+    store = MarketContextStore(
+        tmp_path / "context.json",
+        cloud_backend=cloud,
+        cloud_pull_ttl_seconds=0,
+    )
+    rows = store.upsert(
+        session_date=date(2026, 8, 1),
+        fii_cash_net=-100,
+        dii_cash_net=200,
+        event_risk="NONE",
+    )
+    assert rows[0]["fii_cash_net"] == -100.0
+    assert store.path.exists()
+    assert store.sync_status().label == "CLOUD FAILED · LOCAL SAFE"
+
+
+def test_blank_update_does_not_erase_existing_fii_dii_values(tmp_path):
+    store = MarketContextStore(tmp_path / "context.json")
+    store.upsert(
+        session_date=date(2026, 8, 1),
+        fii_cash_net=-100,
+        dii_cash_net=200,
+        fii_index_futures_contracts=266925,
+        fii_futures_long_pct=8.78,
+        fii_futures_short_pct=91.22,
+        event_risk="NONE",
+    )
+    rows = store.upsert(
+        session_date=date(2026, 8, 1),
+        fii_cash_net=None,
+        dii_cash_net=None,
+        fii_index_futures_contracts=None,
+        fii_futures_long_pct=None,
+        fii_futures_short_pct=None,
+        event_risk="LOW",
+        verified=True,
+    )
+    row = rows[0]
+    assert row["fii_cash_net"] == -100.0
+    assert row["dii_cash_net"] == 200.0
+    assert row["fii_index_futures_contracts"] == 266925.0
+    assert row["fii_futures_long_pct"] == 8.78

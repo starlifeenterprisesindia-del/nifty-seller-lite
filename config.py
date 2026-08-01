@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.16.0_AI_STRATEGY_PLANNER"
+    version: str = "2.17.1_SIMPLE_VIEW_DEDUP_FINAL"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -102,6 +102,10 @@ class AppConfig:
     market_context_path: str = "data/market_context.json"
     market_context_mirror_path: str = "data/market_context_mirror.json"
     market_context_max_entries: int = 15
+    # Optional private GitHub JSON journal. Secrets provide owner/repo/token/path;
+    # this TTL prevents a cloud API read on every Streamlit rerun.
+    market_context_cloud_pull_ttl_seconds: int = 60
+    market_context_cloud_timeout_seconds: int = 8
 
     # Pre-touch support/resistance early warning. This is display/risk context only and
     # never creates a second strategy brain.

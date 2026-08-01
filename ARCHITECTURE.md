@@ -1,4 +1,17 @@
-# Architecture — V2.16 AI Strategy Planner
+# Architecture — V2.17.1 Simple View + De-dup Final
+
+## Simple-view boundary
+
+`ui/components.py` only condenses the existing `MarketSnapshot`. The Final One-Brain, strategy scores, selected setup, strikes and execution readiness are not recalculated in the UI. The normal screen shows the Brain hero, top-three strategy planner and nearest levels; full Barrier Map, evidence and reports remain collapsed.
+
+## Durable FII/DII journal
+
+`services/context_store.py` remains the sole owner of the 15-session institutional journal. It merges three bounded sources: local primary JSON, local mirror JSON and an optional private GitHub JSON file. Same-date newer rows win, but blank numeric fields cannot erase older valid FII/DII values.
+
+`services/github_journal.py` is a persistence adapter only. It reads/writes one Base64 JSON file through GitHub's repository-contents API. It has no market calculations, no broker access and no strategy authority. Cloud failure is fail-open to the local primary + mirror journal.
+
+The token is read only from Streamlit Secrets/environment variables. The recommended deployment uses a separate private data repository so a journal update does not modify or redeploy the application repository.
+
 
 ## V2.16 canonical strategy comparison
 

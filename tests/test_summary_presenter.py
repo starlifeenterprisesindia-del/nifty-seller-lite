@@ -27,3 +27,23 @@ def test_main_ai_is_top_screen_and_developer_raw_is_hidden_by_default():
     assert app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)") < app.index("render_barrier_map(view_snapshot)")
     assert 'if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":' in app
     assert "Delete selected date" not in app
+
+
+def test_simple_view_prioritizes_final_brain_and_top_three_planner():
+    root = Path(__file__).resolve().parents[1]
+    app = (root / "app.py").read_text(encoding="utf-8")
+    main = app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)")
+    planner = app.index("render_trade_plan(view_snapshot, compact=True, max_rows=3)")
+    levels = app.index("render_compact_barrier_map(view_snapshot)")
+    assert main < planner < levels
+    assert 'with st.expander("Risk & one-trade discipline", expanded=False):' in app
+    assert 'with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):' in app
+
+
+def test_detailed_screen_uses_one_combined_strategy_audit_without_full_planner_duplicate():
+    root = Path(__file__).resolve().parents[1]
+    app = (root / "app.py").read_text(encoding="utf-8")
+    assert "render_decision(view_snapshot, audit_only=True)" in app
+    assert "render_trade_plan(view_snapshot, compact=False)" not in app
+    assert 'guardian_active = snapshot.position_guardian.status != "IDLE"' in app
+    assert 'with st.expander("Manual one-trade journal", expanded=guardian_active):' in app

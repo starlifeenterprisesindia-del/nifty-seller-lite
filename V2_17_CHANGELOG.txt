@@ -1,0 +1,34 @@
+V2.17 SIMPLE TRADING VIEW + FII/DII CLOUD JOURNAL
+
+1. Main screen priority
+- Final One-Brain is now the first prominent card.
+- Selected setup is soft green; WAIT is soft amber.
+- AI Strategy Planner top 3 appears directly below the Brain.
+- Nearest Resistance / NIFTY / Support uses a compact three-card strip.
+- Full Barrier Map, evidence/outlook, reports and risk controls are collapsed by default.
+
+2. Quiet evidence
+- 3M W/M, Special Candle, FII/DII and Data/Entry remain visible as compact cards.
+- No evidence module creates a separate action.
+
+3. FII/DII durability
+- Added optional private GitHub JSON journal.
+- Local primary + mirror remain active as fallback.
+- Cloud/local same-date rows merge monotonically.
+- Blank numeric updates cannot erase older valid FII/DII values.
+- Cloud failure does not block local saving and is shown as LOCAL SAFE.
+
+4. Safety
+- One canonical strategy brain remains analysis/decision.py.
+- Cloud adapter has no market logic and no broker/order access.
+- App remains read-only.
+
+5. V2.17.1 final de-dup audit
+- Removed the repeated full Final Decision card and repeated full Planner from the detailed screen.
+- Replaced them with one combined All-5 Strategy Audit table: fit, structure, premium/risk, one main reason and one caution.
+- Position Guardian is hidden while no trade is open; manual journal appears only when ENTRY READY or a trade is recorded.
+- Reports moved below evidence details.
+- Directional buy scoring no longer gives a second positive vote to price action or futures volume already included in Core Market Evidence.
+- Price action/volume are now contradiction gates only; early-stage timing remains a small bounded bonus.
+- Removed a duplicate news blocker append.
+- Removed extra positive room bonuses from CE/PE Buy and CE/PE Sell; support/resistance now acts as a setup-specific safety penalty/guard, while the Core module remains the base directional evidence.

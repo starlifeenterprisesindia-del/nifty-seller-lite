@@ -1,0 +1,25 @@
+Upload/replace these files at the same repository paths:
+
+.gitignore
+ARCHITECTURE.md
+README.md
+app.py
+config.py
+analysis/decision.py
+services/context_store.py
+services/github_journal.py
+ui/components.py
+tests/test_context_store.py
+tests/test_decision.py
+tests/test_github_journal.py
+tests/test_summary_presenter.py
+DEPLOY_V2_17.txt
+V2_17_CHANGELOG.txt
+V2_17_TEST_REPORT.txt
+V2_17_UPDATE_LIST.txt
+
+Do not upload or replace:
+.streamlit/secrets.toml
+data/ runtime files
+__pycache__/
+.pytest_cache/

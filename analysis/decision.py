@@ -134,8 +134,6 @@ def _buy_level_adjustments(levels: LevelBundle) -> tuple[float, float, list[str]
     elif levels.upside_room < CONFIG.buy_min_directional_room_points:
         ce_adjust -= 22.0
         ce_cautions.append("CE buy has too little room before resistance")
-    elif levels.upside_room >= 25:
-        ce_adjust += 9.0
 
     if levels.downside_room is None:
         pe_adjust -= 8.0
@@ -143,8 +141,6 @@ def _buy_level_adjustments(levels: LevelBundle) -> tuple[float, float, list[str]
     elif levels.downside_room < CONFIG.buy_min_directional_room_points:
         pe_adjust -= 22.0
         pe_cautions.append("PE buy has too little room before support")
-    elif levels.downside_room >= 25:
-        pe_adjust += 9.0
 
     if levels.current_position == "NEAR RESISTANCE":
         ce_adjust -= 10.0
@@ -161,33 +157,50 @@ def _directional_momentum_adjustments(
     price_action: PriceActionBundle | None,
     volume: VolumeBundle | None,
 ) -> tuple[float, float, list[str], list[str]]:
+    """Apply timing and contradiction gates without re-voting core evidence.
+
+    Price action and futures volume are already inside ``core``.  This helper must
+    therefore not add a second positive vote for the same bullish/bearish reading.
+    It only adds a small timing bonus and bounded penalties when the raw modules
+    are mixed, opposite or unavailable.
+    """
+
     ce_adjust = pe_adjust = 0.0
     ce_cautions: list[str] = []
     pe_cautions: list[str] = []
 
     stage = str(core.move_stage or "").upper()
-    if stage in {"DEVELOPING", "EARLY", "BUILDING", "BREAKOUT"}:
-        ce_adjust += 6.0
-        pe_adjust += 6.0
+    timing_inputs_ready = (
+        price_action is not None
+        and volume is not None
+        and volume.status == "READY"
+    )
+    if (
+        timing_inputs_ready
+        and stage in {"DEVELOPING", "EARLY", "BUILDING", "BREAKOUT"}
+    ):
+        # Timing is not already a directional component of the core score.
+        ce_adjust += 11.0
+        pe_adjust += 11.0
     elif stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
-        ce_adjust -= 14.0
-        pe_adjust -= 14.0
+        ce_adjust -= 12.0
+        pe_adjust -= 12.0
         ce_cautions.append("Directional move may be mature")
         pe_cautions.append("Directional move may be mature")
 
     if price_action is not None:
         pa = f"{price_action.combined_state} {price_action.relationship}".upper()
         if "BULLISH" in pa and "BEARISH" not in pa:
-            ce_adjust += 10.0
+            # Bullish price action is already counted in core; only penalise PE BUY.
             pe_adjust -= 10.0
             pe_cautions.append("Price action is not bearish-aligned")
         elif "BEARISH" in pa and "BULLISH" not in pa:
-            pe_adjust += 10.0
+            # Bearish price action is already counted in core; only penalise CE BUY.
             ce_adjust -= 10.0
             ce_cautions.append("Price action is not bullish-aligned")
         elif "MIXED" in pa or "RANGE" in pa or "CONFLICT" in pa:
-            ce_adjust -= 7.0
-            pe_adjust -= 7.0
+            ce_adjust -= 8.0
+            pe_adjust -= 8.0
             ce_cautions.append("Timeframes are mixed/range")
             pe_cautions.append("Timeframes are mixed/range")
     else:
@@ -199,14 +212,15 @@ def _directional_momentum_adjustments(
     if volume is not None and volume.status == "READY":
         view = str(volume.overall_view or "").upper()
         if "BULLISH" in view:
-            ce_adjust += 7.0
-            pe_adjust -= 4.0
+            # Positive volume is already in core; only block the opposite buy.
+            pe_adjust -= 6.0
+            pe_cautions.append("Futures volume is not bearish-aligned")
         elif "BEARISH" in view:
-            pe_adjust += 7.0
-            ce_adjust -= 4.0
+            ce_adjust -= 6.0
+            ce_cautions.append("Futures volume is not bullish-aligned")
         elif "WEAK" in view or "LOW" in view or "MIXED" in view:
-            ce_adjust -= 4.0
-            pe_adjust -= 4.0
+            ce_adjust -= 5.0
+            pe_adjust -= 5.0
             ce_cautions.append("Volume confirmation is weak")
             pe_cautions.append("Volume confirmation is weak")
     else:
@@ -239,14 +253,10 @@ def _level_adjustments(
         if levels.downside_room < 10:
             ce_adjust -= 18
             ce_cautions.append("CE sell has limited downside room before support")
-        elif levels.downside_room >= 25:
-            ce_adjust += 7
     if levels.upside_room is not None:
         if levels.upside_room < 10:
             pe_adjust -= 18
             pe_cautions.append("PE sell has limited upside room before resistance")
-        elif levels.upside_room >= 25:
-            pe_adjust += 7
 
     if levels.current_position == "NEAR SUPPORT":
         ce_adjust -= 10

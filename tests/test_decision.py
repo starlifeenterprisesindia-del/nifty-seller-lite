@@ -512,3 +512,27 @@ def test_strong_aligned_bearish_momentum_can_select_pe_buy_from_same_brain():
     assert result.final_action == "PE BUY"
     assert result.pe_buy.score > result.ce_sell.score
     assert result.hedge_required is False
+
+
+def test_buy_alignment_gate_does_not_revote_core_price_action_and_volume():
+    from types import SimpleNamespace
+
+    from analysis.decision import _directional_momentum_adjustments
+
+    ce_adjust, pe_adjust, ce_cautions, pe_cautions = _directional_momentum_adjustments(
+        core=SimpleNamespace(move_stage="EARLY"),
+        price_action=SimpleNamespace(
+            combined_state="BULLISH",
+            relationship="3m/15m BULLISH ALIGNED",
+        ),
+        volume=SimpleNamespace(status="READY", overall_view="BULLISH PARTICIPATION"),
+    )
+
+    # CE BUY receives only the bounded timing bonus. Bullish price action and
+    # volume are already inside Core Market Evidence and therefore do not add a
+    # second positive direction vote here.
+    assert ce_adjust == 11.0
+    assert pe_adjust == -5.0
+    assert ce_cautions == []
+    assert "Price action is not bearish-aligned" in pe_cautions
+    assert "Futures volume is not bearish-aligned" in pe_cautions

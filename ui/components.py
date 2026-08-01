@@ -57,6 +57,56 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
     )
 
 
+def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
+    item = snapshot.barrier_map
+
+    def level_text(level: Any | None, fallback: str) -> tuple[str, str]:
+        if level is None:
+            return "Unresolved", fallback
+        return (
+            f"{level.lower:,.0f}–{level.upper:,.0f}",
+            f"{level.distance_points:,.0f} pts · Strength {level.strength:.0f} · Break {level.break_pressure:.0f}",
+        )
+
+    resistance, resistance_note = level_text(item.nearest_resistance, "Resistance unavailable")
+    support, support_note = level_text(item.nearest_support, "Support unavailable")
+    spot = f"{item.current_price:,.2f}" if item.current_price is not None else "—"
+    range_item = item.trading_range
+    range_text = (
+        f"{range_item.lower:,.0f}–{range_item.upper:,.0f}"
+        if range_item.lower is not None and range_item.upper is not None
+        else "Range unresolved"
+    )
+
+    st.subheader("🧭 Nearest Levels")
+    html = (
+        '<style>'
+        '.cbm-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:4px 0 8px}'
+        '.cbm{border-radius:13px;padding:12px;border:1px solid rgba(127,127,127,.24);background:rgba(127,127,127,.04)}'
+        '.cbm.res{border-color:rgba(239,68,68,.42);background:rgba(239,68,68,.08)}'
+        '.cbm.spot{border-color:rgba(59,130,246,.42);background:rgba(59,130,246,.08);text-align:center}'
+        '.cbm.sup{border-color:rgba(34,197,94,.42);background:rgba(34,197,94,.08)}'
+        '.cbm-l{font-size:.74rem;font-weight:800;opacity:.75;letter-spacing:.04em}'
+        '.cbm-v{font-size:1.25rem;font-weight:900;margin-top:4px}'
+        '.cbm-n{font-size:.72rem;opacity:.72;margin-top:4px;line-height:1.3}'
+        '@media(max-width:760px){.cbm-grid{grid-template-columns:1fr}.cbm{padding:10px}.cbm-v{font-size:1.12rem}}'
+        '</style>'
+        '<div class="cbm-grid">'
+        f'<div class="cbm res"><div class="cbm-l">NEXT RESISTANCE</div><div class="cbm-v">{escape(resistance)}</div><div class="cbm-n">{escape(resistance_note)}</div></div>'
+        f'<div class="cbm spot"><div class="cbm-l">NIFTY CURRENT</div><div class="cbm-v">{escape(spot)}</div><div class="cbm-n">{escape(range_item.state)} · {escape(range_item.breakout_bias)}</div></div>'
+        f'<div class="cbm sup"><div class="cbm-l">NEXT SUPPORT</div><div class="cbm-v">{escape(support)}</div><div class="cbm-n">{escape(support_note)}</div></div>'
+        '</div>'
+    )
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+    st.caption(
+        f"Probable range {range_text} · Confidence {range_item.confidence:.0f}/100 · "
+        f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100. Full map detailed section me hai."
+    )
+
+
 def render_barrier_map(snapshot: MarketSnapshot) -> None:
     item = snapshot.barrier_map
     st.subheader("🧭 Live Barrier + Range Map")
@@ -660,14 +710,76 @@ def _render_compact_cards(cards: list[tuple[str, str, str]]) -> None:
         st.markdown(html, unsafe_allow_html=True)
 
 
+def _plan_structure_text(plan: Any | None) -> str:
+    if plan is None or not plan.available:
+        return "Strike unresolved"
+    if plan.is_buy:
+        return f"BUY {plan_leg_text(plan.long_legs)}"
+    short_text = plan_leg_text(plan.short_legs)
+    hedge_text = plan_leg_text(plan.hedge_legs)
+    return f"SELL {short_text} · HEDGE {hedge_text}"
+
+
+def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
+    decision = snapshot.decision
+    name, score, plan, is_selected = best_existing_candidate(snapshot)
+    if decision.final_action == "WAIT":
+        css_class = "wait"
+        title = "WAIT"
+        subtitle = f"Reference leader: {name} · Fit {score:.1f}%"
+        structure = "Fresh entry nahi · " + _plan_structure_text(plan)
+    else:
+        css_class = "ready"
+        title = decision.final_action
+        subtitle = f"BEST selected · Brain fit {score:.1f}%"
+        structure = _plan_structure_text(plan)
+    readiness = snapshot.execution_guard.readiness
+    live_text = "LIVE" if feed_ok else "REFERENCE ONLY"
+    hero = (
+        '<style>'
+        '.brain-hero{border-radius:16px;padding:16px 18px;margin:4px 0 12px;border:1px solid rgba(127,127,127,.24)}'
+        '.brain-hero.ready{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.42)}'
+        '.brain-hero.wait{background:rgba(245,158,11,.13);border-color:rgba(245,158,11,.42)}'
+        '.brain-hero-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}'
+        '.brain-hero-label{font-size:.76rem;font-weight:800;letter-spacing:.06em;opacity:.76}'
+        '.brain-hero-action{font-size:1.65rem;font-weight:900;line-height:1.15;margin-top:3px}'
+        '.brain-hero-badge{font-size:.78rem;font-weight:800;padding:6px 9px;border-radius:99px;background:rgba(127,127,127,.13);white-space:nowrap}'
+        '.brain-hero-sub{font-size:.92rem;font-weight:700;margin-top:8px}'
+        '.brain-hero-structure{font-size:.82rem;opacity:.82;margin-top:5px;overflow-wrap:anywhere}'
+        '@media(max-width:760px){.brain-hero{padding:13px}.brain-hero-action{font-size:1.35rem}.brain-hero-top{gap:8px}.brain-hero-badge{font-size:.70rem}}'
+        '</style>'
+        f'<div class="brain-hero {css_class}">'
+        '<div class="brain-hero-top"><div>'
+        '<div class="brain-hero-label">FINAL ONE-BRAIN</div>'
+        f'<div class="brain-hero-action">{escape(title)}</div></div>'
+        f'<div class="brain-hero-badge">{escape(readiness)} · {escape(live_text)}</div></div>'
+        f'<div class="brain-hero-sub">{escape(subtitle)}</div>'
+        f'<div class="brain-hero-structure">{escape(structure)}</div>'
+        '</div>'
+    )
+    if hasattr(st, "html"):
+        st.html(hero)
+    else:
+        st.markdown(hero, unsafe_allow_html=True)
+
+
+def _pattern_compact_text(item: Any | None, *, fallback: str) -> tuple[str, str]:
+    if item is None or item.status == "UNAVAILABLE":
+        return fallback, "No reliable confirmation"
+    if item.name in {"NO VALID W/M", "NO IMPORTANT CANDLE"}:
+        return item.name, "Neutral / no important pattern"
+    note_bits = [item.strength]
+    if item.level_value is not None:
+        note_bits.append(f"{item.level_label or 'Level'} {item.level_value:,.0f}")
+    if item.neckline is not None:
+        note_bits.append(f"NL {item.neckline:,.0f}")
+    return item.name, " · ".join(note_bits)
+
+
 def render_main_ai_market_view(
     snapshot: MarketSnapshot, previous_snapshot: MarketSnapshot | None = None
 ) -> None:
-    """Top-screen summary of the existing canonical MarketSnapshot.
-
-    No strategy is recalculated here. It only condenses the Final One-Brain, Barrier
-    Map, execution guard and background contexts into a phone-friendly view.
-    """
+    """Simple top-screen view of the existing canonical MarketSnapshot."""
 
     decision = snapshot.decision
     barrier = snapshot.barrier_map
@@ -676,143 +788,72 @@ def render_main_ai_market_view(
     direction, direction_score, direction_note = market_rukh_display(snapshot)
     spot = snapshot.nifty_quote.get("last_price")
 
-    st.subheader("🧠 Main AI — Market View")
+    st.subheader("🧠 Main AI — Simple Trading View")
     st.caption(
-        "Ek hi One-Brain ka compact view: pehle decision, phir reason, phir proof. "
-        "Neeche ke detailed sections audit/evidence ke liye hain."
+        "Pehle final decision, phir top strategy aur nearest levels. Detailed proof neeche band sections me hai."
     )
 
     with st.container(border=True):
+        _render_final_action_hero(snapshot, feed_ok)
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
                 ("Market Rukh", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
-                ("Final Action", decision.final_action, "One-Brain final action"),
-                ("Entry Readiness", f"{decision.decision_confidence:.0f}/100", snapshot.execution_guard.readiness),
-                ("Market Danger", f"{speed.state} {speed.score:.0f}/100", f"Speed direction {speed.direction}"),
-                ("Data Status", "LIVE" if feed_ok else "REFERENCE ONLY", "Fresh entry only when required feeds are LIVE"),
+                ("Risk", f"{speed.state} {speed.score:.0f}/100", f"Direction {speed.direction}"),
             ]
         )
 
         st.info("🧠 **AI samajh:** " + safe_brain_hinglish_line(snapshot))
 
-        # Keep technical feed names out of the main user screen. Full feed diagnostics
-        # remain available in the detailed evidence/PDF audit.
-        if feed_ok and snapshot.execution_guard.readiness == "ENTRY READY":
-            st.success("Data Status: LIVE PASS — required feeds fresh hain aur entry guard ready hai.")
-        elif snapshot.market_session.is_live:
-            st.warning("Data Status: LIVE session hai, lekin entry ke required checks abhi complete nahi hain.")
-        else:
-            st.warning("Data Status: REFERENCE ONLY — market live nahi hai; fresh entry permitted nahi hai.")
-
-        left, right = st.columns(2)
-        with left:
-            st.markdown("**🎯 Abhi ka Plan**")
-            name, score, plan, is_selected = best_existing_candidate(snapshot)
-            if decision.final_action == "WAIT":
-                st.write("**Action:** WAIT — fresh entry abhi nahi.")
-                candidate_prefix = "Best reference candidate"
-            else:
-                st.write(f"**Action:** {decision.final_action}")
-                candidate_prefix = "Selected protected setup"
-
-            if plan is not None and plan.available:
-                st.write(
-                    f"**{candidate_prefix}:** {name} | Strategy Suitability {score:.1f}/100 | "
-                    f"Strike + Hedge Quality {plan.quality_score:.1f}/100"
-                )
-                st.write(
-                    f"Sell: **{plan_leg_text(plan.short_legs)}**  →  Hedge: **{plan_leg_text(plan.hedge_legs)}**"
-                )
-                if not is_selected:
-                    st.caption(
-                        "Final Action WAIT hai; yeh sirf reference candidate hai, entry signal nahi."
-                    )
-                invalidation = candidate_invalidation_text(snapshot, name)
-                if invalidation:
-                    st.caption("Invalidation: " + invalidation)
-            else:
-                st.write("Protected strike candidate abhi reliable tarah resolve nahi hua.")
-            st.caption(f"Main blocker: {display_main_blocker(snapshot)}")
-
-        with right:
-            st.markdown("**🧭 Aage ka Road Map**")
-            st.write("🔴 **Next Resistance:** " + _level_summary(barrier.nearest_resistance, fallback="R1"))
-            st.write("🟢 **Next Support:** " + _level_summary(barrier.nearest_support, fallback="S1"))
-            if barrier.trading_range.breakout_bias == "UPSIDE RISK" and barrier.next_resistance is not None:
-                st.caption(
-                    f"R1 tootkar accept hua to next resistance {barrier.next_resistance.lower:,.0f}–"
-                    f"{barrier.next_resistance.upper:,.0f} hai (Strength {barrier.next_resistance.strength:.0f}/100)."
-                )
-            elif barrier.trading_range.breakout_bias == "DOWNSIDE RISK" and barrier.next_support is not None:
-                st.caption(
-                    f"S1 tootkar accept hua to next support {barrier.next_support.lower:,.0f}–"
-                    f"{barrier.next_support.upper:,.0f} hai (Strength {barrier.next_support.strength:.0f}/100)."
-                )
-            else:
-                st.caption("Dono taraf ke next barriers Live Barrier Map me track ho rahe hain.")
-
-        range_item = barrier.trading_range
-        range_text = (
-            f"{range_item.lower:,.0f}–{range_item.upper:,.0f}"
-            if range_item.lower is not None and range_item.upper is not None
-            else "Unresolved"
+        patterns = getattr(snapshot, "patterns", None)
+        wm_text, wm_note = _pattern_compact_text(
+            patterns.wm_3m if patterns is not None else None,
+            fallback="NO VALID W/M",
         )
-        vix_daily = (
-            f"±{barrier.vix_expected_daily_move_points:,.0f} pts"
-            if barrier.vix_expected_daily_move_points is not None
-            else "—"
+        candle_text, candle_note = _pattern_compact_text(
+            patterns.candle_3m if patterns is not None else None,
+            fallback="NO IMPORTANT CANDLE",
         )
-        vix_speed_bits = []
-        if speed.vix_change_5m_pct is not None:
-            vix_speed_bits.append(f"5m {speed.vix_change_5m_pct:+.1f}%")
-        if speed.vix_change_15m_pct is not None:
-            vix_speed_bits.append(f"15m {speed.vix_change_15m_pct:+.1f}%")
-        vix_note = " · ".join(vix_speed_bits) if vix_speed_bits else "VIX speed warming"
 
         inst = snapshot.institutional_context
         if inst.observations <= 0:
-            inst_text = "MISSING"
-            inst_note = "Data feed nahi kiya / unavailable"
+            inst_text, inst_note = "MISSING", "FII/DII data nahi"
         elif "FII SELLING / DII ABSORPTION" in inst.state:
-            inst_text, inst_note = "FII SELL / DII BUY", f"{inst.observations}/15 sessions"
+            inst_text, inst_note = "FII SELL · DII BUY", f"{inst.observations}/15 sessions"
         elif "FII BUYING / DII SELLING" in inst.state:
-            inst_text, inst_note = "FII BUY / DII SELL", f"{inst.observations}/15 sessions"
-        elif "NET INSTITUTIONAL SUPPORT" in inst.state:
+            inst_text, inst_note = "FII BUY · DII SELL", f"{inst.observations}/15 sessions"
+        elif "SUPPORT" in inst.state:
             inst_text, inst_note = "NET SUPPORT", f"{inst.observations}/15 sessions"
-        elif "NET INSTITUTIONAL PRESSURE" in inst.state:
+        elif "PRESSURE" in inst.state:
             inst_text, inst_note = "NET PRESSURE", f"{inst.observations}/15 sessions"
         else:
             inst_text, inst_note = "MIXED", f"{inst.observations}/15 sessions"
-        if inst.fii_futures_bias not in {"UNAVAILABLE", "BALANCED"}:
-            inst_text += f" | FUT {inst.fii_futures_bias}"
 
-        news = snapshot.news_context
-        news_display = normalized_news_display(news)
-        if news_display.status == "READY":
-            news_text = f"{news_display.bias} / {news_display.risk}"
-        else:
-            news_text = news_display.status
-        news_note = news_display.note
-
+        data_text = "LIVE PASS" if feed_ok else "REFERENCE ONLY"
+        data_note = snapshot.execution_guard.readiness
         _render_compact_cards(
             [
-                ("Probable Range", range_text, f"Confidence {range_item.confidence:.0f}/100"),
-                ("India VIX", f"{barrier.vix_risk} | {vix_daily}", vix_note),
+                ("3M W/M", wm_text, wm_note),
+                ("Special Candle", candle_text, candle_note),
                 ("FII/DII", inst_text, inst_note),
-                ("News", news_text, news_note),
+                ("Data / Entry", data_text, data_note),
             ]
         )
 
-        st.markdown("**🔄 Last Snapshot Se Kya Badla**")
-        changes = snapshot_change_items(snapshot, previous_snapshot)
-        if changes:
-            cards = [
-                (label, value, f"Badlav {delta}" if delta else "No comparable delta")
-                for label, value, delta in changes
-            ]
-            _render_compact_cards(cards)
-        st.caption(snapshot_change_hinglish(snapshot, previous_snapshot))
+        resistance = _level_summary(barrier.nearest_resistance, fallback="R1")
+        support = _level_summary(barrier.nearest_support, fallback="S1")
+        st.caption(f"🔴 Resistance: {resistance}   |   🟢 Support: {support}")
+        st.caption(f"Main blocker: {display_main_blocker(snapshot)}")
+
+        with st.expander("Last snapshot se badlav", expanded=False):
+            changes = snapshot_change_items(snapshot, previous_snapshot)
+            if changes:
+                cards = [
+                    (label, value, f"Badlav {delta}" if delta else "No comparable delta")
+                    for label, value, delta in changes
+                ]
+                _render_compact_cards(cards)
+            st.caption(snapshot_change_hinglish(snapshot, previous_snapshot))
 
 
 def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
@@ -939,13 +980,105 @@ def _decision_evaluations(snapshot: MarketSnapshot) -> dict[str, Any]:
     }
 
 
-def render_decision(snapshot: MarketSnapshot) -> None:
+def render_decision(
+    snapshot: MarketSnapshot, *, audit_only: bool = False
+) -> None:
     item = snapshot.decision
     evaluations = _decision_evaluations(snapshot)
     selected_name = item.final_action.replace(" WITH HEDGE", "")
     leader_name = max(evaluations, key=lambda name: evaluations[name].score)
     displayed_name = selected_name if selected_name in evaluations else leader_name
     displayed_score = evaluations[displayed_name].score
+
+    if audit_only:
+        st.subheader("Strategy Audit — All 5 Setups")
+        st.caption(
+            "Yeh top screen ka duplicate decision card nahi hai. Yahan same One-Brain ke "
+            "5 setup scores, exact structure aur ek main caution audit ke liye ek hi table me hain."
+        )
+        bundle = snapshot.trade_plan
+        plan_map = {
+            "CE BUY": bundle.ce_buy,
+            "PE BUY": bundle.pe_buy,
+            "CE SELL": bundle.ce_sell,
+            "PE SELL": bundle.pe_sell,
+            "IRON CONDOR": bundle.iron_condor,
+        }
+        rows = []
+        for name, strategy in evaluations.items():
+            plan = plan_map.get(name)
+            if plan is not None and plan.available:
+                if plan.is_buy:
+                    premium = (
+                        f"Debit {plan.estimated_debit_points:.2f}"
+                        if plan.estimated_debit_points is not None
+                        else "—"
+                    )
+                else:
+                    premium = (
+                        f"Credit {plan.estimated_credit_points:.2f}"
+                        if plan.estimated_credit_points is not None
+                        else "—"
+                    )
+                risk = (
+                    f"Risk {plan.max_risk_points:.2f}"
+                    if plan.max_risk_points is not None
+                    else "Risk —"
+                )
+                premium_risk = f"{premium} · {risk}"
+            else:
+                premium_risk = "—"
+
+            pick = (
+                "BEST"
+                if item.final_action != "WAIT" and name == selected_name
+                else "REFERENCE"
+                if item.final_action == "WAIT" and name == leader_name
+                else ""
+            )
+            rows.append(
+                {
+                    "Setup": name,
+                    "Fit %": strategy.score,
+                    "Structure": _plan_structure_text(plan),
+                    "Premium / Risk pts": premium_risk,
+                    "Main evidence": strategy.reasons[0] if strategy.reasons else "—",
+                    "Main caution": strategy.cautions[0] if strategy.cautions else "None",
+                    "Status": strategy.status,
+                    "_pick": pick,
+                }
+            )
+
+        rows.sort(key=lambda row: float(row["Fit %"]), reverse=True)
+        frame = pd.DataFrame(rows)
+
+        def _audit_row(row: pd.Series) -> list[str]:
+            if row["_pick"] == "BEST":
+                return [
+                    "background-color: rgba(34, 197, 94, 0.20); font-weight: 700"
+                ] * len(row)
+            if row["_pick"] == "REFERENCE":
+                return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
+            return [""] * len(row)
+
+        styled = (
+            frame.style.apply(_audit_row, axis=1)
+            .hide(axis="columns", subset=["_pick"])
+            .format({"Fit %": "{:.1f}%"}, na_rep="—")
+        )
+        st.dataframe(styled, width="stretch", hide_index=True, row_height=44)
+        if item.final_action == "WAIT":
+            st.info(
+                f"WAIT need {item.wait_need.score:.1f}% hai. {leader_name} sirf amber reference leader hai; "
+                "green entry approval nahi."
+            )
+        else:
+            st.success(
+                f"Selected by same One-Brain: {item.final_action} · Fit {displayed_score:.1f}% · "
+                f"Execution {item.execution_status}."
+            )
+        st.caption("Main blocker: " + display_main_blocker(snapshot))
+        return
 
     st.subheader("Final One-Brain Decision")
     st.caption(
@@ -1022,7 +1155,6 @@ def render_decision(snapshot: MarketSnapshot) -> None:
         )
         st.dataframe(styled, width="stretch", hide_index=True, row_height=44)
 
-
 def render_market_outlook(snapshot: MarketSnapshot) -> None:
     item = snapshot.decision.outlook
     st.subheader("Next 5–15 Min Market Outlook")
@@ -1071,13 +1203,87 @@ def _leg_label(legs: tuple[Any, ...], *, prefix: str = "") -> str:
     return f"{prefix} {text}".strip()
 
 
-def render_trade_plan(snapshot: MarketSnapshot) -> None:
+def render_trade_plan(
+    snapshot: MarketSnapshot, *, compact: bool = False, max_rows: int = 5
+) -> None:
     bundle = snapshot.trade_plan
     evaluations = _decision_evaluations(snapshot)
     score_map = {name: float(item.score) for name, item in evaluations.items()}
     selected = bundle.selected_setup
     reference_leader = max(score_map, key=score_map.get)
     display_pick = selected if selected in score_map else reference_leader
+
+    plan_map = {
+        "CE BUY": bundle.ce_buy,
+        "PE BUY": bundle.pe_buy,
+        "CE SELL": bundle.ce_sell,
+        "PE SELL": bundle.pe_sell,
+        "IRON CONDOR": bundle.iron_condor,
+    }
+    ordered_names = sorted(
+        plan_map, key=lambda name: score_map.get(name, 0.0), reverse=True
+    )
+
+    if compact:
+        st.subheader("🎯 AI Strategy Planner — Top 3")
+        st.caption(
+            "Same One-Brain ke top setups. Fit suitability hai, guaranteed chance nahi. "
+            "Green sirf selected BEST; WAIT me amber reference leader."
+        )
+        rows = []
+        for name in ordered_names[: max(1, int(max_rows))]:
+            plan = plan_map[name]
+            if selected != "WAIT" and name == selected:
+                pick = "BEST"
+                status = "BEST"
+            elif selected == "WAIT" and name == reference_leader:
+                pick = "REFERENCE"
+                status = "REFERENCE"
+            else:
+                pick = ""
+                status = "AVAILABLE" if plan.available else "BLOCKED"
+            rows.append(
+                {
+                    "Setup": name,
+                    "Fit %": score_map.get(name, 0.0),
+                    "Strike / Structure": _plan_structure_text(plan),
+                    "Quality %": plan.quality_score if plan.available else None,
+                    "Status": status,
+                    "_pick": pick,
+                }
+            )
+        frame = pd.DataFrame(rows)
+
+        def _compact_row(row: pd.Series) -> list[str]:
+            if row["_pick"] == "BEST":
+                return [
+                    "background-color: rgba(34, 197, 94, 0.20); font-weight: 700"
+                ] * len(row)
+            if row["_pick"] == "REFERENCE":
+                return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
+            return [""] * len(row)
+
+        styled = (
+            frame.style.apply(_compact_row, axis=1)
+            .hide(axis="columns", subset=["_pick"])
+            .format(
+                {
+                    "Fit %": "{:.1f}%",
+                    "Quality %": lambda value: "—"
+                    if pd.isna(value)
+                    else f"{value:.1f}%",
+                },
+                na_rep="—",
+            )
+        )
+        st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
+        if selected == "WAIT":
+            st.info(
+                f"Final One-Brain WAIT hai. {reference_leader} sirf reference leader hai; entry approval nahi."
+            )
+        elif bundle.blocker != "None":
+            st.warning(f"Planner blocker: {bundle.blocker}")
+        return
 
     st.subheader("AI Strategy & Protected Strike Planner")
     st.caption(
@@ -1095,20 +1301,14 @@ def render_trade_plan(snapshot: MarketSnapshot) -> None:
     c4.metric("Spot", f"{bundle.spot:,.2f}" if bundle.spot is not None else "—")
     st.caption(f"Planner status: {bundle.status}")
 
-    plan_map = {
-        "CE BUY": bundle.ce_buy,
-        "PE BUY": bundle.pe_buy,
-        "CE SELL": bundle.ce_sell,
-        "PE SELL": bundle.pe_sell,
-        "IRON CONDOR": bundle.iron_condor,
-    }
-    ordered_names = sorted(plan_map, key=lambda name: score_map.get(name, 0.0), reverse=True)
     rows = []
     for name in ordered_names:
         plan = plan_map[name]
         breakeven = "—"
         if plan.lower_breakeven is not None and plan.upper_breakeven is not None:
-            breakeven = f"{plan.lower_breakeven:,.2f} to {plan.upper_breakeven:,.2f}"
+            breakeven = (
+                f"{plan.lower_breakeven:,.2f} to {plan.upper_breakeven:,.2f}"
+            )
         elif plan.lower_breakeven is not None:
             breakeven = f"Lower {plan.lower_breakeven:,.2f}"
         elif plan.upper_breakeven is not None:
@@ -1171,7 +1371,9 @@ def render_trade_plan(snapshot: MarketSnapshot) -> None:
         .hide(axis="columns", subset=["_pick"])
         .format(
             {
-                "Max risk pts": lambda value: "—" if pd.isna(value) else f"{value:.2f}",
+                "Max risk pts": lambda value: "—"
+                if pd.isna(value)
+                else f"{value:.2f}",
                 "Brain fit %": "{:.1f}%",
                 "Leg quality %": "{:.1f}%",
             },
