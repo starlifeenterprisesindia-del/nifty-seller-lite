@@ -45,7 +45,6 @@ from ui.components import (
     render_market_session,
     render_news_context,
     render_barrier_map,
-    render_compact_barrier_map,
     render_main_ai_market_view,
     render_option_chain,
     render_option_flow_matrix,
@@ -59,6 +58,51 @@ from ui.components import (
     render_volume,
     render_walls_and_pcr,
 )
+
+
+# Backward-compatible compact-level renderer. Older deployed ui/components.py files
+# do not contain render_compact_barrier_map; do not let that single optional view
+# helper crash the whole app during a partial GitHub upload.
+try:
+    from ui.components import render_compact_barrier_map
+except ImportError:
+    def render_compact_barrier_map(snapshot) -> None:
+        item = getattr(snapshot, "barrier_map", None)
+        if item is None:
+            return
+
+        def _level_value(level, fallback: str) -> tuple[str, str]:
+            if level is None:
+                return "—", fallback
+            lower = getattr(level, "lower", None)
+            upper = getattr(level, "upper", None)
+            if lower is None or upper is None:
+                value = "—"
+            else:
+                value = f"{float(lower):,.0f}–{float(upper):,.0f}"
+            distance = getattr(level, "distance_points", None)
+            strength = getattr(level, "strength", None)
+            note_parts = []
+            if distance is not None:
+                note_parts.append(f"{float(distance):,.0f} pts")
+            if strength is not None:
+                note_parts.append(f"Strength {float(strength):.0f}")
+            return value, " · ".join(note_parts) or fallback
+
+        resistance, resistance_note = _level_value(
+            getattr(item, "nearest_resistance", None), "Resistance unavailable"
+        )
+        support, support_note = _level_value(
+            getattr(item, "nearest_support", None), "Support unavailable"
+        )
+        price = getattr(item, "current_price", None)
+        spot = f"{float(price):,.2f}" if price is not None else "—"
+
+        st.subheader("🧭 Nearest Levels")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Next Resistance", resistance, resistance_note)
+        col2.metric("NIFTY Current", spot)
+        col3.metric("Next Support", support, support_note)
 
 
 install_runtime_presentation_patches()
