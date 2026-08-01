@@ -224,3 +224,24 @@ def test_best_hedge_search_stays_within_configured_window():
     gap = hedge.strike - short.strike
     assert gap >= 100
     assert gap <= 250
+
+
+def test_selected_ce_buy_plan_uses_one_liquid_long_leg_without_hedge():
+    result = calculate_trade_plan(
+        frame=option_frame(),
+        spot=24350,
+        expiry="2026-07-21",
+        levels=levels(),
+        options=option_intelligence(),
+        decision=decision("CE BUY"),
+        market_session=live_session(),
+    )
+    assert result.status == "READY"
+    assert result.selected_setup == "CE BUY"
+    assert result.ce_buy.status == "READY"
+    assert len(result.ce_buy.long_legs) == 1
+    assert result.ce_buy.long_legs[0].side == "CE"
+    assert not result.ce_buy.short_legs
+    assert not result.ce_buy.hedge_legs
+    assert result.ce_buy.estimated_debit_points > 0
+    assert result.ce_buy.max_risk_points == result.ce_buy.estimated_debit_points

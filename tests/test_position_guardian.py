@@ -276,3 +276,102 @@ def test_entry_credit_uses_exact_plan_value_not_rounded_target_reconstruction():
         spot=24350,
     )
     assert record["entry_credit_points"] == pytest.approx(12.0)
+
+
+def test_ce_buy_trade_record_and_guardian_use_long_option_value():
+    long_leg = OptionLeg(
+        role="LONG",
+        side="CE",
+        strike=24350,
+        last_price=20.0,
+        delta=0.5,
+        oi=15000,
+        volume=9000,
+        bid=19.5,
+        ask=20.5,
+        spread_pct=5.0,
+        distance_points=0.0,
+        liquidity_score=85,
+        status="READY",
+    )
+    buy_setup = SetupPlan(
+        name="CE BUY",
+        short_legs=(),
+        hedge_legs=(),
+        estimated_credit_points=None,
+        width_points=None,
+        max_risk_points=20.5,
+        lower_breakeven=None,
+        upper_breakeven=24370.5,
+        quality_score=85,
+        status="READY",
+        reasons=("liquid buy",),
+        blocker="None",
+        long_legs=(long_leg,),
+        estimated_debit_points=20.5,
+    )
+    d = decision()
+    d = FinalDecision(
+        **{
+            **d.__dict__,
+            "final_action": "CE BUY",
+            "hedge_required": False,
+            "ce_buy": evaluation("CE BUY", 88),
+        }
+    )
+    b = bundle()
+    b = TradePlanBundle(
+        **{
+            **b.__dict__,
+            "selected_setup": "CE BUY",
+            "ce_buy": buy_setup,
+        }
+    )
+    g = guard()
+    g = ExecutionGuard(
+        **{
+            **g.__dict__,
+            "selected_setup": "CE BUY",
+            "target_capture_points": 7.0,
+            "target_exit_debit_points": 27.5,
+            "stop_loss_points": 8.0,
+            "stop_exit_debit_points": 12.5,
+            "spot_invalidation_low": 24300,
+        }
+    )
+    record = create_trade_record(
+        captured_at=NOW,
+        decision=d,
+        trade_plan=b,
+        execution_guard=g,
+        lots=1,
+        lot_size=65,
+        spot=24350,
+    )
+    assert record["entry_debit_points"] == 20.5
+    assert record["legs"][0]["role"] == "LONG"
+
+    frame = pd.DataFrame(
+        [
+            {
+                "strike": 24350.0,
+                "side": "CE",
+                "last_price": 28.0,
+                "top_bid_price": 28.0,
+                "top_ask_price": 28.5,
+            }
+        ]
+    )
+    state = discipline(record)
+    result = calculate_position_guardian(
+        discipline_state=state,
+        option_chain=frame,
+        current_expiry="2026-07-21",
+        current_spot=24380,
+        market_session=MarketSession("LIVE", "LIVE", True, "fresh"),
+        option_chain_live=True,
+        as_of=NOW,
+    )
+    assert result.current_debit_points == 28.0
+    assert result.unrealized_pnl_points == 7.5
+    assert result.instruction == "TARGET REACHED"

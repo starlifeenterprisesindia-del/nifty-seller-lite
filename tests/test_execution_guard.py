@@ -326,3 +326,53 @@ def test_timeframe_conflict_blocks_directional_entry():
     result = run(price_action=mixed)
     assert result.readiness == "BLOCKED"
     assert "coherence" in " ".join(result.blockers).lower()
+
+
+def test_ce_buy_uses_debit_risk_math_and_can_be_entry_ready():
+    buy_leg = leg("LONG", "CE", 24350)
+    buy_setup = SetupPlan(
+        name="CE BUY",
+        short_legs=(),
+        hedge_legs=(),
+        estimated_credit_points=None,
+        width_points=None,
+        max_risk_points=20.5,
+        lower_breakeven=None,
+        upper_breakeven=24370.5,
+        quality_score=82,
+        status="READY",
+        reasons=("liquid buy",),
+        blocker="None",
+        long_legs=(buy_leg,),
+        estimated_debit_points=20.5,
+    )
+    d = decision("CE BUY")
+    d = FinalDecision(**{**d.__dict__, "hedge_required": False, "ce_buy": evaluation("CE BUY", 88)})
+    base = trade_plan()
+    tp = TradePlanBundle(
+        **{
+            **base.__dict__,
+            "selected_setup": "CE BUY",
+            "ce_buy": buy_setup,
+        }
+    )
+    state = discipline(confirmations=0)
+    state = DisciplineState(
+        **{
+            **state.__dict__,
+            "last_action": "CE BUY",
+            "signal_history": tuple(
+                {
+                    "captured_at": (NOW - timedelta(minutes=1 - i)).isoformat(),
+                    "action": "CE BUY",
+                    "execution_status": "READY",
+                }
+                for i in range(2)
+            ),
+        }
+    )
+    result = run(decision=d, trade_plan=tp, discipline_state=state)
+    assert result.readiness == "ENTRY READY"
+    assert result.risk_per_lot_rupees == 20.5 * 65
+    assert result.target_exit_debit_points > 20.5
+    assert result.stop_exit_debit_points < 20.5

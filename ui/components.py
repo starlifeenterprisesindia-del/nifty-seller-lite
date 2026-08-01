@@ -928,19 +928,38 @@ def render_news_context(snapshot: MarketSnapshot) -> None:
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
+def _decision_evaluations(snapshot: MarketSnapshot) -> dict[str, Any]:
+    item = snapshot.decision
+    return {
+        "CE BUY": item.ce_buy,
+        "PE BUY": item.pe_buy,
+        "CE SELL": item.ce_sell,
+        "PE SELL": item.pe_sell,
+        "IRON CONDOR": item.iron_condor,
+    }
+
+
 def render_decision(snapshot: MarketSnapshot) -> None:
     item = snapshot.decision
+    evaluations = _decision_evaluations(snapshot)
+    selected_name = item.final_action.replace(" WITH HEDGE", "")
+    leader_name = max(evaluations, key=lambda name: evaluations[name].score)
+    displayed_name = selected_name if selected_name in evaluations else leader_name
+    displayed_score = evaluations[displayed_name].score
+
     st.subheader("Final One-Brain Decision")
     st.caption(
-        "CE Sell, PE Sell and Iron Condor are independent suitability percentages. "
-        "WAIT is a separate uncertainty/risk need, so the four values do not add to 100."
+        "Same AI Brain CE Buy, PE Buy, CE Sell, PE Sell aur Iron Condor ko compare karta hai. "
+        "Sirf ek final action aata hai; scores suitability hain, guaranteed probability nahi."
     )
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("CE Sell", f"{item.ce_sell.score:.1f}%")
-    c2.metric("PE Sell", f"{item.pe_sell.score:.1f}%")
-    c3.metric("Iron Condor", f"{item.iron_condor.score:.1f}%")
-    c4.metric("WAIT Need", f"{item.wait_need.score:.1f}%")
-    c5.metric("Signal State", item.signal_state)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Best Setup", item.final_action)
+    c2.metric(
+        "Brain Fit",
+        f"{displayed_score:.1f}%" if item.final_action != "WAIT" else f"{displayed_score:.1f}% ref",
+    )
+    c3.metric("Decision Confidence", f"{item.decision_confidence:.1f}%")
+    c4.metric("Signal State", item.signal_state)
 
     instant_note = (
         f" | Instant read: {item.instant_action}"
@@ -949,7 +968,6 @@ def render_decision(snapshot: MarketSnapshot) -> None:
     )
     message = (
         f"FINAL ACTION: {item.final_action} | Execution: {item.execution_status} | "
-        f"Decision confidence: {item.decision_confidence:.1f}% | "
         f"Hedge required: {'YES' if item.hedge_required else 'NO'}{instant_note}"
     )
     if item.final_action == "WAIT":
@@ -968,33 +986,41 @@ def render_decision(snapshot: MarketSnapshot) -> None:
         st.write("**Main blocker**")
         st.write(f"• {display_main_blocker(snapshot)}")
 
-    with st.expander("Decision evidence & cautions", expanded=False):
+    with st.expander("All 5 strategy scores & cautions", expanded=False):
         rows = []
-        for strategy in (item.ce_sell, item.pe_sell, item.iron_condor, item.wait_need):
+        for strategy in (*evaluations.values(), item.wait_need):
+            pick = (
+                "BEST"
+                if item.final_action != "WAIT" and strategy.name == selected_name
+                else "REFERENCE LEADER"
+                if item.final_action == "WAIT" and strategy.name == leader_name
+                else ""
+            )
             rows.append(
                 {
                     "Setup": strategy.name,
-                    "Score / Need %": strategy.score,
+                    "Fit / Need %": strategy.score,
+                    "Pick": pick,
                     "Status": strategy.status,
                     "Key evidence": " | ".join(strategy.reasons),
                     "Cautions": " | ".join(strategy.cautions) or "None",
                 }
             )
-        st.dataframe(
-            pd.DataFrame(rows),
-            width="stretch",
-            hide_index=True,
-            row_height=44,
-            column_config={
-                "Setup": st.column_config.TextColumn(width="small"),
-                "Score / Need %": st.column_config.NumberColumn(
-                    format="%.1f%%", width="small"
-                ),
-                "Status": st.column_config.TextColumn(width="small"),
-                "Key evidence": st.column_config.TextColumn(width="large"),
-                "Cautions": st.column_config.TextColumn(width="large"),
-            },
+        frame = pd.DataFrame(rows)
+
+        def _score_row(row: pd.Series) -> list[str]:
+            if row["Pick"] == "BEST":
+                return [
+                    "background-color: rgba(34, 197, 94, 0.18); font-weight: 700"
+                ] * len(row)
+            if row["Pick"] == "REFERENCE LEADER":
+                return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
+            return [""] * len(row)
+
+        styled = frame.style.apply(_score_row, axis=1).format(
+            {"Fit / Need %": "{:.1f}%"}, na_rep="—"
         )
+        st.dataframe(styled, width="stretch", hide_index=True, row_height=44)
 
 
 def render_market_outlook(snapshot: MarketSnapshot) -> None:
@@ -1038,30 +1064,48 @@ def render_market_outlook(snapshot: MarketSnapshot) -> None:
         st.caption("Fake-move checks: " + " | ".join(item.reasons))
 
 
-def _leg_label(legs: tuple[Any, ...]) -> str:
+def _leg_label(legs: tuple[Any, ...], *, prefix: str = "") -> str:
     if not legs:
         return "—"
-    return " + ".join(f"{leg.strike:,.0f} {leg.side}" for leg in legs)
+    text = " + ".join(f"{leg.strike:,.0f} {leg.side}" for leg in legs)
+    return f"{prefix} {text}".strip()
 
 
 def render_trade_plan(snapshot: MarketSnapshot) -> None:
     bundle = snapshot.trade_plan
-    st.subheader("Protected Strike Planner")
+    evaluations = _decision_evaluations(snapshot)
+    score_map = {name: float(item.score) for name, item in evaluations.items()}
+    selected = bundle.selected_setup
+    reference_leader = max(score_map, key=score_map.get)
+    display_pick = selected if selected in score_map else reference_leader
+
+    st.subheader("AI Strategy & Protected Strike Planner")
     st.caption(
-        "This planner does not make a second strategy decision. It converts the final "
-        "one-brain action into read-only short-strike and mandatory hedge candidates "
-        "from the same option-chain snapshot. Credit and risk are point estimates using "
-        "available bid/ask, with LTP only as fallback."
+        "Same Final One-Brain 5 setups compare karta hai. Planner decision dobara nahi banata; "
+        "sirf selected setup ka liquid strike aur seller trade me mandatory hedge nikalta hai."
     )
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Selected Setup", bundle.selected_setup)
-    c2.metric("Planner Status", bundle.status)
+    c1.metric("Selected Setup", selected)
+    c2.metric(
+        "Brain Fit",
+        f"{score_map.get(display_pick, 0.0):.1f}%"
+        + (" ref" if selected == "WAIT" else ""),
+    )
     c3.metric("Expiry", bundle.expiry or "—")
     c4.metric("Spot", f"{bundle.spot:,.2f}" if bundle.spot is not None else "—")
+    st.caption(f"Planner status: {bundle.status}")
 
-    plans = (bundle.ce_sell, bundle.pe_sell, bundle.iron_condor)
+    plan_map = {
+        "CE BUY": bundle.ce_buy,
+        "PE BUY": bundle.pe_buy,
+        "CE SELL": bundle.ce_sell,
+        "PE SELL": bundle.pe_sell,
+        "IRON CONDOR": bundle.iron_condor,
+    }
+    ordered_names = sorted(plan_map, key=lambda name: score_map.get(name, 0.0), reverse=True)
     rows = []
-    for plan in plans:
+    for name in ordered_names:
+        plan = plan_map[name]
         breakeven = "—"
         if plan.lower_breakeven is not None and plan.upper_breakeven is not None:
             breakeven = f"{plan.lower_breakeven:,.2f} to {plan.upper_breakeven:,.2f}"
@@ -1069,31 +1113,83 @@ def render_trade_plan(snapshot: MarketSnapshot) -> None:
             breakeven = f"Lower {plan.lower_breakeven:,.2f}"
         elif plan.upper_breakeven is not None:
             breakeven = f"Upper {plan.upper_breakeven:,.2f}"
+
+        if plan.is_buy:
+            primary = _leg_label(plan.long_legs, prefix="BUY")
+            protection = "—"
+            premium = (
+                f"Debit {plan.estimated_debit_points:.2f}"
+                if plan.estimated_debit_points is not None
+                else "—"
+            )
+        else:
+            primary = _leg_label(plan.short_legs, prefix="SELL")
+            protection = _leg_label(plan.hedge_legs, prefix="BUY")
+            premium = (
+                f"Credit {plan.estimated_credit_points:.2f}"
+                if plan.estimated_credit_points is not None
+                else "—"
+            )
+
+        if selected != "WAIT" and name == selected:
+            pick = "BEST"
+            status = f"BEST · {plan.status}"
+        elif selected == "WAIT" and name == reference_leader:
+            pick = "REFERENCE"
+            status = "REFERENCE BEST"
+        else:
+            pick = ""
+            status = plan.status
         rows.append(
             {
-                "Setup": plan.name,
-                "Sell leg(s)": _leg_label(plan.short_legs),
-                "Hedge leg(s)": _leg_label(plan.hedge_legs),
-                "Est. credit pts": plan.estimated_credit_points,
-                "Wing width pts": plan.width_points,
-                "Est. max risk pts": plan.max_risk_points,
-                "Breakeven": breakeven,
-                "Quality": plan.quality_score,
-                "Status": plan.status,
-                "Blocker": plan.blocker,
+                "Setup": name,
+                "Primary leg(s)": primary,
+                "Protection": protection,
+                "Premium": premium,
+                "Max risk pts": plan.max_risk_points,
+                "Breakeven / Range": breakeven,
+                "Brain fit %": score_map.get(name, 0.0),
+                "Leg quality %": plan.quality_score,
+                "Status": status,
+                "_pick": pick,
             }
         )
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
-    chosen = {
-        "CE SELL": bundle.ce_sell,
-        "PE SELL": bundle.pe_sell,
-        "IRON CONDOR": bundle.iron_condor,
-    }.get(bundle.selected_setup)
+    frame = pd.DataFrame(rows)
+
+    def _planner_row(row: pd.Series) -> list[str]:
+        if row["_pick"] == "BEST":
+            return [
+                "background-color: rgba(34, 197, 94, 0.20); font-weight: 700"
+            ] * len(row)
+        if row["_pick"] == "REFERENCE":
+            return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
+        return [""] * len(row)
+
+    styled = (
+        frame.style.apply(_planner_row, axis=1)
+        .hide(axis="columns", subset=["_pick"])
+        .format(
+            {
+                "Max risk pts": lambda value: "—" if pd.isna(value) else f"{value:.2f}",
+                "Brain fit %": "{:.1f}%",
+                "Leg quality %": "{:.1f}%",
+            },
+            na_rep="—",
+        )
+    )
+    st.dataframe(styled, width="stretch", hide_index=True, row_height=40)
+
+    chosen = plan_map.get(selected)
     if chosen and chosen.available:
         st.write("**Selected-plan evidence**")
         for reason in chosen.reasons or ("No candidate reason available",):
             st.write(f"• {reason}")
+    elif selected == "WAIT":
+        st.info(
+            f"Final action WAIT hai. {reference_leader} {score_map[reference_leader]:.1f}% "
+            "sirf reference leader hai, green approval nahi."
+        )
     if bundle.blocker != "None":
         st.warning(f"Planner blocker: {bundle.blocker}")
 
@@ -1137,10 +1233,10 @@ def render_execution_guard(snapshot: MarketSnapshot) -> None:
             "Lot cap": item.max_lots_cap,
             "Allowed lots": item.allowed_lots,
             "Target capture pts": item.target_capture_points,
-            "Target exit debit pts": item.target_exit_debit_points,
+            "Target option value pts": item.target_exit_debit_points,
             "Target ₹": item.target_profit_rupees,
             "SL trigger pts": item.stop_loss_points,
-            "SL exit debit pts": item.stop_exit_debit_points,
+            "SL option value pts": item.stop_exit_debit_points,
             "SL ₹": item.stop_loss_rupees,
         }
     ]
@@ -1188,10 +1284,11 @@ def render_position_guardian(snapshot: MarketSnapshot) -> None:
         )
         return
 
+    is_buy = item.action in {"CE BUY", "PE BUY"}
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Guardian Instruction", item.instruction)
     c2.metric(
-        "Current Combo Debit",
+        "Current Option Value" if is_buy else "Current Combo Debit",
         f"{item.current_debit_points:.2f} pts"
         if item.current_debit_points is not None
         else "—",
@@ -1212,9 +1309,10 @@ def render_position_guardian(snapshot: MarketSnapshot) -> None:
         else "—",
     )
 
+    entry_label = "Entry debit" if is_buy else "Entry credit"
     summary = (
         f"Action: {item.action or '—'} | Expiry: {item.expiry or '—'} | "
-        f"Lots: {item.lots} × {item.lot_size} | Entry credit: "
+        f"Lots: {item.lots} × {item.lot_size} | {entry_label}: "
         f"{item.entry_credit_points:.2f} pts"
         if item.entry_credit_points is not None
         else f"Action: {item.action or '—'} | Expiry: {item.expiry or '—'} | Lots: {item.lots} × {item.lot_size}"
@@ -1232,8 +1330,8 @@ def render_position_guardian(snapshot: MarketSnapshot) -> None:
         {
             "Entry spot": item.entry_spot,
             "Current spot": item.current_spot,
-            "Target debit": item.target_exit_debit_points,
-            "SL debit": item.stop_exit_debit_points,
+            "Target option value": item.target_exit_debit_points,
+            "SL option value": item.stop_exit_debit_points,
             "Spot invalidation low": item.spot_invalidation_low,
             "Spot invalidation high": item.spot_invalidation_high,
             "Compulsory exit": item.forced_exit_time,

@@ -1,4 +1,24 @@
-# Nifty Seller Lite — V2.15 Pattern Confirmation
+# Nifty Seller Lite — V2.16 AI Strategy Planner
+
+## V2.16 AI strategy planner additions
+
+- The same **Final One-Brain** now compares five setups: **CE Buy, PE Buy, CE Sell with hedge, PE Sell with hedge and Iron Condor with hedges**.
+- Buy setups require directional 3m/15m alignment, supportive volume, sufficient room to the next barrier, usable option flow and a reasonable VIX/premium environment.
+- Slow support-hold or resistance-hold conditions can still favour protected selling; strong aligned momentum can favour option buying.
+- The existing Protected Strike Planner is upgraded instead of adding another noisy dashboard section.
+- Buy plans select one liquid ATM/near-ITM leg; seller plans keep mandatory farther-OTM protection.
+- The selected approved row turns **soft green automatically**. When the Final Action is WAIT, the highest row is only soft amber as a reference and never receives green approval.
+- Brain Fit is strategy suitability, not a guaranteed profit probability.
+- Execution Guard, one-trade discipline, manual trade record and Position Guardian now understand buy as well as protected seller setups.
+
+Expected version:
+
+```text
+2.16.0_AI_STRATEGY_PLANNER
+```
+
+---
+
 
 ## V2.15 pattern confirmation additions
 

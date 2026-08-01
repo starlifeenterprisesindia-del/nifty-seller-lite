@@ -1,0 +1,42 @@
+NIFTY SELLER LITE — V2.16 AI STRATEGY PLANNER
+Version: 2.16.0_AI_STRATEGY_PLANNER
+
+1. Final One-Brain now compares five setups
+   - CE BUY
+   - PE BUY
+   - CE SELL WITH HEDGE
+   - PE SELL WITH HEDGE
+   - IRON CONDOR WITH HEDGES
+
+2. Buy-vs-sell suitability logic
+   - Strong aligned 3m/15m momentum, supportive volume, directional room,
+     option flow, Top-7, institutional context, VIX and W/M/candle evidence
+     can favour CE BUY or PE BUY.
+   - Slower support-hold/resistance-hold and seller-friendly premium conditions
+     can continue to favour protected PE SELL or CE SELL.
+   - Range/mixed evidence can favour IRON CONDOR.
+   - Existing score, separation, WAIT, fake-move, freshness and signal-memory
+     gates still apply.
+
+3. Existing planner upgraded; no second noisy table
+   - Buy setup: one liquid ATM/near-ITM long option.
+   - Sell setup: protected vertical with mandatory farther-OTM hedge.
+   - Iron Condor: two protected wings.
+   - Planner never re-ranks the Final One-Brain decision.
+
+4. Automatic row colour
+   - Approved selected setup: soft GREEN + BEST.
+   - Final Action WAIT: highest score is soft AMBER + REFERENCE BEST.
+   - WAIT reference never receives green approval.
+
+5. Execution and monitoring
+   - Execution Guard supports debit-risk math for CE/PE BUY.
+   - One-trade discipline supports buy actions.
+   - Manual trade record stores LONG legs and entry debit.
+   - Position Guardian monitors long-option value, buy target and buy SL.
+
+6. Reports and presentation
+   - Final decision expander and full audit PDF include all five setups.
+   - Planner columns are generic: Primary, Protection, Premium, Risk,
+     Breakeven/Range, Brain Fit, Leg Quality and Status.
+   - Brain Fit remains suitability, not guaranteed profit probability.

@@ -474,3 +474,41 @@ def test_conflicting_wm_and_candle_add_wait_caution_not_a_second_action():
     cautions = result.ce_sell.cautions + result.pe_sell.cautions + result.iron_condor.cautions
     assert any("W/M and candle evidence conflict" in item for item in cautions)
     assert result.final_action in {"PE SELL WITH HEDGE", "CE SELL WITH HEDGE", "IRON CONDOR WITH HEDGE", "WAIT"}
+
+
+def test_strong_aligned_momentum_can_select_ce_buy_from_same_brain():
+    from types import SimpleNamespace
+
+    kwargs = common_kwargs()
+    kwargs["price_action"] = SimpleNamespace(
+        combined_state="BULLISH",
+        relationship="3m/15m BULLISH ALIGNED",
+        three_minute=SimpleNamespace(invalidation_level=24310),
+        fifteen_minute=SimpleNamespace(invalidation_level=24290),
+    )
+    kwargs["volume"] = SimpleNamespace(
+        status="READY", overall_view="BULLISH PARTICIPATION"
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.final_action == "CE BUY"
+    assert result.ce_buy.score > result.pe_sell.score
+    assert result.hedge_required is False
+
+
+def test_strong_aligned_bearish_momentum_can_select_pe_buy_from_same_brain():
+    from types import SimpleNamespace
+
+    kwargs = _bearish_kwargs()
+    kwargs["price_action"] = SimpleNamespace(
+        combined_state="BEARISH",
+        relationship="3m/15m BEARISH ALIGNED",
+        three_minute=SimpleNamespace(invalidation_level=24390),
+        fifteen_minute=SimpleNamespace(invalidation_level=24410),
+    )
+    kwargs["volume"] = SimpleNamespace(
+        status="READY", overall_view="BEARISH PARTICIPATION"
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.final_action == "PE BUY"
+    assert result.pe_buy.score > result.ce_sell.score
+    assert result.hedge_required is False

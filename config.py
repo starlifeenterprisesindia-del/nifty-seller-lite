@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.15.0_PATTERN_CONFIRMATION"
+    version: str = "2.16.0_AI_STRATEGY_PLANNER"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -165,6 +165,17 @@ class AppConfig:
     trade_min_credit_points: float = 1.0
     trade_min_plan_quality: float = 55.0
     trade_level_clearance_points: float = 10.0
+
+    # Directional option-buy planner. The same Final One-Brain must first select
+    # CE BUY or PE BUY; these settings only choose a liquid ATM/near-ITM leg.
+    buy_target_abs_delta: float = 0.50
+    buy_min_abs_delta: float = 0.30
+    buy_max_abs_delta: float = 0.72
+    buy_target_distance_pct: float = 0.15
+    buy_distance_tolerance_pct: float = 0.45
+    buy_min_option_premium: float = 4.0
+    buy_min_plan_quality: float = 58.0
+    buy_min_directional_room_points: float = 12.0
 
     # Read-only execution guard and one-trade discipline. The guard consumes the
     # final decision and protected strike plan; it cannot choose a strategy or place

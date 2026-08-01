@@ -562,6 +562,8 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     )
     decision_rows = []
     for item in (
+        decision.ce_buy,
+        decision.pe_buy,
         decision.ce_sell,
         decision.pe_sell,
         decision.iron_condor,
@@ -1326,7 +1328,14 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     )
     plan = snapshot.trade_plan
     plan_rows = []
-    for setup in (plan.ce_sell, plan.pe_sell, plan.iron_condor):
+    decision_scores = {
+        "CE BUY": decision.ce_buy.score,
+        "PE BUY": decision.pe_buy.score,
+        "CE SELL": decision.ce_sell.score,
+        "PE SELL": decision.pe_sell.score,
+        "IRON CONDOR": decision.iron_condor.score,
+    }
+    for setup in (plan.ce_buy, plan.pe_buy, plan.ce_sell, plan.pe_sell, plan.iron_condor):
         breakeven = "-"
         if setup.lower_breakeven is not None and setup.upper_breakeven is not None:
             breakeven = f"{setup.lower_breakeven:,.2f} to {setup.upper_breakeven:,.2f}"
@@ -1334,15 +1343,28 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
             breakeven = f"Lower {setup.lower_breakeven:,.2f}"
         elif setup.upper_breakeven is not None:
             breakeven = f"Upper {setup.upper_breakeven:,.2f}"
+        primary = (
+            "BUY " + _trade_leg_text(setup.long_legs)
+            if setup.is_buy
+            else "SELL " + _trade_leg_text(setup.short_legs)
+        )
+        protection = "-" if setup.is_buy else "BUY " + _trade_leg_text(setup.hedge_legs)
+        premium = (
+            f"Debit {setup.estimated_debit_points:.2f}"
+            if setup.estimated_debit_points is not None
+            else f"Credit {setup.estimated_credit_points:.2f}"
+            if setup.estimated_credit_points is not None
+            else "-"
+        )
         plan_rows.append(
             [
                 setup.name,
-                _trade_leg_text(setup.short_legs),
-                _trade_leg_text(setup.hedge_legs),
-                setup.estimated_credit_points,
-                setup.width_points,
+                primary,
+                protection,
+                premium,
                 setup.max_risk_points,
                 breakeven,
+                decision_scores.get(setup.name, 0.0),
                 setup.quality_score,
                 setup.status,
                 setup.blocker,
@@ -1352,12 +1374,12 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         _table(
             [
                 "Setup",
-                "Sell legs",
-                "Hedge legs",
-                "Credit",
-                "Width",
+                "Primary",
+                "Protection",
+                "Premium",
                 "Max risk",
                 "Breakeven",
+                "Brain fit",
                 "Quality",
                 "Status",
                 "Blocker",

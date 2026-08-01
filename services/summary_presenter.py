@@ -124,6 +124,12 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
     if not reasons:
         reasons.append("available signals abhi mixed/limited hain")
     explanation = base + " kyunki " + ", ".join(reasons[:4]) + "." + barrier_text
+    if decision.final_action in {"CE BUY", "PE BUY"}:
+        explanation += " Brain ko directional momentum option buying ke liye seller setup se zyada suitable laga."
+    elif decision.final_action in {"CE SELL WITH HEDGE", "PE SELL WITH HEDGE"}:
+        explanation += " Brain ko directional move ke against protected premium selling zyada suitable lagi."
+    elif decision.final_action == "IRON CONDOR WITH HEDGE":
+        explanation += " Brain ko balanced range ke liye protected Iron Condor zyada suitable laga."
     if decision.final_action == "WAIT":
         if snapshot.market_session.is_live:
             explanation += " Isliye fresh entry ke liye abhi WAIT better hai jab tak confirmation strong na ho."
@@ -136,6 +142,8 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
 
 def _plan_by_name(snapshot: MarketSnapshot, name: str) -> SetupPlan | None:
     return {
+        "CE BUY": snapshot.trade_plan.ce_buy,
+        "PE BUY": snapshot.trade_plan.pe_buy,
         "CE SELL": snapshot.trade_plan.ce_sell,
         "PE SELL": snapshot.trade_plan.pe_sell,
         "IRON CONDOR": snapshot.trade_plan.iron_condor,
@@ -143,28 +151,19 @@ def _plan_by_name(snapshot: MarketSnapshot, name: str) -> SetupPlan | None:
 
 
 def best_existing_candidate(snapshot: MarketSnapshot) -> tuple[str, float, SetupPlan | None, bool]:
-    """Pick a display candidate only from scores already produced by the One-Brain.
-
-    `is_selected` is True only when Final One-Brain has actually selected that setup.
-    When Final Action is WAIT, the highest existing strategy score is shown strictly as
-    a reference candidate; this function creates no new strategy score.
-    """
+    """Expose the selected setup or highest same-brain reference candidate."""
 
     decision = snapshot.decision
     selected = decision.final_action.replace(" WITH HEDGE", "")
-    if selected in {"CE SELL", "PE SELL", "IRON CONDOR"}:
-        score = {
-            "CE SELL": decision.ce_sell.score,
-            "PE SELL": decision.pe_sell.score,
-            "IRON CONDOR": decision.iron_condor.score,
-        }[selected]
-        return selected, float(score), _plan_by_name(snapshot, selected), True
-
     scores = {
+        "CE BUY": float(decision.ce_buy.score),
+        "PE BUY": float(decision.pe_buy.score),
         "CE SELL": float(decision.ce_sell.score),
         "PE SELL": float(decision.pe_sell.score),
         "IRON CONDOR": float(decision.iron_condor.score),
     }
+    if selected in scores:
+        return selected, scores[selected], _plan_by_name(snapshot, selected), True
     name = max(scores, key=scores.get)
     return name, scores[name], _plan_by_name(snapshot, name), False
 

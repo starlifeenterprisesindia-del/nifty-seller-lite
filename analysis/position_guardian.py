@@ -21,6 +21,8 @@ from models import (
 
 def _selected_plan(bundle: TradePlanBundle) -> SetupPlan | None:
     return {
+        "CE BUY": bundle.ce_buy,
+        "PE BUY": bundle.pe_buy,
         "CE SELL": bundle.ce_sell,
         "PE SELL": bundle.pe_sell,
         "IRON CONDOR": bundle.iron_condor,
@@ -60,7 +62,11 @@ def create_trade_record(
         raise ValueError("Lot size must be positive")
 
     legs: list[dict[str, Any]] = []
-    for role, collection in (("SHORT", plan.short_legs), ("HEDGE", plan.hedge_legs)):
+    for role, collection in (
+        ("SHORT", plan.short_legs),
+        ("HEDGE", plan.hedge_legs),
+        ("LONG", plan.long_legs),
+    ):
         for leg in collection:
             price = _entry_price(role, leg)
             if price is None or price <= 0:
@@ -75,7 +81,7 @@ def create_trade_record(
             )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "OPEN",
         "opened_at": captured_at.isoformat(),
         "closed_at": "",
@@ -88,6 +94,7 @@ def create_trade_record(
         # Freeze the planner's exact conservative entry-credit estimate instead of
         # reconstructing it from rounded target fields.
         "entry_credit_points": plan.estimated_credit_points,
+        "entry_debit_points": plan.estimated_debit_points,
         "max_risk_points": plan.max_risk_points,
         "target_capture_points": execution_guard.target_capture_points,
         "target_exit_debit_points": execution_guard.target_exit_debit_points,
@@ -144,16 +151,22 @@ def _closed_guardian(
     pnl = _number(record.get("realized_pnl_rupees"))
     debit = _number(record.get("exit_debit_points"))
     outcome = str(record.get("status") or "CLOSED").upper()
+    action = str(record.get("action") or "")
+    entry_value = (
+        _number(record.get("entry_debit_points"))
+        if action in {"CE BUY", "PE BUY"}
+        else _number(record.get("entry_credit_points"))
+    )
     return PositionGuardian(
         as_of=as_of,
-        action=str(record.get("action") or ""),
+        action=action,
         expiry=str(record.get("expiry") or "") or None,
         opened_at=str(record.get("opened_at") or ""),
         lots=max(0, int(record.get("lots") or 0)),
         lot_size=max(0, int(record.get("lot_size") or 0)),
         entry_spot=_number(record.get("entry_spot")),
         current_spot=current_spot,
-        entry_credit_points=_number(record.get("entry_credit_points")),
+        entry_credit_points=entry_value,
         current_debit_points=debit,
         unrealized_pnl_points=None,
         unrealized_pnl_rupees=pnl,
@@ -199,6 +212,8 @@ def calculate_position_guardian(
     lots = max(0, int(record.get("lots") or 0))
     lot_size = max(0, int(record.get("lot_size") or 0))
     entry_credit = _number(record.get("entry_credit_points"))
+    entry_debit = _number(record.get("entry_debit_points"))
+    is_buy = action in {"CE BUY", "PE BUY"}
     target_exit = _number(record.get("target_exit_debit_points"))
     stop_exit = _number(record.get("stop_exit_debit_points"))
     invalidation_low = _number(record.get("spot_invalidation_low"))
@@ -213,12 +228,15 @@ def calculate_position_guardian(
         blockers.append("Open-trade leg record is missing")
     if lots < 1 or lot_size < 1:
         blockers.append("Open-trade lot information is invalid")
-    if entry_credit is None:
+    if is_buy and entry_debit is None:
+        blockers.append("Entry debit is missing")
+    elif not is_buy and entry_credit is None:
         blockers.append("Entry credit is missing")
 
     monitored_legs: list[PositionLegMonitor] = []
     short_cost = 0.0
     hedge_value = 0.0
+    long_value = 0.0
     for item in legs_raw:
         if not isinstance(item, dict):
             blockers.append("A stored trade leg is invalid")
@@ -227,7 +245,7 @@ def calculate_position_guardian(
         side = str(item.get("side") or "").upper()
         strike = _number(item.get("strike"))
         entry_price = _number(item.get("entry_price"))
-        if role not in {"SHORT", "HEDGE"} or side not in {"CE", "PE"}:
+        if role not in {"SHORT", "HEDGE", "LONG"} or side not in {"CE", "PE"}:
             blockers.append("A stored trade leg has an invalid role or side")
             continue
         if strike is None or entry_price is None:
@@ -243,8 +261,12 @@ def calculate_position_guardian(
             short_cost += current_price
             contribution = entry_price - current_price
             status = "READY"
-        else:
+        elif role == "HEDGE":
             hedge_value += current_price
+            contribution = current_price - entry_price
+            status = "READY"
+        else:
+            long_value += current_price
             contribution = current_price - entry_price
             status = "READY"
         monitored_legs.append(
@@ -265,15 +287,20 @@ def calculate_position_guardian(
     pnl_points = None
     pnl_rupees = None
     progress = None
-    if not blockers and entry_credit is not None:
-        current_debit = round(max(0.0, short_cost - hedge_value), 2)
-        pnl_points = round(entry_credit - current_debit, 2)
-        pnl_rupees = round(pnl_points * lot_size * lots, 2)
-        target_capture = _number(record.get("target_capture_points"))
-        if target_capture is not None and target_capture > 0:
-            progress = round(
-                clamp(pnl_points / target_capture * 100.0, -200.0, 200.0), 1
-            )
+    if not blockers:
+        if is_buy and entry_debit is not None:
+            current_debit = round(max(0.0, long_value), 2)
+            pnl_points = round(current_debit - entry_debit, 2)
+        elif not is_buy and entry_credit is not None:
+            current_debit = round(max(0.0, short_cost - hedge_value), 2)
+            pnl_points = round(entry_credit - current_debit, 2)
+        if pnl_points is not None:
+            pnl_rupees = round(pnl_points * lot_size * lots, 2)
+            target_capture = _number(record.get("target_capture_points"))
+            if target_capture is not None and target_capture > 0:
+                progress = round(
+                    clamp(pnl_points / target_capture * 100.0, -200.0, 200.0), 1
+                )
 
     if blockers:
         instruction = "DATA BLOCKED"
@@ -305,19 +332,19 @@ def calculate_position_guardian(
     elif (
         stop_exit is not None
         and current_debit is not None
-        and current_debit >= stop_exit
+        and ((is_buy and current_debit <= stop_exit) or (not is_buy and current_debit >= stop_exit))
     ):
         instruction = "SL TRIGGERED"
         status = "EXIT ALERT"
-        reasons.append("Protected-combination debit reached the stored SL threshold")
+        reasons.append("Option value reached the stored SL threshold")
     elif (
         target_exit is not None
         and current_debit is not None
-        and current_debit <= target_exit
+        and ((is_buy and current_debit >= target_exit) or (not is_buy and current_debit <= target_exit))
     ):
         instruction = "TARGET REACHED"
         status = "TARGET ALERT"
-        reasons.append("Protected-combination debit reached the stored target")
+        reasons.append("Option value reached the stored target")
     elif progress is not None and progress >= CONFIG.position_profit_protect_pct:
         instruction = "PROTECT PROFIT"
         status = "MANAGE"
@@ -340,7 +367,7 @@ def calculate_position_guardian(
         lot_size=lot_size,
         entry_spot=_number(record.get("entry_spot")),
         current_spot=current_spot,
-        entry_credit_points=entry_credit,
+        entry_credit_points=entry_debit if is_buy else entry_credit,
         current_debit_points=current_debit,
         unrealized_pnl_points=pnl_points,
         unrealized_pnl_rupees=pnl_rupees,

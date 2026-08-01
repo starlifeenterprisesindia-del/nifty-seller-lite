@@ -1,0 +1,37 @@
+V2.16 UPDATE-ONLY FILES
+
+Root:
+- app.py
+- config.py
+- models.py
+- README.md
+- ARCHITECTURE.md
+- DEPLOY_V2_16.txt
+- V2_16_CHANGELOG.txt
+- V2_16_TEST_REPORT.txt
+- V2_16_UPDATE_LIST.txt
+
+analysis:
+- analysis/decision.py
+- analysis/trade_plan.py
+- analysis/execution_guard.py
+- analysis/position_guardian.py
+
+services:
+- services/snapshot_service.py
+- services/summary_presenter.py
+- services/pdf_report.py
+
+ui:
+- ui/components.py
+
+tests:
+- tests/test_decision.py
+- tests/test_trade_plan.py
+- tests/test_execution_guard.py
+- tests/test_position_guardian.py
+
+Do not replace/delete:
+- .streamlit/secrets.toml
+- runtime data/ folder
+- broker credentials

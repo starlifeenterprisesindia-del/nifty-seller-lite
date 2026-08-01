@@ -64,8 +64,8 @@ install_runtime_presentation_patches()
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.15 Pattern Confirmation — one canonical strategy brain with bounded 3-minute W/M and special-candle evidence, "
-    "compact Hinglish results, live Barrier + Range Map, protected hedge reference and India VIX context. "
+    "V2.16 AI Strategy Planner — one canonical brain compares CE Buy, PE Buy, CE Sell, PE Sell and Iron Condor, "
+    "then resolves a compact strike/hedge plan with green BEST highlighting and strict WAIT safety. "
     "Read only; no order placement."
 )
 

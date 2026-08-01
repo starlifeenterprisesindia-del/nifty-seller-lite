@@ -1,0 +1,24 @@
+NIFTY SELLER LITE — V2.16 TEST REPORT
+
+Test command:
+pytest -q --ignore=tests/test_app_smoke.py
+
+Result:
+172 passed
+
+Additional validation:
+- Python compileall: PASS
+- Existing seller/condor decision tests: PASS
+- Existing W/M and special-candle bounded-brain tests: PASS
+- CE BUY same-brain selection test: PASS
+- PE BUY same-brain selection test: PASS
+- CE BUY long-leg planner test: PASS
+- CE BUY debit-risk Execution Guard test: PASS
+- CE BUY manual record and Position Guardian target test: PASS
+- PDF/report tests: PASS
+
+Environment limitation:
+The Streamlit package is not installed in this build sandbox, so
+ tests/test_app_smoke.py could not be collected here. All 172 non-Streamlit
+ automated tests passed. Perform one normal Streamlit deployment smoke check
+ after upload/reboot.

@@ -473,6 +473,16 @@ class MarketOutlook:
     status: str
 
 
+def _unavailable_strategy(name: str) -> StrategyEvaluation:
+    return StrategyEvaluation(
+        name=name,
+        score=0.0,
+        status="UNAVAILABLE",
+        reasons=("Strategy evidence unavailable",),
+        cautions=(),
+    )
+
+
 @dataclass(frozen=True)
 class FinalDecision:
     ce_sell: StrategyEvaluation
@@ -504,6 +514,14 @@ class FinalDecision:
             reasons=(),
             status="UNAVAILABLE",
         )
+    )
+    # Directional option-buy suitability is produced by the same canonical brain.
+    # Defaults preserve backward compatibility for old snapshots/tests.
+    ce_buy: StrategyEvaluation = field(
+        default_factory=lambda: _unavailable_strategy("CE BUY")
+    )
+    pe_buy: StrategyEvaluation = field(
+        default_factory=lambda: _unavailable_strategy("PE BUY")
     )
 
 
@@ -538,10 +556,17 @@ class SetupPlan:
     status: str
     reasons: tuple[str, ...]
     blocker: str
+    # Buy plans use one primary long leg and a debit instead of short+hedge credit.
+    long_legs: tuple[OptionLeg, ...] = ()
+    estimated_debit_points: float | None = None
 
     @property
     def available(self) -> bool:
-        return bool(self.short_legs and self.hedge_legs)
+        return bool(self.long_legs or (self.short_legs and self.hedge_legs))
+
+    @property
+    def is_buy(self) -> bool:
+        return bool(self.long_legs)
 
     @classmethod
     def unavailable(cls, name: str, blocker: str) -> "SetupPlan":
@@ -558,6 +583,8 @@ class SetupPlan:
             status="UNAVAILABLE",
             reasons=(),
             blocker=blocker,
+            long_legs=(),
+            estimated_debit_points=None,
         )
 
 
@@ -572,6 +599,12 @@ class TradePlanBundle:
     selected_setup: str
     status: str
     blocker: str
+    ce_buy: SetupPlan = field(
+        default_factory=lambda: SetupPlan.unavailable("CE BUY", "Buy plan unavailable")
+    )
+    pe_buy: SetupPlan = field(
+        default_factory=lambda: SetupPlan.unavailable("PE BUY", "Buy plan unavailable")
+    )
 
 
 @dataclass(frozen=True)

@@ -72,6 +72,152 @@ def _delta_score(delta: float | None) -> float:
     )
 
 
+def _buy_delta_score(delta: float | None) -> float:
+    if delta is None:
+        return 42.0
+    absolute = abs(delta)
+    if absolute < CONFIG.buy_min_abs_delta or absolute > CONFIG.buy_max_abs_delta:
+        return 12.0
+    return clamp(
+        100.0
+        - abs(absolute - CONFIG.buy_target_abs_delta)
+        / max(CONFIG.buy_target_abs_delta, 0.01)
+        * 100.0,
+        0.0,
+        100.0,
+    )
+
+
+def _buy_level_score(
+    side: str, strike: float, premium: float, spot: float, levels: LevelBundle
+) -> tuple[float, str]:
+    if levels.status != "READY":
+        return 40.0, "Directional room unavailable"
+    required_move = max(0.0, premium + abs(strike - spot))
+    room = levels.upside_room if side == "CE" else levels.downside_room
+    if room is None:
+        return 40.0, "Directional room unavailable"
+    if room >= max(CONFIG.buy_min_directional_room_points, required_move * 1.15):
+        return 92.0, f"Directional room {room:.1f} pts supports breakeven"
+    if room >= CONFIG.buy_min_directional_room_points:
+        return 65.0, f"Directional room {room:.1f} pts is usable"
+    return 15.0, f"Directional room only {room:.1f} pts"
+
+
+def _buy_candidate_rows(frame: pd.DataFrame, side: str, spot: float) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
+    rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
+    rows = rows.dropna(subset=["strike", "last_price"])
+    rows = rows[rows["last_price"] >= CONFIG.buy_min_option_premium]
+    # Keep ATM and one/two near-ITM/OTM strikes. Liquidity and delta decide the winner.
+    max_distance = max(100.0, spot * 0.006)
+    rows = rows[rows["strike"].sub(spot).abs() <= max_distance]
+    return rows.sort_values("strike").reset_index(drop=True)
+
+
+def _select_long_leg(
+    frame: pd.DataFrame,
+    *,
+    side: str,
+    spot: float,
+    levels: LevelBundle,
+) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
+    rows = _buy_candidate_rows(frame, side, spot)
+    if rows.empty:
+        return None, 0.0, (f"No usable ATM/near-ITM {side} buy row",)
+    oi_series = rows.get("oi", pd.Series(dtype=float))
+    volume_series = rows.get("volume", pd.Series(dtype=float))
+    scored: list[tuple[float, pd.Series, float | None, float, str]] = []
+    for _, row in rows.iterrows():
+        strike = float(row["strike"])
+        ask = _number(row.get("top_ask_price")) or _number(row.get("last_price"))
+        if ask is None or ask <= 0:
+            continue
+        spread_pct, spread_score = _spread_metrics(row)
+        oi_score = _percentile_score(_number(row.get("oi")), oi_series)
+        volume_score = _percentile_score(_number(row.get("volume")), volume_series)
+        liquidity = spread_score * 0.50 + oi_score * 0.25 + volume_score * 0.25
+        distance_pct = abs(strike - spot) / max(spot, 1.0) * 100.0
+        distance_score = clamp(
+            100.0
+            - abs(distance_pct - CONFIG.buy_target_distance_pct)
+            / max(CONFIG.buy_distance_tolerance_pct, 0.01)
+            * 100.0,
+            0.0,
+            100.0,
+        )
+        level_score, level_reason = _buy_level_score(side, strike, ask, spot, levels)
+        total = (
+            liquidity * 0.42
+            + _buy_delta_score(_number(row.get("delta"))) * 0.28
+            + distance_score * 0.12
+            + level_score * 0.18
+        )
+        scored.append((total, row, spread_pct, liquidity, level_reason))
+    if not scored:
+        return None, 0.0, (f"No executable {side} buy price",)
+    score, row, spread_pct, liquidity, level_reason = max(
+        scored, key=lambda item: item[0]
+    )
+    leg = _row_to_leg(
+        row,
+        role="LONG",
+        side=side,
+        spot=spot,
+        liquidity_score=liquidity,
+        spread_pct=spread_pct,
+    )
+    return leg, round(clamp(score, 0.0, 100.0), 1), (
+        level_reason,
+        f"Delta {leg.delta:.2f}" if leg.delta is not None else "Delta unavailable",
+        f"Liquidity score {liquidity:.1f}/100",
+    )
+
+
+def _buy_plan(
+    *,
+    name: str,
+    side: str,
+    frame: pd.DataFrame,
+    spot: float,
+    levels: LevelBundle,
+) -> SetupPlan:
+    leg, quality, reasons = _select_long_leg(
+        frame, side=side, spot=spot, levels=levels
+    )
+    if leg is None:
+        return SetupPlan.unavailable(name, reasons[0])
+    debit = _buy_price(leg)
+    if debit is None or debit <= 0:
+        return SetupPlan.unavailable(name, "Executable ask/LTP is missing")
+    lower_be = leg.strike - debit if side == "PE" else None
+    upper_be = leg.strike + debit if side == "CE" else None
+    status = "READY" if quality >= CONFIG.buy_min_plan_quality else "CAUTION"
+    return SetupPlan(
+        name=name,
+        short_legs=(),
+        hedge_legs=(),
+        estimated_credit_points=None,
+        width_points=None,
+        max_risk_points=round(debit, 2),
+        lower_breakeven=round(lower_be, 2) if lower_be is not None else None,
+        upper_breakeven=round(upper_be, 2) if upper_be is not None else None,
+        quality_score=quality,
+        status=status,
+        reasons=reasons,
+        blocker=(
+            "None"
+            if status == "READY"
+            else "Buy-leg quality is below the ready threshold"
+        ),
+        long_legs=(leg,),
+        estimated_debit_points=round(debit, 2),
+    )
+
+
 def _level_score(side: str, strike: float, levels: LevelBundle) -> tuple[float, str]:
     if levels.status != "READY":
         return 45.0, "Support/resistance unavailable"
@@ -416,7 +562,8 @@ def _apply_runtime_status(
             status="ALTERNATIVE",
             blocker="Not selected by the final one-brain decision",
         )
-    if plan.quality_score < CONFIG.trade_min_plan_quality:
+    quality_floor = CONFIG.buy_min_plan_quality if plan.is_buy else CONFIG.trade_min_plan_quality
+    if plan.quality_score < quality_floor:
         return replace(
             plan, status="BLOCKED", blocker="Selected candidate quality is too low"
         )
@@ -433,70 +580,56 @@ def calculate_trade_plan(
     decision: FinalDecision,
     market_session: MarketSession,
 ) -> TradePlanBundle:
-    """Select protected strike candidates after, never instead of, the final brain.
+    """Convert the same One-Brain choice into a concrete option structure.
 
-    This module cannot change CE/PE/Condor/WAIT scores or the final action. It only
-    converts the already-decided setup into a read-only, hedged candidate plan using
-    the same option-chain snapshot.
+    The brain compares CE BUY, PE BUY, CE SELL, PE SELL and IRON CONDOR. This
+    planner never re-ranks them; it only selects a liquid primary leg and mandatory
+    protection for seller structures from the same option-chain snapshot.
     """
 
     if frame.empty or spot <= 0 or not expiry:
-        unavailable = SetupPlan.unavailable(
-            "CE SELL", "Option chain or expiry unavailable"
-        )
+        reason = "Option chain or expiry unavailable"
         return TradePlanBundle(
             as_of=options.as_of,
             expiry=expiry,
             spot=spot if spot > 0 else None,
-            ce_sell=unavailable,
-            pe_sell=SetupPlan.unavailable(
-                "PE SELL", "Option chain or expiry unavailable"
-            ),
-            iron_condor=SetupPlan.unavailable(
-                "IRON CONDOR", "Option chain or expiry unavailable"
-            ),
+            ce_sell=SetupPlan.unavailable("CE SELL", reason),
+            pe_sell=SetupPlan.unavailable("PE SELL", reason),
+            iron_condor=SetupPlan.unavailable("IRON CONDOR", reason),
+            ce_buy=SetupPlan.unavailable("CE BUY", reason),
+            pe_buy=SetupPlan.unavailable("PE BUY", reason),
             selected_setup="WAIT",
             status="UNAVAILABLE",
-            blocker="Option chain or expiry unavailable",
+            blocker=reason,
         )
 
-    ce = _vertical_plan(
-        name="CE SELL",
-        side="CE",
-        frame=frame,
-        spot=spot,
-        levels=levels,
-        options=options,
+    ce_sell = _vertical_plan(
+        name="CE SELL", side="CE", frame=frame, spot=spot, levels=levels, options=options
     )
-    pe = _vertical_plan(
-        name="PE SELL",
-        side="PE",
-        frame=frame,
-        spot=spot,
-        levels=levels,
-        options=options,
+    pe_sell = _vertical_plan(
+        name="PE SELL", side="PE", frame=frame, spot=spot, levels=levels, options=options
     )
-    condor = _condor_plan(ce, pe)
+    condor = _condor_plan(ce_sell, pe_sell)
+    ce_buy = _buy_plan(name="CE BUY", side="CE", frame=frame, spot=spot, levels=levels)
+    pe_buy = _buy_plan(name="PE BUY", side="PE", frame=frame, spot=spot, levels=levels)
 
     selected = decision.final_action.replace(" WITH HEDGE", "")
-    ce = _apply_runtime_status(
-        ce,
-        selected=selected == "CE SELL",
-        market_session=market_session,
-        decision=decision,
-    )
-    pe = _apply_runtime_status(
-        pe,
-        selected=selected == "PE SELL",
-        market_session=market_session,
-        decision=decision,
-    )
-    condor = _apply_runtime_status(
-        condor,
-        selected=selected == "IRON CONDOR",
-        market_session=market_session,
-        decision=decision,
-    )
+    plans = {
+        "CE BUY": ce_buy,
+        "PE BUY": pe_buy,
+        "CE SELL": ce_sell,
+        "PE SELL": pe_sell,
+        "IRON CONDOR": condor,
+    }
+    plans = {
+        name: _apply_runtime_status(
+            plan,
+            selected=selected == name,
+            market_session=market_session,
+            decision=decision,
+        )
+        for name, plan in plans.items()
+    }
 
     if not market_session.is_live:
         status = "REFERENCE ONLY"
@@ -505,16 +638,10 @@ def calculate_trade_plan(
         status = "BLOCKED"
         blocker = decision.blocker
     else:
-        selected_plan = {
-            "CE SELL": ce,
-            "PE SELL": pe,
-            "IRON CONDOR": condor,
-        }.get(selected)
+        selected_plan = plans.get(selected)
         if selected_plan is None or selected_plan.status != "READY":
             status = "BLOCKED"
-            blocker = (
-                selected_plan.blocker if selected_plan else "Selected plan unavailable"
-            )
+            blocker = selected_plan.blocker if selected_plan else "Selected plan unavailable"
         else:
             status = "READY"
             blocker = "None"
@@ -523,12 +650,12 @@ def calculate_trade_plan(
         as_of=options.as_of,
         expiry=expiry,
         spot=spot,
-        ce_sell=ce,
-        pe_sell=pe,
-        iron_condor=condor,
-        selected_setup=selected
-        if selected in {"CE SELL", "PE SELL", "IRON CONDOR"}
-        else "WAIT",
+        ce_sell=plans["CE SELL"],
+        pe_sell=plans["PE SELL"],
+        iron_condor=plans["IRON CONDOR"],
+        ce_buy=plans["CE BUY"],
+        pe_buy=plans["PE BUY"],
+        selected_setup=selected if selected in plans else "WAIT",
         status=status,
         blocker=blocker,
     )

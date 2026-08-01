@@ -25,8 +25,10 @@ from models import (
 
 
 _DIRECTION_FROM_ACTION = {
+    "CE BUY": "BULLISH",
     "PE SELL": "BULLISH",
     "PE SELL WITH HEDGE": "BULLISH",
+    "PE BUY": "BEARISH",
     "CE SELL": "BEARISH",
     "CE SELL WITH HEDGE": "BEARISH",
     "IRON CONDOR": "RANGE",
@@ -101,6 +103,119 @@ def _seller_environment_score(vix: VixContext) -> float:
         return 48.0
     return 55.0
 
+
+
+
+def _buyer_environment_score(vix: VixContext) -> float:
+    """Score whether option premium conditions are reasonable for directional buying."""
+    if vix.status != "READY":
+        return 42.0
+    if vix.movement == "RISING FAST" or vix.regime == "HIGH":
+        return 32.0
+    if vix.regime == "ELEVATED":
+        return 48.0
+    if vix.regime == "NORMAL":
+        return 72.0
+    if vix.regime == "LOW":
+        return 82.0
+    return 55.0
+
+
+def _buy_level_adjustments(levels: LevelBundle) -> tuple[float, float, list[str], list[str]]:
+    ce_adjust = pe_adjust = 0.0
+    ce_cautions: list[str] = []
+    pe_cautions: list[str] = []
+    if levels.status != "READY":
+        return -10.0, -10.0, ["Upside room unavailable"], ["Downside room unavailable"]
+
+    if levels.upside_room is None:
+        ce_adjust -= 8.0
+        ce_cautions.append("Upside room unavailable")
+    elif levels.upside_room < CONFIG.buy_min_directional_room_points:
+        ce_adjust -= 22.0
+        ce_cautions.append("CE buy has too little room before resistance")
+    elif levels.upside_room >= 25:
+        ce_adjust += 9.0
+
+    if levels.downside_room is None:
+        pe_adjust -= 8.0
+        pe_cautions.append("Downside room unavailable")
+    elif levels.downside_room < CONFIG.buy_min_directional_room_points:
+        pe_adjust -= 22.0
+        pe_cautions.append("PE buy has too little room before support")
+    elif levels.downside_room >= 25:
+        pe_adjust += 9.0
+
+    if levels.current_position == "NEAR RESISTANCE":
+        ce_adjust -= 10.0
+        ce_cautions.append("Current price is near resistance")
+    elif levels.current_position == "NEAR SUPPORT":
+        pe_adjust -= 10.0
+        pe_cautions.append("Current price is near support")
+    return ce_adjust, pe_adjust, ce_cautions, pe_cautions
+
+
+def _directional_momentum_adjustments(
+    *,
+    core: CoreMarketEvidence,
+    price_action: PriceActionBundle | None,
+    volume: VolumeBundle | None,
+) -> tuple[float, float, list[str], list[str]]:
+    ce_adjust = pe_adjust = 0.0
+    ce_cautions: list[str] = []
+    pe_cautions: list[str] = []
+
+    stage = str(core.move_stage or "").upper()
+    if stage in {"DEVELOPING", "EARLY", "BUILDING", "BREAKOUT"}:
+        ce_adjust += 6.0
+        pe_adjust += 6.0
+    elif stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
+        ce_adjust -= 14.0
+        pe_adjust -= 14.0
+        ce_cautions.append("Directional move may be mature")
+        pe_cautions.append("Directional move may be mature")
+
+    if price_action is not None:
+        pa = f"{price_action.combined_state} {price_action.relationship}".upper()
+        if "BULLISH" in pa and "BEARISH" not in pa:
+            ce_adjust += 10.0
+            pe_adjust -= 10.0
+            pe_cautions.append("Price action is not bearish-aligned")
+        elif "BEARISH" in pa and "BULLISH" not in pa:
+            pe_adjust += 10.0
+            ce_adjust -= 10.0
+            ce_cautions.append("Price action is not bullish-aligned")
+        elif "MIXED" in pa or "RANGE" in pa or "CONFLICT" in pa:
+            ce_adjust -= 7.0
+            pe_adjust -= 7.0
+            ce_cautions.append("Timeframes are mixed/range")
+            pe_cautions.append("Timeframes are mixed/range")
+    else:
+        ce_adjust -= 10.0
+        pe_adjust -= 10.0
+        ce_cautions.append("Price-action alignment unavailable")
+        pe_cautions.append("Price-action alignment unavailable")
+
+    if volume is not None and volume.status == "READY":
+        view = str(volume.overall_view or "").upper()
+        if "BULLISH" in view:
+            ce_adjust += 7.0
+            pe_adjust -= 4.0
+        elif "BEARISH" in view:
+            pe_adjust += 7.0
+            ce_adjust -= 4.0
+        elif "WEAK" in view or "LOW" in view or "MIXED" in view:
+            ce_adjust -= 4.0
+            pe_adjust -= 4.0
+            ce_cautions.append("Volume confirmation is weak")
+            pe_cautions.append("Volume confirmation is weak")
+    else:
+        ce_adjust -= 8.0
+        pe_adjust -= 8.0
+        ce_cautions.append("Volume confirmation unavailable")
+        pe_cautions.append("Volume confirmation unavailable")
+
+    return ce_adjust, pe_adjust, ce_cautions, pe_cautions
 
 def _level_adjustments(
     levels: LevelBundle,
@@ -738,9 +853,10 @@ def calculate_final_decision(
         institutional
     )
     seller_score = _seller_environment_score(vix)
+    buyer_score = _buyer_environment_score(vix)
 
-    # Frozen architecture weights: core 35%, options 35%, Top-7 15%,
-    # VIX/session/institutional/event background 15%.
+    # Seller setups retain the frozen seller architecture. Directional buys are
+    # evaluated by the same brain with more weight on momentum/room and less on decay.
     ce = (
         core.bearish_score * 0.35
         + options.bearish_score * 0.35
@@ -759,6 +875,20 @@ def calculate_final_decision(
         + heavy_range * 0.15
         + (seller_score * 0.65 + inst_range * 0.35) * 0.15
     )
+    ce_buy = (
+        core.bullish_score * 0.40
+        + options.bullish_score * 0.22
+        + heavy_bull * 0.16
+        + inst_bull * 0.10
+        + buyer_score * 0.12
+    )
+    pe_buy = (
+        core.bearish_score * 0.40
+        + options.bearish_score * 0.22
+        + heavy_bear * 0.16
+        + inst_bear * 0.10
+        + buyer_score * 0.12
+    )
 
     (
         ce_adjust,
@@ -773,6 +903,26 @@ def calculate_final_decision(
     condor += condor_adjust
 
     (
+        ce_buy_level_adjust,
+        pe_buy_level_adjust,
+        ce_buy_level_cautions,
+        pe_buy_level_cautions,
+    ) = _buy_level_adjustments(levels)
+    ce_buy += ce_buy_level_adjust
+    pe_buy += pe_buy_level_adjust
+
+    (
+        ce_buy_momentum_adjust,
+        pe_buy_momentum_adjust,
+        ce_buy_momentum_cautions,
+        pe_buy_momentum_cautions,
+    ) = _directional_momentum_adjustments(
+        core=core, price_action=price_action, volume=volume
+    )
+    ce_buy += ce_buy_momentum_adjust
+    pe_buy += pe_buy_momentum_adjust
+
+    (
         pattern_ce,
         pattern_pe,
         pattern_condor,
@@ -783,6 +933,10 @@ def calculate_final_decision(
     ce += pattern_ce
     pe += pattern_pe
     condor += pattern_condor
+    # Bullish pattern evidence supports CE BUY; bearish supports PE BUY. The same
+    # bounded source is reused, not double-counted as another independent brain.
+    ce_buy += pattern_pe
+    pe_buy += pattern_ce
 
     if core.move_stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
         ce -= 6
@@ -791,6 +945,8 @@ def calculate_final_decision(
         ce -= 5
         pe -= 5
         condor -= 5
+        ce_buy -= 7
+        pe_buy -= 7
 
     event_wait, event_blocker = _event_adjustment(event_risk)
     news_wait, news_blocker = _news_adjustment(news)
@@ -798,17 +954,25 @@ def calculate_final_decision(
         ce -= 12
         pe -= 12
         condor -= 20
+        ce_buy -= 18
+        pe_buy -= 18
     elif event_risk.level == "MEDIUM":
         ce -= 5
         pe -= 5
         condor -= 10
+        ce_buy -= 8
+        pe_buy -= 8
     if news is not None and news.status == "READY":
         if news.risk_level == "HIGH":
             ce -= 5
             pe -= 5
             condor -= 10
+            ce_buy -= 10
+            pe_buy -= 10
         elif news.risk_level == "MEDIUM":
             condor -= 4
+            ce_buy -= 4
+            pe_buy -= 4
     elif news is not None and news.status == "OLD":
         # Older headlines remain visible as background context only; they receive a
         # deliberately small penalty and never behave like fresh market-moving news.
@@ -818,6 +982,8 @@ def calculate_final_decision(
     ce = round(clamp(ce, 0, 100), 1)
     pe = round(clamp(pe, 0, 100), 1)
     condor = round(clamp(condor, 0, 100), 1)
+    ce_buy = round(clamp(ce_buy, 0, 100), 1)
+    pe_buy = round(clamp(pe_buy, 0, 100), 1)
 
     option_data_available = (
         options.status != "UNAVAILABLE" and options.market_bias != "UNAVAILABLE"
@@ -825,7 +991,7 @@ def calculate_final_decision(
     if not option_data_available:
         # Missing option data is not neutral/decay evidence. No seller setup can be
         # scored from absent CE/PE premiums, OI and volume.
-        ce = pe = condor = 0.0
+        ce = pe = condor = ce_buy = pe_buy = 0.0
 
     wait = 10.0
     blockers: list[str] = []
@@ -854,7 +1020,9 @@ def calculate_final_decision(
             blockers.append("Fewer than two option movement windows are ready")
         if options.persistence == "WARMING UP":
             wait += 10
-        direction_gap = abs(pe - ce)
+        bullish_edge = max(pe, ce_buy)
+        bearish_edge = max(ce, pe_buy)
+        direction_gap = abs(bullish_edge - bearish_edge)
         if direction_gap < CONFIG.decision_minimum_margin and condor < 62:
             wait += 12
             blockers.append("Directional edge is not separated")
@@ -881,31 +1049,43 @@ def calculate_final_decision(
     ce_cautions = list(ce_level_cautions)
     pe_cautions = list(pe_level_cautions)
     condor_cautions = list(condor_level_cautions)
+    ce_buy_cautions = list(ce_buy_level_cautions) + list(ce_buy_momentum_cautions)
+    pe_buy_cautions = list(pe_buy_level_cautions) + list(pe_buy_momentum_cautions)
     if options.confidence < CONFIG.decision_min_option_confidence:
         warning = "Option-flow continuity is not mature"
         ce_cautions.append(warning)
         pe_cautions.append(warning)
         condor_cautions.append(warning)
+        ce_buy_cautions.append(warning)
+        pe_buy_cautions.append(warning)
     if vix.status != "READY":
         vix_warning = "India VIX data is unavailable"
         ce_cautions.append(vix_warning)
         pe_cautions.append(vix_warning)
         condor_cautions.append(vix_warning)
+        ce_buy_cautions.append(vix_warning)
+        pe_buy_cautions.append(vix_warning)
     if event_blocker:
         ce_cautions.append(event_blocker)
         pe_cautions.append(event_blocker)
         condor_cautions.append(event_blocker)
+        ce_buy_cautions.append(event_blocker)
+        pe_buy_cautions.append(event_blocker)
     if news_blocker:
         ce_cautions.append(news_blocker)
         pe_cautions.append(news_blocker)
         condor_cautions.append(news_blocker)
+        ce_buy_cautions.append(news_blocker)
+        pe_buy_cautions.append(news_blocker)
     if pattern_conflict:
         pattern_warning = "3-minute W/M and candle evidence conflict"
         ce_cautions.append(pattern_warning)
         pe_cautions.append(pattern_warning)
         condor_cautions.append(pattern_warning)
+        ce_buy_cautions.append(pattern_warning)
+        pe_buy_cautions.append(pattern_warning)
 
-    unavailable_reason = ("Option chain unavailable — seller setup not scored",)
+    unavailable_reason = ("Option chain unavailable — strategy not scored",)
     ce_eval = StrategyEvaluation(
         name="CE SELL",
         score=ce,
@@ -953,16 +1133,58 @@ def calculate_final_decision(
         ),
         cautions=tuple(dict.fromkeys(condor_cautions))[:3],
     )
+    ce_buy_eval = StrategyEvaluation(
+        name="CE BUY",
+        score=ce_buy,
+        status="UNAVAILABLE"
+        if not option_data_available
+        else _status(ce_buy, ce_buy_cautions),
+        reasons=(
+            unavailable_reason
+            if not option_data_available
+            else _top_reasons(
+                (f"Bullish momentum evidence {core.bullish_score:.1f}/100",),
+                (f"Bullish option flow {options.bullish_score:.1f}%",),
+                (f"Price action: {price_action.combined_state}" if price_action else "Price action unavailable",),
+            )
+        ),
+        cautions=tuple(dict.fromkeys(ce_buy_cautions))[:3],
+    )
+    pe_buy_eval = StrategyEvaluation(
+        name="PE BUY",
+        score=pe_buy,
+        status="UNAVAILABLE"
+        if not option_data_available
+        else _status(pe_buy, pe_buy_cautions),
+        reasons=(
+            unavailable_reason
+            if not option_data_available
+            else _top_reasons(
+                (f"Bearish momentum evidence {core.bearish_score:.1f}/100",),
+                (f"Bearish option flow {options.bearish_score:.1f}%",),
+                (f"Price action: {price_action.combined_state}" if price_action else "Price action unavailable",),
+            )
+        ),
+        cautions=tuple(dict.fromkeys(pe_buy_cautions))[:3],
+    )
 
     candidates = sorted(
-        (("CE SELL", ce), ("PE SELL", pe), ("IRON CONDOR", condor)),
+        (
+            ("CE BUY", ce_buy),
+            ("PE BUY", pe_buy),
+            ("CE SELL", ce),
+            ("PE SELL", pe),
+            ("IRON CONDOR", condor),
+        ),
         key=lambda item: item[1],
         reverse=True,
     )
     leader, leader_score = candidates[0]
     runner_up = candidates[1][1]
+    bullish_score = max(pe, ce_buy)
+    bearish_score = max(ce, pe_buy)
     direction, _, _ = (
-        _direction_from_scores(ce, pe, condor)
+        _direction_from_scores(bearish_score, bullish_score, condor)
         if option_data_available
         else ("RANGE", 0.0, 0.0)
     )
@@ -977,8 +1199,10 @@ def calculate_final_decision(
         instant_action = "WAIT"
         blockers.append("No strategy meets score and separation thresholds")
         wait = max(wait, 50.0)
-    else:
+    elif leader in {"CE SELL", "PE SELL", "IRON CONDOR"}:
         instant_action = f"{leader} WITH HEDGE"
+    else:
+        instant_action = leader
 
     history = _valid_history(signal_history, as_of)
     fake_move_risk, fake_reasons = _fake_move_risk(
@@ -1047,8 +1271,8 @@ def calculate_final_decision(
     confidence = round(clamp(confidence, 0, 95), 1)
 
     outlook = _build_outlook(
-        ce=ce,
-        pe=pe,
+        ce=bearish_score,
+        pe=bullish_score,
         condor=condor,
         direction=direction,
         fake_move_risk=fake_move_risk,
@@ -1063,6 +1287,8 @@ def calculate_final_decision(
     )
 
     evaluation_map = {
+        "CE BUY": ce_buy_eval,
+        "PE BUY": pe_buy_eval,
         "CE SELL": ce_eval,
         "PE SELL": pe_eval,
         "IRON CONDOR": condor_eval,
@@ -1086,9 +1312,11 @@ def calculate_final_decision(
         market_direction=direction,
         execution_status=execution_status,
         decision_confidence=confidence,
-        hedge_required=True,
+        hedge_required=leader in {"CE SELL", "PE SELL", "IRON CONDOR"},
         reasons=final_reasons[:3],
         blocker=blocker,
         outlook=outlook,
         status=status,
+        ce_buy=ce_buy_eval,
+        pe_buy=pe_buy_eval,
     )

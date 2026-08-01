@@ -855,8 +855,9 @@ class SnapshotService:
                     captured_at=current,
                     action=decision.final_action,
                     execution_status=decision.execution_status,
-                    ce_score=decision.ce_sell.score,
-                    pe_score=decision.pe_sell.score,
+                    # Legacy history keys mean bearish and bullish directional edge.
+                    ce_score=max(decision.ce_sell.score, decision.pe_buy.score),
+                    pe_score=max(decision.pe_sell.score, decision.ce_buy.score),
                     condor_score=decision.iron_condor.score,
                     wait_need=decision.wait_need.score,
                     signal_state=decision.signal_state,

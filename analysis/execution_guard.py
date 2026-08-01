@@ -45,9 +45,9 @@ def _timeframe_aligned(setup: str, price_action: PriceActionBundle) -> bool:
 
     three_state = state(three)
     fifteen_state = state(fifteen)
-    if setup == "PE SELL":
+    if setup in {"PE SELL", "CE BUY"}:
         return three_state == fifteen_state == "BULLISH"
-    if setup == "CE SELL":
+    if setup in {"CE SELL", "PE BUY"}:
         return three_state == fifteen_state == "BEARISH"
     if setup == "IRON CONDOR":
         return three_state == fifteen_state == "RANGE"
@@ -56,6 +56,8 @@ def _timeframe_aligned(setup: str, price_action: PriceActionBundle) -> bool:
 
 def _selected_plan(bundle: TradePlanBundle) -> SetupPlan | None:
     return {
+        "CE BUY": bundle.ce_buy,
+        "PE BUY": bundle.pe_buy,
         "CE SELL": bundle.ce_sell,
         "PE SELL": bundle.pe_sell,
         "IRON CONDOR": bundle.iron_condor,
@@ -123,14 +125,14 @@ def _spot_invalidations(
 ) -> tuple[float | None, float | None]:
     three = price_action.three_minute
     fifteen = price_action.fifteen_minute
-    if setup == "PE SELL":
+    if setup in {"PE SELL", "CE BUY"}:
         values = [
             item
             for item in (three.invalidation_level, fifteen.invalidation_level)
             if item is not None
         ]
         return (max(values) if values else None, None)
-    if setup == "CE SELL":
+    if setup in {"CE SELL", "PE BUY"}:
         values = [
             item
             for item in (three.invalidation_level, fifteen.invalidation_level)
@@ -159,7 +161,6 @@ def _risk_math(
         plan is None
         or not plan.available
         or plan.max_risk_points is None
-        or plan.estimated_credit_points is None
         or profile.lot_size <= 0
     ):
         return (None, 0, 0, None, None, None, None, None, None)
@@ -170,12 +171,25 @@ def _risk_math(
     )
     allowed_lots = max(0, min(max_by_budget, max(0, profile.max_lots_cap)))
 
-    credit = max(0.0, float(plan.estimated_credit_points))
-    target_capture = credit * max(0.0, profile.target_capture_pct) / 100.0
-    target_exit_debit = max(0.0, credit - target_capture)
-    configured_stop = credit * max(0.0, profile.stop_loss_pct) / 100.0
-    stop_loss_points = min(configured_stop, max(0.0, float(plan.max_risk_points)))
-    stop_exit_debit = credit + stop_loss_points
+    if plan.is_buy:
+        debit = max(0.0, float(plan.estimated_debit_points or 0.0))
+        if debit <= 0:
+            return (risk_per_lot, max_by_budget, allowed_lots, None, None, None, None, None, None)
+        target_capture = debit * max(0.0, profile.target_capture_pct) / 100.0
+        target_exit_debit = debit + target_capture
+        stop_loss_points = min(
+            debit * max(0.0, profile.stop_loss_pct) / 100.0, debit
+        )
+        stop_exit_debit = max(0.0, debit - stop_loss_points)
+    else:
+        credit = max(0.0, float(plan.estimated_credit_points or 0.0))
+        if credit <= 0:
+            return (risk_per_lot, max_by_budget, allowed_lots, None, None, None, None, None, None)
+        target_capture = credit * max(0.0, profile.target_capture_pct) / 100.0
+        target_exit_debit = max(0.0, credit - target_capture)
+        configured_stop = credit * max(0.0, profile.stop_loss_pct) / 100.0
+        stop_loss_points = min(configured_stop, max(0.0, float(plan.max_risk_points)))
+        stop_exit_debit = credit + stop_loss_points
     target_rupees = target_capture * profile.lot_size * allowed_lots
     stop_rupees = stop_loss_points * profile.lot_size * allowed_lots
     return (
@@ -205,7 +219,7 @@ def calculate_execution_guard(
 ) -> ExecutionGuard:
     """Convert the chosen setup into a read-only entry/risk gate.
 
-    This module cannot select CE/PE/Condor, change strategy scores or place orders.
+    This module cannot select a strategy, change One-Brain scores or place orders.
     It only applies freshness, persistence, timing, risk-budget and one-trade rules
     to the already-selected final action and protected plan.
     """
@@ -286,7 +300,9 @@ def calculate_execution_guard(
             blockers.append("New-entry window has closed")
         elif not within_window:
             reasons.append("Wait for the configured entry window")
-        concrete_setup_selected = setup in {"CE SELL", "PE SELL", "IRON CONDOR"}
+        concrete_setup_selected = setup in {
+            "CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"
+        }
         if concrete_setup_selected and plan is not None and plan.available:
             if risk_per_lot is None:
                 blockers.append("Selected protected-plan risk could not be calculated")

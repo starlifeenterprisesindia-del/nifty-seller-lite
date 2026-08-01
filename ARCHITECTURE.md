@@ -1,4 +1,13 @@
-# Architecture — V2.15 Pattern Confirmation
+# Architecture — V2.16 AI Strategy Planner
+
+## V2.16 canonical strategy comparison
+
+`analysis/decision.py::calculate_final_decision` remains the only strategy authority. It scores CE BUY, PE BUY, CE SELL, PE SELL and IRON CONDOR from the same immutable snapshot. Directional buys receive bounded momentum, timeframe, volume, barrier-room, VIX and pattern evidence; seller setups retain their protected-premium logic. No planner or UI component may re-rank or override the selected setup.
+
+`analysis/trade_plan.py::calculate_trade_plan` converts the selected setup into an executable reference structure only: one liquid long option for BUY, a protected vertical for directional SELL, or two protected wings for IRON CONDOR.
+
+The UI uses green only for an approved selected setup. Under WAIT, the top score is amber and labelled reference-only, preventing a display candidate from looking like an entry signal.
+
 
 ## One authoritative snapshot
 `services/snapshot_service.py` builds one `MarketSnapshot`. Screen, PDF, decision,
