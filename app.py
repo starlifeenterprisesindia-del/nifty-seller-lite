@@ -122,7 +122,7 @@ st.markdown(
 )
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.17.1 Simple Trading View Final — ek hi One-Brain, de-duplicated evidence, compact top view, "
+    "V2.17.2 Live Session + FII/DII Durability — ek hi One-Brain, de-duplicated evidence, compact top view, "
     "top-3 strategy planner aur strict WAIT safety. Read only; no order placement."
 )
 
@@ -172,6 +172,7 @@ cloud_journal = GitHubJsonJournal.from_mapping(
 context_store = MarketContextStore(
     Path(CONFIG.market_context_path),
     Path(CONFIG.market_context_mirror_path),
+    Path(CONFIG.market_context_rescue_path),
     cloud_backend=cloud_journal,
 )
 discipline_store = DisciplineStore(Path(CONFIG.discipline_state_path))
@@ -292,12 +293,31 @@ with st.sidebar:
         saved_context = context_store.get(context_date) or {}
         cloud_state = context_store.sync_status()
         if cloud_state.label == "CLOUD SYNC OK":
-            st.success("FII/DII Sync: CLOUD + LOCAL SAFE")
+            st.success("FII/DII Storage: CLOUD + 3 LOCAL COPIES SAFE")
         elif cloud_state.label.startswith("CLOUD FAILED"):
-            st.warning("FII/DII Sync: CLOUD FAILED · LOCAL BACKUP SAFE")
+            st.warning("FII/DII Storage: CLOUD FAILED · 3 LOCAL COPIES AVAILABLE")
         else:
-            st.info("FII/DII Sync: LOCAL BACKUP")
+            st.error("FII/DII Storage: LOCAL ONLY · REDEPLOY PAR DATA DELETE HO SAKTA HAI")
         st.caption(cloud_state.message)
+        if not context_store.cloud_enabled:
+            with st.expander("Permanent storage ON karne ka one-time setup", expanded=False):
+                st.write(
+                    "Streamlit ke **Manage app → Settings → Secrets** me existing `[dhan]` ko chhede bina "
+                    "neeche wala section add karo. Token private data repo tak hi limited rakho."
+                )
+                st.code(
+                    '[fii_dii_cloud]\n'
+                    'owner = "YOUR_GITHUB_USERNAME"\n'
+                    'repo = "nifty-seller-private-data"\n'
+                    'token = "YOUR_FINE_GRAINED_TOKEN"\n'
+                    'path = "fii_dii_15_sessions.json"\n'
+                    'branch = "main"',
+                    language="toml",
+                )
+                st.caption(
+                    "Cloud ON hone ke baad save/update par 15-session journal private GitHub file me bhi auto-save hoga "
+                    "aur nayi deployment par auto-restore hoga."
+                )
         sync_context_now = st.button(
             "Sync cloud now",
             width="stretch",
@@ -367,7 +387,7 @@ with st.sidebar:
         )
         st.caption(
             "One row per trading date. Same date updates only that row; a new date adds a row. "
-            "Latest 15 sessions local primary + mirror me save hote hain; cloud configured ho to private journal se auto-sync bhi hote hain. "
+            "Latest 15 sessions local primary + mirror + rescue copies me save hote hain; cloud configured ho to private journal se auto-sync bhi hote hain. "
             "Blank value purane valid number ko erase nahi karti. Cash ₹ crore me hai; Index Futures contracts + Long/Short % me save hote hain."
         )
 
@@ -431,7 +451,20 @@ with st.sidebar:
                 verified=event_verified,
             )
             st.session_state.pop("snapshot", None)
-            st.success(f"Institutional context saved for {context_date.isoformat()}")
+            if context_store.cloud_enabled:
+                sync_state = context_store.sync_status()
+                if sync_state.label == "CLOUD SYNC OK":
+                    st.success(
+                        f"{context_date.isoformat()} FII/DII cloud + local me permanently save hua"
+                    )
+                else:
+                    st.warning(
+                        f"{context_date.isoformat()} local 3-copy me save hua; cloud sync failed — backup download kar lo"
+                    )
+            else:
+                st.warning(
+                    f"{context_date.isoformat()} local 3-copy me save hua, lekin redeploy-safe nahi. Permanent cloud setup ON karo."
+                )
             st.rerun()
         except Exception as exc:
             st.error(f"Context not saved: {exc}")

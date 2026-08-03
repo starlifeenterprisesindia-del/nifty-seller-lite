@@ -70,6 +70,14 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
 
     resistance, resistance_note = level_text(item.nearest_resistance, "Resistance unavailable")
     support, support_note = level_text(item.nearest_support, "Support unavailable")
+    overlap_text = None
+    if item.nearest_resistance is not None and item.nearest_support is not None:
+        overlap_lower = max(item.nearest_resistance.lower, item.nearest_support.lower)
+        overlap_upper = min(item.nearest_resistance.upper, item.nearest_support.upper)
+        if overlap_lower <= overlap_upper:
+            overlap_text = f"{overlap_lower:,.0f}–{overlap_upper:,.0f}"
+            resistance_note = "Compression/decision zone ka upper side · " + resistance_note
+            support_note = "Compression/decision zone ka lower side · " + support_note
     spot = f"{item.current_price:,.2f}" if item.current_price is not None else "—"
     range_item = item.trading_range
     range_text = (
@@ -101,6 +109,11 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         st.html(html)
     else:
         st.markdown(html, unsafe_allow_html=True)
+    if overlap_text:
+        st.warning(
+            f"Decision / Compression Zone: {overlap_text}. Is overlap ke andar support aur resistance alag signal nahi; "
+            "clear 3-minute close ke baad hi break maana jayega."
+        )
     st.caption(
         f"Probable range {range_text} · Confidence {range_item.confidence:.0f}/100 · "
         f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100. Full map detailed section me hai."
@@ -1158,10 +1171,16 @@ def render_decision(
 def render_market_outlook(snapshot: MarketSnapshot) -> None:
     item = snapshot.decision.outlook
     st.subheader("Next 5–15 Min Market Outlook")
+    outlook_note = (
+        " Session live confirm nahi hai, isliye fake-move score sirf reference hai; data/session block alag se entry rokta hai."
+        if item.status == "REFERENCE ONLY"
+        else ""
+    )
     st.caption(
         "Conditional scenario weights from the same Final One-Brain Decision. "
-        "They are not guaranteed price predictions. Signal memory and fake-move "
-        "risk stop a single opposite snapshot from immediately flipping the action."
+        "They are not guaranteed price predictions. Koi path absolute 0%/100% nahi maana jata. "
+        "Signal memory and fake-move risk single opposite snapshot se action flip hone se rokte hain."
+        + outlook_note
     )
     row = {
         "Bullish path %": item.bullish_path_pct,

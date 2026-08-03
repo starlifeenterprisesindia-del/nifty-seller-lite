@@ -74,30 +74,103 @@ class SnapshotService:
         return segment_data.get(str(security_id)) or segment_data.get(int(security_id))
 
     @staticmethod
+    def _parse_quote_timestamp(raw: Any, now: datetime) -> pd.Timestamp | None:
+        """Parse Dhan quote timestamps without DD/MM and MM/DD ambiguity.
+
+        Dhan market-feed strings may arrive as ``DD/MM/YYYY HH:MM:SS``. Pandas'
+        default month-first inference can silently turn 03/08 into 8 March, making a
+        fresh quote appear roughly five months old. We therefore try explicit Dhan
+        formats first, then ISO/epoch fallbacks.
+        """
+        if raw in (None, ""):
+            return None
+        current = pd.Timestamp(now)
+        if current.tzinfo is None:
+            current = current.tz_localize(IST_TIMEZONE)
+        else:
+            current = current.tz_convert(IST_TIMEZONE)
+        try:
+            if isinstance(raw, (int, float)):
+                unit = "ms" if abs(float(raw)) > 10_000_000_000 else "s"
+                return pd.to_datetime(raw, unit=unit, utc=True).tz_convert(IST_TIMEZONE)
+
+            text = str(raw).strip()
+            if not text:
+                return None
+            if text.replace(".", "", 1).isdigit():
+                number = float(text)
+                unit = "ms" if abs(number) > 10_000_000_000 else "s"
+                return pd.to_datetime(number, unit=unit, utc=True).tz_convert(IST_TIMEZONE)
+
+            # Time-only values are interpreted for today's IST trading date.
+            for fmt in ("%H:%M:%S", "%H:%M:%S.%f"):
+                try:
+                    parsed_time = datetime.strptime(text, fmt).time()
+                    return pd.Timestamp(datetime.combine(current.date(), parsed_time)).tz_localize(
+                        IST_TIMEZONE
+                    )
+                except ValueError:
+                    pass
+
+            parsed: pd.Timestamp | None = None
+            explicit_formats = (
+                "%d/%m/%Y %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S.%f",
+                "%d-%m-%Y %H:%M:%S",
+                "%d-%m-%Y %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f",
+            )
+            for fmt in explicit_formats:
+                try:
+                    parsed = pd.Timestamp(datetime.strptime(text, fmt))
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                # ISO year-first values must never be sent through day-first inference.
+                if len(text) >= 10 and text[:4].isdigit() and text[4] == "-":
+                    parsed = pd.Timestamp(pd.to_datetime(text, errors="raise"))
+                else:
+                    parsed = pd.Timestamp(
+                        pd.to_datetime(text, dayfirst=True, errors="raise")
+                    )
+            if parsed.tzinfo is None:
+                parsed = parsed.tz_localize(IST_TIMEZONE)
+            else:
+                parsed = parsed.tz_convert(IST_TIMEZONE)
+            return parsed
+        except Exception:
+            return None
+
+    @classmethod
     def _quote_age_seconds(
+        cls,
         quote: dict[str, Any] | None,
         now: datetime,
     ) -> float | None:
         if not quote:
             return None
-        raw = quote.get("last_trade_time")
-        if not raw:
+        raw = (
+            quote.get("last_trade_time")
+            or quote.get("last_traded_time")
+            or quote.get("ltt")
+        )
+        parsed = cls._parse_quote_timestamp(raw, now)
+        if parsed is None:
             return None
-        try:
-            if isinstance(raw, (int, float)):
-                unit = "ms" if float(raw) > 10_000_000_000 else "s"
-                parsed = pd.to_datetime(raw, unit=unit, utc=True).tz_convert(
-                    IST_TIMEZONE
-                )
-            else:
-                parsed = pd.to_datetime(raw)
-            if parsed.tzinfo is None:
-                parsed = parsed.tz_localize(IST_TIMEZONE)
-            else:
-                parsed = parsed.tz_convert(IST_TIMEZONE)
-            return max(0.0, (pd.Timestamp(now) - parsed).total_seconds())
-        except Exception:
+        current = pd.Timestamp(now)
+        if current.tzinfo is None:
+            current = current.tz_localize(IST_TIMEZONE)
+        else:
+            current = current.tz_convert(IST_TIMEZONE)
+        delta = (current - parsed).total_seconds()
+        # A quote materially in the future signals a timezone/date parse problem.
+        if delta < -300:
             return None
+        return max(0.0, delta)
 
     @staticmethod
     def _completed_only(frame: pd.DataFrame) -> pd.DataFrame:

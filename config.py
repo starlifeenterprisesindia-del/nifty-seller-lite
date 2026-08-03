@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.17.1_SIMPLE_VIEW_DEDUP_FINAL"
+    version: str = "2.17.2_LIVE_SESSION_FII_DURABILITY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -101,6 +101,7 @@ class AppConfig:
     # Durable background context and final one-brain decision settings.
     market_context_path: str = "data/market_context.json"
     market_context_mirror_path: str = "data/market_context_mirror.json"
+    market_context_rescue_path: str = "data/market_context_rescue.json"
     market_context_max_entries: int = 15
     # Optional private GitHub JSON journal. Secrets provide owner/repo/token/path;
     # this TTL prevents a cloud API read on every Streamlit rerun.
@@ -146,6 +147,7 @@ class AppConfig:
     decision_stability_wait_floor: float = 65.0
     fake_move_medium_threshold: float = 40.0
     fake_move_high_threshold: float = 65.0
+    outlook_min_path_pct: float = 5.0
     outlook_current_weight: float = 0.65
 
     # Completed 3-minute W/M and special-candle evidence. These are bounded

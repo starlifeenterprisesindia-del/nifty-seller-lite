@@ -472,16 +472,30 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
 
     heavy_scores = _heavyweight_scores(snapshot)
     inst_scores = _institutional_scores(snapshot)
-    support_bull, support_bear, support_neutral = _weighted_scores(
-        [(*heavy_scores, 0.70), (*inst_scores, 0.30)]
+    inst_available = (
+        snapshot.institutional_context.status != "MISSING"
+        and snapshot.institutional_context.confidence > 0
     )
+    support_rows = [(*heavy_scores, 0.70)]
+    if inst_available:
+        support_rows.append((*inst_scores, 0.30))
+    support_bull, support_bear, support_neutral = _weighted_scores(support_rows)
+    confidence_weight = 0.70 + (0.30 if inst_available else 0.0)
     support_confidence = (
         snapshot.heavyweights.confidence * 0.70
-        + snapshot.institutional_context.confidence * 0.30
-    )
+        + (
+            snapshot.institutional_context.confidence * 0.30
+            if inst_available
+            else 0.0
+        )
+    ) / max(confidence_weight, 0.01)
     support_result = (
         f"TOP-7 {_short_heavy(snapshot.heavyweights.state)} · "
-        f"FII/DII {_short_institutional(snapshot.institutional_context.state)}"
+        + (
+            f"FII/DII {_short_institutional(snapshot.institutional_context.state)}"
+            if inst_available
+            else "FII/DII NA (ZERO WEIGHT)"
+        )
     )
 
     vix = snapshot.vix_context
@@ -494,7 +508,17 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
         news_text = f"; news OLD low-weight/{news.bias}"
     else:
         news_text = f"; news {news.status}"
-    session_text = "MARKET LIVE" if snapshot.market_session.is_live else "MARKET CLOSED"
+    session_code = str(getattr(snapshot.market_session, "code", "") or "")
+    if snapshot.market_session.is_live:
+        session_text = "MARKET LIVE"
+    elif session_code == "PRE_OPEN":
+        session_text = "PRE-OPEN"
+    elif session_code == "CLOSED_OR_STALE_SESSION" or "NOT CONFIRMED" in str(
+        getattr(snapshot.market_session, "label", "")
+    ).upper():
+        session_text = "SESSION NOT CONFIRMED"
+    else:
+        session_text = "MARKET CLOSED"
     vix_text = _short_direction(vix.seller_environment)
     if "BALANCED" in str(vix.seller_environment).upper():
         vix_text = "NORMAL"

@@ -261,3 +261,31 @@ def test_blank_update_does_not_erase_existing_fii_dii_values(tmp_path):
     assert row["dii_cash_net"] == 200.0
     assert row["fii_index_futures_contracts"] == 266925.0
     assert row["fii_futures_long_pct"] == 8.78
+
+
+def test_context_store_rescue_copy_recovers_both_primary_and_mirror_loss(tmp_path):
+    primary = tmp_path / "context.json"
+    mirror = tmp_path / "context_mirror.json"
+    rescue = tmp_path / "context_rescue.json"
+    store = MarketContextStore(primary, mirror, rescue)
+    store.upsert(
+        session_date=date(2026, 8, 3),
+        fii_cash_net=-321.5,
+        dii_cash_net=654.25,
+        event_risk="NONE",
+    )
+    primary.unlink()
+    mirror.unlink()
+    rows = store.load()
+    assert rows[0]["fii_cash_net"] == -321.5
+    assert rows[0]["dii_cash_net"] == 654.25
+    assert primary.exists()
+    assert mirror.exists()
+    assert rescue.exists()
+
+
+def test_context_store_without_cloud_warns_about_redeploy_risk(tmp_path):
+    store = MarketContextStore(tmp_path / "context.json")
+    status = store.sync_status()
+    assert status.label == "LOCAL ONLY · REDEPLOY RISK"
+    assert "Permanent" in status.message or "redeploy" in status.message.lower()

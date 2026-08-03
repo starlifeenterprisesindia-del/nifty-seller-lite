@@ -1,0 +1,29 @@
+NIFTY SELLER LITE V2.17.2 — TEST REPORT
+Generated: 03-08-2026
+
+RESULT
+- Python compileall: PASS
+- Non-UI automated test suite: PASS
+- Tests passed: 186
+- Failures: 0
+
+COMMANDS
+- python -m compileall -q app.py config.py models.py analysis services ui tests
+- python -m pytest -q --ignore=tests/test_app_smoke.py
+
+TARGETED COVERAGE
+- Dhan DD/MM/YYYY quote timestamps are parsed day-first, fixing the ~148-day false age.
+- ISO, epoch and time-only quote timestamp formats remain supported.
+- FII/DII same-date upsert, 15-session cap, blank-value preservation and JSON restore.
+- Primary + mirror + rescue recovery when one or two local journal files are missing.
+- Private GitHub cloud journal restores FII/DII after a fresh local filesystem/redeploy.
+- Cloud failure keeps local data and reports redeploy risk instead of claiming permanence.
+- Low-confidence first option snapshot is uncertainty-calibrated.
+- Reference-only session does not incorrectly label fake-move risk as 100%.
+- Outlook paths remain normalized and keep a non-zero uncertainty floor.
+
+ENVIRONMENT LIMITATION
+- tests/test_app_smoke.py was not executed because Streamlit is not installed in this
+  offline execution environment. No claim is made that the Streamlit smoke test ran.
+- The app code and all imported project modules passed Python compilation, and all 186
+  available non-UI tests passed.

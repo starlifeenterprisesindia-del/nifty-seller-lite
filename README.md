@@ -1,4 +1,24 @@
-# Nifty Seller Lite — V2.17.1 Simple View + De-dup Final
+# Nifty Seller Lite — V2.17.2 Live Session + FII/DII Durability
+
+
+## V2.17.2 fixes
+
+- Dhan quote/VIX timestamps now parse DD/MM/YYYY explicitly, so 03/08/2026 is never misread as 08/03/2026.
+- Live-session confirmation uses the corrected quote age; stale/future timestamps remain safely blocked.
+- FII/DII journal now writes three atomic local copies: primary, mirror and rescue.
+- Optional private GitHub journal remains the permanent cross-redeploy source and auto-restores a fresh deployment.
+- The UI clearly warns when cloud persistence is OFF instead of calling runtime-only storage safe.
+- Missing FII/DII receives zero decision weight; Top-7 evidence is not diluted by a missing institutional row.
+- First-snapshot option-flow extremes are confidence-calibrated while 1m/3m/5m continuity warms up.
+- Reference-only session state no longer appears as fake-move risk 100%; data/session blocking stays separate.
+- Bullish/range/bearish outlook paths retain a small non-zero uncertainty floor.
+- Overlapping support/resistance is shown as one Decision / Compression Zone.
+
+Expected version:
+
+```text
+2.17.2_LIVE_SESSION_FII_DURABILITY
+```
 
 ## V2.17 additions
 
@@ -8,9 +28,9 @@
 - A compact nearest Resistance / NIFTY / Support strip replaces the large always-open Barrier Map. The full map remains inside detailed evidence.
 - Risk controls, evidence/outlook and reports are collapsed by default to reduce visual noise.
 - W/M, Special Candle, FII/DII and data/entry status remain visible as small evidence cards without creating separate actions.
-- FII/DII now supports an optional private GitHub cloud journal. Local primary + mirror files remain as fallback.
+- FII/DII supports an optional private GitHub cloud journal. V2.17.2 keeps primary + mirror + rescue local copies as runtime fallback.
 - Cloud and local rows merge date-wise; blank numeric inputs cannot erase already saved valid FII/DII values.
-- A cloud failure shows **CLOUD FAILED · LOCAL SAFE** and does not block local saving.
+- A cloud failure does not block local saving, but the UI clearly warns that local runtime copies are not redeploy-permanent.
 
 Expected version:
 

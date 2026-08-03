@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
 _PROTECTED_FILES = {
     Path(CONFIG.market_context_path).name,
     Path(CONFIG.market_context_mirror_path).name,
+    Path(CONFIG.market_context_rescue_path).name,
     Path(CONFIG.discipline_state_path).name,
 }
 

@@ -1,0 +1,26 @@
+NIFTY SELLER LITE V2.17.2 — LIVE SESSION + FII/DII DURABILITY
+
+LIVE QUOTE / SESSION
+- Fixed Dhan DD/MM/YYYY quote-time parsing. Example 03/08/2026 now means 3 August, not 8 March.
+- Added ISO, epoch, alternate key and time-only parsing with IST normalization.
+- Material future timestamps are rejected instead of being treated as age zero.
+- Session evidence now says SESSION NOT CONFIRMED rather than MARKET CLOSED when the clock is open but freshness is not confirmed.
+
+FII/DII DURABILITY
+- Added third atomic local rescue journal in addition to primary + mirror.
+- All reads merge primary, mirror, rescue and optional private GitHub cloud date-wise.
+- Blank same-date inputs still cannot erase prior valid numeric values.
+- UI now clearly says LOCAL ONLY · REDEPLOY RISK when cloud secrets are absent.
+- Private GitHub cloud remains the permanent cross-device / cross-redeploy source and auto-restores local files.
+- Added one-time Secrets template inside the FII/DII panel.
+
+SCORING / PRESENTATION
+- Missing FII/DII gets zero decision weight instead of a neutral fixed vote.
+- Low-confidence first option snapshot is shrunk toward uncertainty; no 99/0/1 overstatement at 38% confidence.
+- Reference-only session no longer forces fake-move risk to 100%; session/data validation remains an independent hard entry block.
+- Outlook paths use a 5% uncertainty floor to avoid absolute 0%/100% claims.
+- Overlapping support/resistance is displayed as a Decision / Compression Zone.
+
+SAFETY
+- Final One-Brain and strict WAIT gates remain unchanged.
+- No order placement was added.

@@ -476,6 +476,28 @@ def _normalized_scores(
     return bull_pct, bear_pct, range_pct, bias
 
 
+
+
+def _calibrate_scores_for_confidence(
+    bullish: float, bearish: float, range_score: float, confidence: float
+) -> tuple[float, float, float]:
+    """Shrink low-confidence option-flow extremes toward an uncertainty baseline.
+
+    A first/day-change snapshot can have a very one-sided raw classification while
+    intraday continuity is still 0/3. Displaying 99/0/1 at 38% confidence overstates
+    certainty, so the scores are blended toward 20/20/60 until continuity matures.
+    """
+    weight = max(0.0, min(1.0, float(confidence) / 100.0))
+    baseline = (20.0, 20.0, 60.0)
+    values = (bullish, bearish, range_score)
+    blended = [values[i] * weight + baseline[i] * (1.0 - weight) for i in range(3)]
+    total = sum(blended)
+    if total <= 0:
+        return 20.0, 20.0, 60.0
+    result = [round(value / total * 100.0, 1) for value in blended]
+    result[2] = round(100.0 - result[0] - result[1], 1)
+    return result[0], result[1], result[2]
+
 def calculate_option_intelligence(
     *,
     current_frame: pd.DataFrame,
@@ -564,6 +586,9 @@ def calculate_option_intelligence(
         if persistence.endswith("×3") or "PERSISTENT" in persistence:
             confidence += 8.0
     confidence = round(min(90.0, confidence), 1)
+    bullish, bearish, range_score = _calibrate_scores_for_confidence(
+        bullish, bearish, range_score, confidence
+    )
 
     reasons: list[str] = []
     if market_bias != "MIXED":

@@ -520,9 +520,7 @@ def _fake_move_risk(
     history: list[dict[str, Any]],
     score_gap: float,
 ) -> tuple[float, tuple[str, ...]]:
-    if not market_session.is_live:
-        return 100.0, ("Market session is reference-only",)
-
+    reference_only = not market_session.is_live
     risk = 5.0
     reasons: list[str] = []
 
@@ -642,6 +640,8 @@ def _fake_move_risk(
         elif news.risk_level == "MEDIUM":
             risk += 2
 
+    if reference_only:
+        reasons.append("Live session not confirmed; fake-move score is reference-only")
     return round(clamp(risk, 0, 100), 1), tuple(dict.fromkeys(reasons))[:3]
 
 
@@ -799,6 +799,13 @@ def _build_outlook(
         bear -= shift * bear / directional_total
         range_score += shift
     bull, bear, range_score = _normalized_triplet(bull, bear, range_score)
+    # Scenario weights are conditional possibilities, not certainties. Keep a small
+    # non-zero path for reversal and range outcomes so the UI never shows impossible
+    # 0%/100% claims from one snapshot.
+    floor_pct = max(0.0, min(20.0, float(CONFIG.outlook_min_path_pct)))
+    bull, bear, range_score = _normalized_triplet(
+        max(floor_pct, bull), max(floor_pct, bear), max(floor_pct, range_score)
+    )
 
     invalidation_low, invalidation_high, invalidation_text = _invalidation_text(
         direction=direction,
@@ -807,7 +814,9 @@ def _build_outlook(
         levels=levels,
     )
     fake_state = (
-        "HIGH"
+        "REFERENCE"
+        if not market_session.is_live
+        else "HIGH"
         if fake_move_risk >= CONFIG.fake_move_high_threshold
         else "MEDIUM"
         if fake_move_risk >= CONFIG.fake_move_medium_threshold

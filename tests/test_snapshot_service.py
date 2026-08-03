@@ -233,3 +233,27 @@ def test_stale_live_vix_is_not_used_as_fresh_context():
     assert snapshot.feed_status["vix"].use_state == "STALE"
     assert snapshot.vix_context.status == "INVALID / UNAVAILABLE"
     assert snapshot.vix_context.seller_environment == "VIX DATA UNAVAILABLE"
+
+
+def test_dhan_dayfirst_quote_timestamp_is_not_misread_as_monthfirst():
+    now = datetime(2026, 8, 3, 12, 35, 7, tzinfo=IST)
+    quote = {"last_trade_time": "03/08/2026 12:35:00"}
+    age = SnapshotService._quote_age_seconds(quote, now)
+    assert age == 7.0
+
+
+def test_quote_timestamp_parser_accepts_iso_epoch_and_time_only():
+    now = datetime(2026, 8, 3, 12, 35, 7, tzinfo=IST)
+    iso_age = SnapshotService._quote_age_seconds(
+        {"last_trade_time": "2026-08-03T12:35:00+05:30"}, now
+    )
+    epoch_age = SnapshotService._quote_age_seconds(
+        {"last_trade_time": int(datetime(2026, 8, 3, 12, 35, tzinfo=IST).timestamp())},
+        now,
+    )
+    time_age = SnapshotService._quote_age_seconds(
+        {"last_trade_time": "12:35:00"}, now
+    )
+    assert iso_age == 7.0
+    assert epoch_age == 7.0
+    assert time_age == 7.0

@@ -1,4 +1,4 @@
-# Architecture — V2.17.1 Simple View + De-dup Final
+# Architecture — V2.17.2 Live Session + FII/DII Durability
 
 ## Simple-view boundary
 

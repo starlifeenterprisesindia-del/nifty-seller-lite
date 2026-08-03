@@ -50,6 +50,7 @@ class MarketContextStore:
         self,
         path: str | Path | None = None,
         mirror_path: str | Path | None = None,
+        rescue_path: str | Path | None = None,
         *,
         cloud_backend: GitHubJsonJournal | None = None,
         cloud_pull_ttl_seconds: int | None = None,
@@ -57,11 +58,16 @@ class MarketContextStore:
         if path is None:
             self.path = Path(CONFIG.market_context_path)
             self.mirror_path = Path(mirror_path or CONFIG.market_context_mirror_path)
+            self.rescue_path = Path(rescue_path or CONFIG.market_context_rescue_path)
         else:
             self.path = Path(path)
             self.mirror_path = Path(
                 mirror_path
                 or self.path.with_name(f"{self.path.stem}.mirror{self.path.suffix}")
+            )
+            self.rescue_path = Path(
+                rescue_path
+                or self.path.with_name(f"{self.path.stem}.rescue{self.path.suffix}")
             )
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         self.cloud_meta_path = self.path.with_name(
@@ -74,8 +80,11 @@ class MarketContextStore:
             else CONFIG.market_context_cloud_pull_ttl_seconds
         )
         self._status = ContextSyncStatus(
-            label="LOCAL BACKUP",
-            message="Cloud journal secrets configured nahi hain.",
+            label="LOCAL ONLY · REDEPLOY RISK",
+            message=(
+                "Local primary + mirror + rescue copies active hain, lekin Streamlit redeploy/reboot "
+                "runtime files hata sakta hai. Permanent safety ke liye private GitHub cloud secrets zaroori hain."
+            ),
             enabled=bool(cloud_backend and cloud_backend.enabled),
         )
 
@@ -204,7 +213,10 @@ class MarketContextStore:
     def _read_unlocked(self) -> dict[str, Any]:
         primary = self._read_path(self.path)
         mirror = self._read_path(self.mirror_path)
-        merged = self._merge_entries(primary["entries"], mirror["entries"])
+        rescue = self._read_path(self.rescue_path)
+        merged = self._merge_entries(
+            primary["entries"], mirror["entries"], rescue["entries"]
+        )
         return {"schema_version": self.SCHEMA_VERSION, "entries": merged}
 
     @staticmethod
@@ -226,6 +238,7 @@ class MarketContextStore:
         }
         self._atomic_write(self.path, clean)
         self._atomic_write(self.mirror_path, clean)
+        self._atomic_write(self.rescue_path, clean)
 
     def _read_cloud_meta(self) -> dict[str, Any]:
         try:
@@ -283,8 +296,11 @@ class MarketContextStore:
         backend = self.cloud_backend
         if backend is None or not backend.enabled:
             self._status = ContextSyncStatus(
-                label="LOCAL BACKUP",
-                message="Cloud journal secrets configured nahi hain.",
+                label="LOCAL ONLY · REDEPLOY RISK",
+                message=(
+                    "Local 3-copy backup active hai, par redeploy/deployment replacement par data mit sakta hai. "
+                    "Private GitHub cloud journal configure karo."
+                ),
                 enabled=False,
             )
             return [], None
@@ -367,8 +383,11 @@ class MarketContextStore:
     def sync_status(self) -> ContextSyncStatus:
         if not self.cloud_enabled:
             self._status = ContextSyncStatus(
-                label="LOCAL BACKUP",
-                message="Cloud journal secrets configured nahi hain.",
+                label="LOCAL ONLY · REDEPLOY RISK",
+                message=(
+                    "Local 3-copy backup active hai, par redeploy/deployment replacement par data mit sakta hai. "
+                    "Private GitHub cloud journal configure karo."
+                ),
                 enabled=False,
             )
             return self._status
@@ -382,10 +401,20 @@ class MarketContextStore:
     def load(self) -> list[dict[str, Any]]:
         with self._locked():
             data = self._read_unlocked()
-            remote_entries, _ = self._pull_cloud_unlocked(force=False)
+            remote_entries, sha = self._pull_cloud_unlocked(force=False)
             if remote_entries:
                 data["entries"] = self._merge_entries(data["entries"], remote_entries)
             self._write_unlocked(data)
+            # First-time cloud setup: existing local rows are copied to the empty private
+            # journal automatically. A failed pull never triggers a destructive push.
+            if (
+                self.cloud_enabled
+                and data["entries"]
+                and not remote_entries
+                and sha is None
+                and self._status.label == "CLOUD SYNC OK"
+            ):
+                self._push_cloud_unlocked(data, sha=None)
             return list(data["entries"])
 
     def get(self, session_date: date) -> dict[str, Any] | None:
@@ -543,7 +572,12 @@ class MarketContextStore:
 
     def clear(self) -> None:
         with self._locked():
-            for path in (self.path, self.mirror_path, self.cloud_meta_path):
+            for path in (
+                self.path,
+                self.mirror_path,
+                self.rescue_path,
+                self.cloud_meta_path,
+            ):
                 try:
                     path.unlink()
                 except FileNotFoundError:

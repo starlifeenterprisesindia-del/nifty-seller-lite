@@ -406,7 +406,9 @@ def test_unavailable_option_chain_zeroes_all_seller_setup_scores():
     assert result.ce_sell.status == "UNAVAILABLE"
     assert result.iron_condor.status == "UNAVAILABLE"
     assert result.final_action == "WAIT"
-    assert result.outlook.range_path_pct == 100.0
+    assert result.outlook.range_path_pct >= 90.0
+    assert result.outlook.bullish_path_pct > 0
+    assert result.outlook.bearish_path_pct > 0
 
 
 def _pattern_signal(
@@ -536,3 +538,20 @@ def test_buy_alignment_gate_does_not_revote_core_price_action_and_volume():
     assert ce_cautions == []
     assert "Price action is not bearish-aligned" in pe_cautions
     assert "Futures volume is not bearish-aligned" in pe_cautions
+
+
+def test_reference_session_does_not_call_data_block_fake_move_100_percent():
+    kwargs = common_kwargs()
+    kwargs["market_session"] = MarketSession(
+        "CLOSED_OR_STALE_SESSION",
+        "LIVE SESSION NOT CONFIRMED — REFERENCE DATA",
+        False,
+        "fresh quote unavailable",
+    )
+    result = calculate_final_decision(**kwargs)
+    assert result.final_action == "WAIT"
+    assert result.outlook.fake_move_risk < 100.0
+    assert result.outlook.fake_move_state == "REFERENCE"
+    assert result.outlook.bullish_path_pct > 0
+    assert result.outlook.bearish_path_pct > 0
+    assert result.outlook.range_path_pct > 0

@@ -221,3 +221,26 @@ def test_pcr_never_overrides_opposite_premium_oi_volume_flow():
     assert bearish > bullish
     assert bias == "BEARISH"
     assert round(bullish + bearish + neutral, 1) == 100.0
+
+
+def test_first_snapshot_extreme_flow_is_calibrated_by_low_confidence():
+    now = datetime(2026, 7, 20, 10, 0, tzinfo=IST)
+    current = chain()
+    result = calculate_option_intelligence(
+        current_frame=current,
+        spot=24350,
+        expiry="2026-07-21",
+        captured_at=now,
+        history=[],
+        current_snapshot={
+            "captured_at": now.isoformat(),
+            "spot": 24350,
+            "rows": current.to_dict(orient="records"),
+        },
+        is_live=True,
+    )
+    assert result.confidence == 38.0
+    assert result.bullish_score < 85.0
+    assert result.bearish_score > 0.0
+    assert result.range_score > 0.0
+    assert round(result.bullish_score + result.bearish_score + result.range_score, 1) == 100.0

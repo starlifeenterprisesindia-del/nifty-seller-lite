@@ -1,0 +1,35 @@
+V2.17.2 DEPLOYMENT — LIVE SESSION + FII/DII PERMANENT STORAGE
+
+1. Extract the final ZIP and upload the complete contents to the existing GitHub app repository root.
+2. Replace matching files. Do not delete the Streamlit app and do not overwrite existing [dhan] Secrets.
+3. Commit message:
+   Fix live quote dates and FII DII durable storage
+4. Let Streamlit redeploy/reboot.
+5. Confirm sidebar version:
+   2.17.2_LIVE_SESSION_FII_DURABILITY
+
+PERMANENT FII/DII — REQUIRED ONCE
+A runtime data folder cannot survive every Streamlit deployment replacement. For permanent storage:
+1. Create a separate PRIVATE GitHub repository, e.g. nifty-seller-private-data.
+2. Create a fine-grained token restricted only to that repository.
+3. Give Repository permissions > Contents: Read and write.
+4. Open Streamlit Manage app > Settings > Secrets.
+5. Keep the existing [dhan] block and append:
+
+[fii_dii_cloud]
+owner = "YOUR_GITHUB_USERNAME"
+repo = "nifty-seller-private-data"
+token = "YOUR_FINE_GRAINED_TOKEN"
+path = "fii_dii_15_sessions.json"
+branch = "main"
+
+6. Save Secrets and reboot once.
+7. Open FII/DII journal. It must show:
+   FII/DII Storage: CLOUD + 3 LOCAL COPIES SAFE
+8. Restore the old backup JSON once if old rows are missing, then press Sync cloud now.
+9. Never commit/share the token.
+
+LIVE CHECK
+- During market hours a fresh 03/08/2026 Dhan timestamp must show seconds old, not ~148 days.
+- The session should say MARKET OPEN — LIVE DATA when quote and current completed candle are fresh.
+- If live cannot be confirmed, it should say SESSION NOT CONFIRMED / REFERENCE, not MARKET CLOSED.
