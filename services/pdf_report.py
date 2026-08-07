@@ -20,7 +20,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from analysis.evidence_matrix import build_compact_evidence_matrix
+from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
 from analysis.presentation_safety import safe_brain_hinglish_line
 from config import CONFIG
 from models import MarketSnapshot
@@ -479,6 +479,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     # Evidence and decision.
     story.append(_section_title("3. Compact All-Features Evidence"))
     matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
+    reference_name, impact_by_module = build_module_impact_audit(snapshot, matrix)
     matrix_rows = [
         [
             row["Module"],
@@ -486,20 +487,21 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             _pct(row["Bearish %"]),
             _pct(row["Neutral %"]),
             _pct(row["Confidence %"]),
+            impact_by_module.get(str(row["Module"]), "-"),
             row["Result"],
         ]
         for row in matrix
     ]
     story.append(
         _table(
-            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "Current result"],
+            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "One-Brain impact", "Current result"],
             matrix_rows,
-            widths=[34 * mm, 19 * mm, 19 * mm, 19 * mm, 23 * mm, 143 * mm],
+            widths=[32 * mm, 18 * mm, 18 * mm, 18 * mm, 21 * mm, 52 * mm, 98 * mm],
         )
     )
     story.append(
         Paragraph(
-            "Directional percentages are evidence mix, not profit probability. W/M and Special Candle are bounded confirmations inside the same Final One-Brain; no row creates a separate action.",
+            f"One-Brain impact is an audit of the canonical {reference_name} selected/reference architecture, not market-move probability. No row creates a separate action.",
             styles["Body"],
         )
     )
@@ -1978,6 +1980,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
     story.append(PageBreak())
     story.append(_section_title("2. Main Evidence and Safety"))
     matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
+    reference_name, impact_by_module = build_module_impact_audit(snapshot, matrix)
     matrix_rows = []
     for row in matrix:
         matrix_rows.append([
@@ -1986,13 +1989,14 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
             _pct(row.get("Bearish %")),
             _pct(row.get("Neutral %")),
             _pct(row.get("Confidence %")),
+            impact_by_module.get(str(row["Module"]), "-"),
             row["Result"],
         ])
     story.append(
         _table(
-            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "Current result"],
+            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "One-Brain impact", "Current result"],
             matrix_rows,
-            widths=[44 * mm, 27 * mm, 27 * mm, 27 * mm, 31 * mm, 114 * mm],
+            widths=[38 * mm, 23 * mm, 23 * mm, 23 * mm, 27 * mm, 54 * mm, 82 * mm],
             compact=True,
         )
     )

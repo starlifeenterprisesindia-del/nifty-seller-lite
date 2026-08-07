@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from analysis.evidence_matrix import build_compact_evidence_matrix
+from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
 from analysis.spot_premium_calculator import calculate_spot_premium_range
 from analysis.presentation_safety import (
     candidate_invalidation_text,
@@ -695,28 +695,112 @@ def render_evidence_matrix(
 ) -> None:
     st.subheader("All Features — Compact Evidence")
     st.caption(
-        "10 compact cards same One-Brain ki evidence dikhate hain. W/M aur Special Candle "
+        "10 compact rows same One-Brain ki evidence dikhati hain. W/M aur Special Candle "
         "bounded confirmation ke roop mein Final One-Brain mein shamil hain; koi row "
         "alag BUY/SELL/WAIT action nahi deti."
     )
     rows = build_compact_evidence_matrix(snapshot, previous_snapshot)
-    cards = []
+    previous_rows = (
+        build_compact_evidence_matrix(previous_snapshot)
+        if previous_snapshot is not None
+        else []
+    )
+    previous_by_module = {str(row["Module"]): row for row in previous_rows}
+    reference_name, impact_by_module = build_module_impact_audit(snapshot, rows)
+
+    def score_text(value: Any, short: str) -> str:
+        return f"{short}{float(value):.0f}" if value is not None else f"{short}—"
+
+    def score_cell(value: Any, tone: str) -> str:
+        if value is None:
+            return "—"
+        numeric = max(0.0, min(100.0, float(value)))
+        return (
+            f'<div class="evt-score {tone}"><i style="width:{numeric:.0f}%"></i>'
+            f'<span>{numeric:.0f}%</span></div>'
+        )
+
+    def change_text(row: dict[str, Any]) -> str:
+        previous = previous_by_module.get(str(row["Module"]))
+        if previous is None:
+            return "Pehla snapshot"
+        deltas = []
+        for key, short in (("Bullish %", "B"), ("Bearish %", "R"), ("Neutral %", "N")):
+            current_value = row.get(key)
+            previous_value = previous.get(key)
+            if current_value is not None and previous_value is not None:
+                deltas.append(f"{short}{float(current_value) - float(previous_value):+.0f}")
+        if str(row["Module"]) == "NIFTY Top-7":
+            current_move = snapshot.heavyweights.weighted_move_pct
+            previous_move = previous_snapshot.heavyweights.weighted_move_pct
+            if current_move is not None and previous_move is not None:
+                elapsed = max(0, round((snapshot.created_at - previous_snapshot.created_at).total_seconds() / 60))
+                return f"{elapsed}m {current_move - previous_move:+.3f}%"
+        if deltas and any(item[-2:] not in {"+0", "-0"} for item in deltas):
+            return "Δ " + " ".join(deltas)
+        return "Koi badlav nahi" if row.get("Result") == previous.get("Result") else "Result badla"
+
+    body = []
     for row in rows:
-        bull = float(row.get("Bullish %") or 0)
-        bear = float(row.get("Bearish %") or 0)
-        neutral = float(row.get("Neutral %") or 0)
-        confidence = float(row.get("Confidence %") or 0)
-        tone = "green" if bull >= max(bear, neutral) and bull >= 55 else "red" if bear >= max(bull, neutral) and bear >= 55 else ""
-        cards.append(
+        mix = " · ".join(
             (
-                str(row.get("Module", "Module")),
-                str(row.get("Result", "—")),
-                f"Bull {bull:.0f} · Bear {bear:.0f} · Neutral {neutral:.0f} · Bharosa {confidence:.0f}/100",
-                tone,
+                score_text(row.get("Bullish %"), "B"),
+                score_text(row.get("Bearish %"), "R"),
+                score_text(row.get("Neutral %"), "N"),
             )
         )
-    st.html(_responsive_cards_html(cards)) if hasattr(st, "html") else st.markdown(
-        _responsive_cards_html(cards), unsafe_allow_html=True
+        confidence = (
+            f"{float(row['Confidence %']):.0f}%"
+            if row.get("Confidence %") is not None
+            else "—"
+        )
+        change = change_text(row)
+        impact = impact_by_module.get(str(row["Module"]), "—")
+        body.append(
+            '<tr>'
+            f'<td class="evt-module">{escape(str(row["Module"]))}</td>'
+            f'<td class="evt-bull">{score_cell(row.get("Bullish %"), "green")}</td>'
+            f'<td class="evt-bear">{score_cell(row.get("Bearish %"), "red")}</td>'
+            f'<td class="evt-neutral">{score_cell(row.get("Neutral %"), "gray")}</td>'
+            f'<td class="evt-conf">{confidence}</td>'
+            f'<td class="evt-mix">{escape(mix)}</td>'
+            f'<td class="evt-impact">{escape(impact)}</td>'
+            f'<td class="evt-result"><b>{escape(str(row.get("Result") or "—"))}</b><span>{escape(change)}</span><em>{escape(impact)}</em></td>'
+            '</tr>'
+        )
+    table_html = (
+        '<style>'
+        '.evt-wrap{overflow:hidden;border:1px solid rgba(127,127,127,.24);border-radius:10px}'
+        '.evt{width:100%;border-collapse:collapse;table-layout:fixed;font-size:.78rem}'
+        '.evt th,.evt td{padding:8px;border-bottom:1px solid rgba(127,127,127,.20);text-align:left;vertical-align:middle;overflow-wrap:anywhere}'
+        '.evt th{background:rgba(127,127,127,.09);font-weight:800}'
+        '.evt tr:last-child td{border-bottom:0}'
+        '.evt-module{width:13%;font-weight:800}.evt-bull,.evt-bear,.evt-neutral{width:7%}.evt-conf{width:7%}.evt-impact{width:18%;font-size:.70rem}.evt-result{width:41%}'
+        '.evt-bull{color:#22c55e}.evt-bear{color:#ef4444}.evt-neutral{color:#a3a3a3}'
+        '.evt-score{position:relative;height:16px;border-radius:99px;background:rgba(127,127,127,.14);overflow:hidden;min-width:54px}'
+        '.evt-score i{position:absolute;inset:0 auto 0 0;background:#6b7280}.evt-score.green i{background:#22c55e}.evt-score.red i{background:#ef4444}'
+        '.evt-score span{position:absolute;inset:0 4px 0 auto;line-height:16px;font-size:.66rem;font-weight:800;color:var(--text-color,white)}'
+        '.evt-result span{display:block;margin-top:2px;font-size:.70rem;color:#60a5fa}'
+        '.evt-result em{display:none;margin-top:2px;font-size:.61rem;color:#f59e0b;font-style:normal}'
+        '.evt-mix{display:none}'
+        '@media(max-width:760px){'
+        '.evt{font-size:.68rem}.evt th,.evt td{padding:6px 4px}'
+        '.evt-bull,.evt-bear,.evt-neutral,.evt-impact{display:none}'
+        '.evt-mix{display:table-cell;width:24%;white-space:normal}'
+        '.evt-module{width:22%}.evt-conf{width:13%;text-align:center}.evt-result{width:41%}'
+        '.evt-result b{font-size:.68rem}.evt-result span,.evt-result em{display:block;font-size:.61rem}'
+        '}'
+        '</style><div class="evt-wrap"><table class="evt"><thead><tr>'
+        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th>'
+        '<th class="evt-mix">B/R/N</th><th>Bharosa</th><th class="evt-impact">One-Brain mein Asar</th><th>Abhi ka result / Badlav</th>'
+        '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
+    )
+    st.html(table_html) if hasattr(st, "html") else st.markdown(
+        table_html, unsafe_allow_html=True
+    )
+    st.caption(
+        f"One-Brain mein Asar current {reference_name} selected/reference architecture ke canonical weights ka audit hai. "
+        "Yeh market move ki guarantee nahi aur koi second BUY/SELL calculation nahi karta."
     )
 
 

@@ -199,6 +199,98 @@ def _feed_confidence(snapshot: MarketSnapshot) -> float:
     return round(clamp(base, 0.0, 100.0), 1)
 
 
+def build_module_impact_audit(
+    snapshot: MarketSnapshot,
+    rows: list[dict[str, Any]],
+) -> tuple[str, dict[str, str]]:
+    """Explain canonical module weights without producing another decision.
+
+    The selected setup is used when available; during WAIT the highest existing
+    strategy score is the reference architecture. Active points are a display audit
+    of that module's current dominant evidence and confidence, never an order signal.
+    """
+
+    decision = getattr(snapshot, "decision", None)
+    evaluations = {}
+    if decision is not None:
+        evaluations = {
+            name: evaluation
+            for name, evaluation in (
+                ("CE BUY", getattr(decision, "ce_buy", None)),
+                ("PE BUY", getattr(decision, "pe_buy", None)),
+                ("CE SELL", getattr(decision, "ce_sell", None)),
+                ("PE SELL", getattr(decision, "pe_sell", None)),
+                ("IRON CONDOR", getattr(decision, "iron_condor", None)),
+            )
+            if evaluation is not None
+        }
+    final_action = str(getattr(decision, "final_action", "WAIT"))
+    selected = final_action.replace(" WITH HEDGE", "")
+    reference = selected if selected in evaluations and final_action != "WAIT" else "IRON CONDOR"
+    if evaluations and (reference not in evaluations or final_action == "WAIT"):
+        reference = max(
+            evaluations,
+            key=lambda name: float(getattr(evaluations[name], "score", 0.0)),
+        )
+    buyer = reference in {"CE BUY", "PE BUY"}
+    weights = (
+        {
+            "Price Action": 18.0,
+            "OI & Options Flow": 22.0,
+            "EMA / MACD / RSI": 14.0,
+            "Levels & Volume": 8.0,
+            "NIFTY Top-7": 16.0,
+            "FII/DII (15 Sessions)": 10.0,
+            "VIX / Data Integrity": 12.0,
+        }
+        if buyer
+        else {
+            "Price Action": 15.8,
+            "OI & Options Flow": 35.0,
+            "EMA / MACD / RSI": 12.2,
+            "Levels & Volume": 7.0,
+            "NIFTY Top-7": 15.0,
+            "FII/DII (15 Sessions)": 6.0,
+            "VIX / Data Integrity": 9.0,
+        }
+    )
+    audit: dict[str, str] = {}
+    for row in rows:
+        module = str(row["Module"])
+        if module == "3M W/M Pattern":
+            maximum, max_text = 8.0, "Max 8 pts"
+        elif module == "Special Candle":
+            maximum, max_text = 4.0, "Max 4 pts"
+        elif module == "News / Event Risk":
+            news = getattr(snapshot, "news_context", None)
+            risk = str(getattr(news, "risk_level", "NONE"))
+            audit[module] = f"WAIT/Risk modifier · {risk}"
+            continue
+        elif module == "VIX / Data Integrity":
+            audit[module] = f"Max {weights[module]:.0f}% · risk/seller environment"
+            continue
+        else:
+            maximum = weights.get(module, 0.0)
+            max_text = f"Max {maximum:.1f}%"
+        usable = {
+            label: float(row[key])
+            for label, key in (
+                ("Bull", "Bullish %"),
+                ("Bear", "Bearish %"),
+                ("Range", "Neutral %"),
+            )
+            if row.get(key) is not None
+        }
+        if not usable or maximum <= 0:
+            audit[module] = max_text
+            continue
+        direction, score = max(usable.items(), key=lambda item: item[1])
+        confidence = float(row.get("Confidence %") or 0.0) / 100.0
+        active = maximum * score / 100.0 * confidence
+        audit[module] = f"{max_text} · Abhi {active:.1f} pts {direction}"
+    return reference, audit
+
+
 def _short_structure(value: str) -> str:
     upper = str(value or "").upper()
     if "BULLISH HH/HL" in upper:
