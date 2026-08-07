@@ -45,6 +45,7 @@ from ui.components import (
     render_market_session,
     render_news_context,
     render_barrier_map,
+    render_compact_protected_setup,
     render_main_ai_market_view,
     render_option_chain,
     render_option_flow_matrix,
@@ -86,7 +87,7 @@ except ImportError:
             if distance is not None:
                 note_parts.append(f"{float(distance):,.0f} pts")
             if strength is not None:
-                note_parts.append(f"Strength {float(strength):.0f}")
+                note_parts.append(f"Bachne ki taakat {float(strength):.0f}")
             return value, " · ".join(note_parts) or fallback
 
         resistance, resistance_note = _level_value(
@@ -122,8 +123,8 @@ st.markdown(
 )
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "V2.17.2 Live Session + FII/DII Durability — ek hi One-Brain, de-duplicated evidence, compact top view, "
-    "top-3 strategy planner aur strict WAIT safety. Read only; no order placement."
+    "V2.18.0 Hinglish One-Brain UI — clear barrier pressure, combined core view, separate Top-7/FII-DII/news, "
+    "one compact strategy card aur strict WAIT safety. Read only; no order placement."
 )
 
 
@@ -579,12 +580,12 @@ previous_view_snapshot = (
 
 render_market_session(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
-render_trade_plan(view_snapshot, compact=True, max_rows=3)
 render_compact_barrier_map(view_snapshot)
+render_compact_protected_setup(view_snapshot)
 render_spot_premium_calculator(view_snapshot)
 
 with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):
-    render_evidence_matrix(view_snapshot)
+    render_evidence_matrix(view_snapshot, previous_view_snapshot)
     render_market_outlook(view_snapshot)
 
 execution_expanded = (
@@ -696,7 +697,6 @@ with st.expander(
         )
 
 with st.expander("Detailed Core Market Evidence", expanded=False):
-    render_barrier_map(view_snapshot)
     st.subheader("Core Market Evidence")
     render_core_evidence(view_snapshot)
 
@@ -769,7 +769,9 @@ with st.expander("Download Reports", expanded=False):
         if generate_quick_pdf:
             try:
                 with st.spinner("Building 2-page quick report from current snapshot only..."):
-                    st.session_state.quick_pdf_bytes = build_quick_market_pdf(view_snapshot)
+                    st.session_state.quick_pdf_bytes = build_quick_market_pdf(
+                        view_snapshot, previous_view_snapshot
+                    )
                 st.success("Quick Market Report ready")
             except Exception as exc:
                 st.error(f"Quick report not generated: {exc}")
@@ -787,7 +789,9 @@ with st.expander("Download Reports", expanded=False):
         if generate_pdf:
             try:
                 with st.spinner("Building full audit PDF from the current snapshot only..."):
-                    st.session_state.audit_pdf_bytes = build_full_audit_pdf(view_snapshot)
+                    st.session_state.audit_pdf_bytes = build_full_audit_pdf(
+                        view_snapshot, previous_view_snapshot
+                    )
                 st.success("Full Audit PDF ready")
             except Exception as exc:
                 st.error(f"Full Audit PDF not generated: {exc}")

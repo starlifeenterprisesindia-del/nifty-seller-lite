@@ -252,18 +252,18 @@ def _level_adjustments(
     if levels.downside_room is not None:
         if levels.downside_room < 10:
             ce_adjust -= 18
-            ce_cautions.append("CE sell has limited downside room before support")
+            ce_cautions.append("Support paas hai; bounce se CE Sell ko risk")
     if levels.upside_room is not None:
         if levels.upside_room < 10:
             pe_adjust -= 18
-            pe_cautions.append("PE sell has limited upside room before resistance")
+            pe_cautions.append("Resistance paas hai; rejection se PE Sell ko risk")
 
     if levels.current_position == "NEAR SUPPORT":
         ce_adjust -= 10
-        ce_cautions.append("Current price is near support")
+        ce_cautions.append("Price support ke paas hai; CE Sell me bounce risk")
     elif levels.current_position == "NEAR RESISTANCE":
         pe_adjust -= 10
-        pe_cautions.append("Current price is near resistance")
+        pe_cautions.append("Price resistance ke paas hai; PE Sell me rejection risk")
 
     rooms = [
         value

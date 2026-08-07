@@ -614,11 +614,14 @@ def _barrier_level(
     )
 
     inside = cluster.lower <= spot <= cluster.upper
+    hold_margin = strength - break_pressure
     if inside:
         state = "TESTING"
+    elif distance <= CONFIG.pretouch_warning_distance_points and hold_margin >= 15:
+        state = "HOLDING / STRONG"
     elif recent_touch and reaction is not None and reaction >= 65 and break_pressure < 65:
         state = "HOLDING"
-    elif break_pressure >= 75 or weakening:
+    elif break_pressure >= 75 or (weakening and break_pressure > strength):
         state = "WEAKENING / BREAK RISK"
     elif distance <= CONFIG.pretouch_warning_distance_points:
         state = "APPROACHING"
@@ -815,11 +818,19 @@ def calculate_barrier_map(
 
     if nearest_r and nearest_s:
         if trading_range.breakout_bias == "UPSIDE RISK":
-            path = f"Upar R1 {nearest_r.midpoint:,.0f} tootne ka pressure zyada hai; next R {next_r.midpoint:,.0f}." if next_r else f"Upar R1 {nearest_r.midpoint:,.0f} par break pressure zyada hai."
+            path = (
+                f"R1 ko bachane ki taakat {nearest_r.strength:.0f}, todne ka pressure "
+                f"{nearest_r.break_pressure:.0f}—upar break risk; "
+                + (f"next R {next_r.lower:,.0f}–{next_r.upper:,.0f}." if next_r else "confirmation tak WAIT.")
+            )
         elif trading_range.breakout_bias == "DOWNSIDE RISK":
-            path = f"Neeche S1 {nearest_s.midpoint:,.0f} tootne ka pressure zyada hai; next S {next_s.midpoint:,.0f}." if next_s else f"Neeche S1 {nearest_s.midpoint:,.0f} par break pressure zyada hai."
+            path = (
+                f"S1 ko bachane ki taakat {nearest_s.strength:.0f}, todne ka pressure "
+                f"{nearest_s.break_pressure:.0f}—neeche break risk; "
+                + (f"next S {next_s.lower:,.0f}–{next_s.upper:,.0f}." if next_s else "confirmation tak WAIT.")
+            )
         else:
-            path = "Dono taraf break pressure abhi balanced hai."
+            path = "Dono taraf takkar barabar hai—confirmation tak WAIT."
         summary = (
             f"Range {nearest_s.midpoint:,.0f}–{nearest_r.midpoint:,.0f} | "
             f"Speed {speed.state} {speed.score:.0f}/100. {path}"

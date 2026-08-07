@@ -73,9 +73,9 @@ def test_mixed_core_is_not_presented_as_unconditional_up_or_down():
 
 def test_brain_line_labels_levels_by_actual_side():
     line = safe_brain_hinglish_line(fake_snapshot())
-    assert "24,276–24,282 resistance" in line
-    assert "24,258–24,264 support" in line
-    assert "24,258–24,264 resistance" not in line
+    assert "R1 24,276–24,282" in line
+    assert "S1 24,258–24,264" in line
+    assert "R1 24,258–24,264" not in line
     assert "WAIT" in line
 
 

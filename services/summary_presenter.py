@@ -210,14 +210,14 @@ def snapshot_change_items(
     if current_r is not None and prior_r is not None:
         items.append(
             (
-                "R1 Strength",
+                "R1 bachne ki taakat",
                 f"{current_r.strength:.0f}/100",
                 f"{current_r.strength - prior_r.strength:+.0f}",
             )
         )
         items.append(
             (
-                "R1 Break Pressure",
+                "R1 tootne ka pressure",
                 f"{current_r.break_pressure:.0f}/100",
                 f"{current_r.break_pressure - prior_r.break_pressure:+.0f}",
             )

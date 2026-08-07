@@ -16,26 +16,26 @@ def test_pdf_uses_same_presentation_summary_and_not_a_duplicate_explanation_engi
     root = Path(__file__).resolve().parents[1]
     report = (root / "services" / "pdf_report.py").read_text(encoding="utf-8")
     ui = (root / "ui" / "components.py").read_text(encoding="utf-8")
-    assert "brain_hinglish_line(snapshot)" in report
-    assert "brain_hinglish_line(snapshot)" in ui
+    assert "safe_brain_hinglish_line(snapshot, previous_snapshot)" in report
+    assert "safe_brain_hinglish_line(snapshot, previous_snapshot)" in ui
     assert "def _brain_hinglish_line" not in ui
 
 
 def test_main_ai_is_top_screen_and_developer_raw_is_hidden_by_default():
     root = Path(__file__).resolve().parents[1]
     app = (root / "app.py").read_text(encoding="utf-8")
-    assert app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)") < app.index("render_barrier_map(view_snapshot)")
+    assert app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)") < app.index("render_compact_barrier_map(view_snapshot)")
     assert 'if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":' in app
     assert "Delete selected date" not in app
 
 
-def test_simple_view_prioritizes_final_brain_and_top_three_planner():
+def test_simple_view_prioritizes_final_brain_levels_and_one_compact_setup():
     root = Path(__file__).resolve().parents[1]
     app = (root / "app.py").read_text(encoding="utf-8")
     main = app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)")
-    planner = app.index("render_trade_plan(view_snapshot, compact=True, max_rows=3)")
     levels = app.index("render_compact_barrier_map(view_snapshot)")
-    assert main < planner < levels
+    planner = app.index("render_compact_protected_setup(view_snapshot)")
+    assert main < levels < planner
     assert 'with st.expander("Risk & one-trade discipline", expanded=False):' in app
     assert 'with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):' in app
 

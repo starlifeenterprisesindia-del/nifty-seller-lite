@@ -92,15 +92,17 @@ def test_compact_matrix_has_eight_rows_and_normalized_directional_scores():
         "OI & Options Flow",
         "EMA / MACD / RSI",
         "Levels & Volume",
-        "Top-7 & FII/DII",
-        "VIX / Data / Event Risk",
+        "NIFTY Top-7",
+        "FII/DII (15 Sessions)",
+        "VIX / Data Integrity",
+        "News / Event Risk",
     ]
-    assert len(rows) == 8
-    for row in rows[:7]:
+    assert len(rows) == 10
+    for row in rows[:8]:
         total = row["Bullish %"] + row["Bearish %"] + row["Neutral %"]
         assert round(total, 1) == 100.0
     assert rows[-1]["Bullish %"] is None
-    assert "VIX NA" in rows[-1]["Result"]
+    assert "VIX NA" in rows[-2]["Result"]
 
 
 def test_directional_rounding_always_totals_exactly_100():

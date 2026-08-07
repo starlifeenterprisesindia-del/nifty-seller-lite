@@ -32,6 +32,68 @@ def _barrier_sources(level: Any | None) -> str:
     return " + ".join(str(item) for item in level.sources[:4])
 
 
+def _pressure_label(score: float) -> str:
+    if score <= 25:
+        return "Bahut kam"
+    if score <= 40:
+        return "Kam"
+    if score < 60:
+        return "Barabar takkar"
+    if score < 75:
+        return "Zyada"
+    return "Bahut zyada"
+
+
+def _barrier_verdict(level: Any) -> str:
+    side = str(level.side).upper()
+    margin = float(level.strength) - float(level.break_pressure)
+    if margin >= 15:
+        return "Resistance filhaal majboot" if side == "RESISTANCE" else "Support filhaal majboot"
+    if margin <= -8:
+        return "Resistance toot sakta hai" if side == "RESISTANCE" else "Support toot sakta hai"
+    return "Takkar barabar—WAIT"
+
+
+def _barrier_state_hinglish(level: Any) -> str:
+    state = str(level.state).upper()
+    mapping = {
+        "TESTING": "ABHI TEST HO RAHA",
+        "HOLDING / STRONG": "MAJBOOT / BACH RAHA",
+        "HOLDING": "FILHAAL BACH RAHA",
+        "WEAKENING / BREAK RISK": "KAMZOR / TOOTNE KA RISK",
+        "APPROACHING": "MARKET PAAS AA RAHA",
+        "AHEAD": "AAGE KA LEVEL",
+        "FAR": "ABHI DOOR",
+    }
+    return mapping.get(state, state)
+
+
+def _responsive_cards_html(cards: list[tuple[str, str, str, str]]) -> str:
+    """Responsive replacement for wide dataframes on phone screens."""
+    blocks = []
+    for label, value, note, tone in cards:
+        blocks.append(
+            f'<div class="rfc {escape(tone)}">'
+            f'<div class="rfc-label">{escape(label)}</div>'
+            f'<div class="rfc-value">{escape(value)}</div>'
+            f'<div class="rfc-note">{escape(note)}</div>'
+            '</div>'
+        )
+    return (
+        '<style>'
+        '.rfc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:6px 0 12px}'
+        '.rfc{min-width:0;border:1px solid rgba(127,127,127,.24);border-radius:12px;padding:10px;background:rgba(127,127,127,.045)}'
+        '.rfc.green{border-color:rgba(34,197,94,.38);background:rgba(34,197,94,.08)}'
+        '.rfc.amber{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.08)}'
+        '.rfc.red{border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.08)}'
+        '.rfc-label{font-size:.75rem;font-weight:800;opacity:.76;text-transform:uppercase}'
+        '.rfc-value{font-size:1.02rem;font-weight:900;margin:3px 0;overflow-wrap:anywhere}'
+        '.rfc-note{font-size:.77rem;line-height:1.35;opacity:.82;overflow-wrap:anywhere}'
+        '@media(max-width:760px){.rfc-grid{grid-template-columns:1fr}}'
+        '</style><div class="rfc-grid">' + ''.join(blocks) + '</div>'
+    )
+
+
 def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: str) -> str:
     if level is None:
         return (
@@ -39,20 +101,27 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
             f'<div class="bm-tag">{escape(fallback_label)}</div>'
             '<div class="bm-zone">Unresolved</div></div>'
         )
-    state = escape(str(level.state))
+    state = escape(_barrier_state_hinglish(level))
     sources = escape(_barrier_sources(level))
     strength_width = max(0.0, min(100.0, float(level.strength)))
     pressure_width = max(0.0, min(100.0, float(level.break_pressure)))
+    confirmation = (
+        f"{level.upper:,.0f} ke upar close"
+        if str(level.side).upper() == "RESISTANCE"
+        else f"{level.lower:,.0f} ke neeche close"
+    )
     return (
         f'<div class="bm-level {css_class}">'
         f'<div class="bm-level-head"><span class="bm-tag">{escape(level.label)} · {escape(level.side.title())}</span>'
         f'<span class="bm-state">{state}</span></div>'
         f'<div class="bm-zone">{level.lower:,.0f}–{level.upper:,.0f}</div>'
         f'<div class="bm-bars">'
-        f'<div><span>Strength</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>'
-        f'<div><span>Break Pressure</span><b>{level.break_pressure:.0f}/100</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>'
+        f'<div><span>Na tootne ki majbooti</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>'
+        f'<div><span>Tootne ka pressure</span><b>{level.break_pressure:.0f}/100 · {escape(_pressure_label(float(level.break_pressure)))}</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>'
         f'</div>'
-        f'<div class="bm-small">Distance {level.distance_points:,.0f} pts · Kyun: {sources}</div>'
+        f'<div class="bm-verdict">Faisla: {escape(_barrier_verdict(level))}</div>'
+        f'<div class="bm-small">Confirm: {confirmation}</div>'
+        f'<div class="bm-small">{level.distance_points:,.0f} pts door · Kyun: {sources}</div>'
         f'</div>'
     )
 
@@ -65,7 +134,7 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
             return "Unresolved", fallback
         return (
             f"{level.lower:,.0f}–{level.upper:,.0f}",
-            f"{level.distance_points:,.0f} pts · Strength {level.strength:.0f} · Break {level.break_pressure:.0f}",
+            f"Bachne ki taakat {level.strength:.0f} · Tootne ka pressure {level.break_pressure:.0f} ({_pressure_label(float(level.break_pressure))}) · {_barrier_verdict(level)}",
         )
 
     resistance, resistance_note = level_text(item.nearest_resistance, "Resistance unavailable")
@@ -86,7 +155,7 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         else "Range unresolved"
     )
 
-    st.subheader("🧭 Nearest Levels")
+    st.subheader("🧭 Nearest Levels + Core Market Evidence")
     html = (
         '<style>'
         '.cbm-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:4px 0 8px}'
@@ -100,9 +169,9 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         '@media(max-width:760px){.cbm-grid{grid-template-columns:1fr}.cbm{padding:10px}.cbm-v{font-size:1.12rem}}'
         '</style>'
         '<div class="cbm-grid">'
-        f'<div class="cbm res"><div class="cbm-l">NEXT RESISTANCE</div><div class="cbm-v">{escape(resistance)}</div><div class="cbm-n">{escape(resistance_note)}</div></div>'
-        f'<div class="cbm spot"><div class="cbm-l">NIFTY CURRENT</div><div class="cbm-v">{escape(spot)}</div><div class="cbm-n">{escape(range_item.state)} · {escape(range_item.breakout_bias)}</div></div>'
-        f'<div class="cbm sup"><div class="cbm-l">NEXT SUPPORT</div><div class="cbm-v">{escape(support)}</div><div class="cbm-n">{escape(support_note)}</div></div>'
+        f'<div class="cbm res"><div class="cbm-l">AGLI RUKAWAT</div><div class="cbm-v">{escape(resistance)}</div><div class="cbm-n">{escape(resistance_note)}</div></div>'
+        f'<div class="cbm spot"><div class="cbm-l">NIFTY ABHI</div><div class="cbm-v">{escape(spot)}</div><div class="cbm-n">Range {range_item.confidence:.0f}/100 · {escape(range_item.breakout_bias)} · Confirmation tak WAIT</div></div>'
+        f'<div class="cbm sup"><div class="cbm-l">AGLA SAHARA</div><div class="cbm-v">{escape(support)}</div><div class="cbm-n">{escape(support_note)}</div></div>'
         '</div>'
     )
     if hasattr(st, "html"):
@@ -118,6 +187,18 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         f"Probable range {range_text} · Confidence {range_item.confidence:.0f}/100 · "
         f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100. Full map detailed section me hai."
     )
+    core = snapshot.core_evidence
+    _render_compact_cards(
+        [
+            ("Bullish Evidence", f"{core.bullish_score:.1f}/100", "Upar ke completed-candle signals"),
+            ("Bearish Evidence", f"{core.bearish_score:.1f}/100", "Neeche ke completed-candle signals"),
+            ("Range / Mixed", f"{core.range_score:.1f}/100", f"Core state {core.state}"),
+            ("Evidence Bharosa", f"{core.confidence:.1f}%", f"Status {core.status}"),
+        ]
+    )
+    st.info("🧠 **Barrier AI:** " + item.summary)
+    with st.expander("Full R1/R2/S1/S2 barrier map", expanded=False):
+        render_barrier_map(snapshot)
 
 
 def render_barrier_map(snapshot: MarketSnapshot) -> None:
@@ -186,6 +267,7 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         '.bm-bars{display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:.78rem}'
         '.bm-bars>div>span{opacity:.75;margin-right:6px}'
         '.bm-bars b{float:right}'
+        '.bm-verdict{font-size:.86rem;font-weight:800;margin-top:8px}'
         '.bm-track{height:6px;border-radius:99px;background:rgba(127,127,127,.18);overflow:hidden;margin-top:4px}'
         '.bm-fill{height:100%;background:#6b7280;border-radius:99px}'
         '.bm-fill.pressure{background:#f59e0b}'
@@ -605,35 +687,34 @@ def render_header(snapshot: MarketSnapshot) -> None:
     c4.metric("Created", snapshot.created_at.strftime("%H:%M:%S IST"))
 
 
-def render_evidence_matrix(snapshot: MarketSnapshot) -> None:
+def render_evidence_matrix(
+    snapshot: MarketSnapshot,
+    previous_snapshot: MarketSnapshot | None = None,
+) -> None:
     st.subheader("All Features — Compact Evidence")
     st.caption(
-        "8 compact rows same snapshot ki evidence dikhati hain. W/M aur Special Candle "
+        "10 compact cards same One-Brain ki evidence dikhate hain. W/M aur Special Candle "
         "bounded confirmation ke roop mein Final One-Brain mein shamil hain; koi row "
         "alag BUY/SELL/WAIT action nahi deti."
     )
-    rows = build_compact_evidence_matrix(snapshot)
-    st.dataframe(
-        pd.DataFrame(rows),
-        width="stretch",
-        hide_index=True,
-        row_height=38,
-        column_config={
-            "Module": st.column_config.TextColumn("Module", width="medium"),
-            "Bullish %": st.column_config.ProgressColumn(
-                "Bullish", min_value=0, max_value=100, format="%.0f%%", width="small"
-            ),
-            "Bearish %": st.column_config.ProgressColumn(
-                "Bearish", min_value=0, max_value=100, format="%.0f%%", width="small"
-            ),
-            "Neutral %": st.column_config.ProgressColumn(
-                "Neutral", min_value=0, max_value=100, format="%.0f%%", width="small"
-            ),
-            "Confidence %": st.column_config.ProgressColumn(
-                "Confidence", min_value=0, max_value=100, format="%.0f%%", width="small"
-            ),
-            "Result": st.column_config.TextColumn("Current result", width="large"),
-        },
+    rows = build_compact_evidence_matrix(snapshot, previous_snapshot)
+    cards = []
+    for row in rows:
+        bull = float(row.get("Bullish %") or 0)
+        bear = float(row.get("Bearish %") or 0)
+        neutral = float(row.get("Neutral %") or 0)
+        confidence = float(row.get("Confidence %") or 0)
+        tone = "green" if bull >= max(bear, neutral) and bull >= 55 else "red" if bear >= max(bull, neutral) and bear >= 55 else ""
+        cards.append(
+            (
+                str(row.get("Module", "Module")),
+                str(row.get("Result", "—")),
+                f"Bull {bull:.0f} · Bear {bear:.0f} · Neutral {neutral:.0f} · Bharosa {confidence:.0f}/100",
+                tone,
+            )
+        )
+    st.html(_responsive_cards_html(cards)) if hasattr(st, "html") else st.markdown(
+        _responsive_cards_html(cards), unsafe_allow_html=True
     )
 
 
@@ -686,8 +767,8 @@ def _level_summary(level: Any | None, *, fallback: str) -> str:
     if level is None:
         return f"{fallback}: unresolved"
     return (
-        f"{level.lower:,.0f}–{level.upper:,.0f} | Strength {level.strength:.0f}/100 | "
-        f"Break {level.break_pressure:.0f}/100 | {level.state}"
+        f"{level.lower:,.0f}–{level.upper:,.0f} | Bachne ki taakat {level.strength:.0f}/100 | "
+        f"Tootne ka pressure {level.break_pressure:.0f}/100 | {_barrier_verdict(level)}"
     )
 
 
@@ -816,7 +897,10 @@ def render_main_ai_market_view(
             ]
         )
 
-        st.info("🧠 **AI samajh:** " + safe_brain_hinglish_line(snapshot))
+        st.info(
+            "🧠 **AI samajh:** "
+            + safe_brain_hinglish_line(snapshot, previous_snapshot)
+        )
 
         patterns = getattr(snapshot, "patterns", None)
         wm_text, wm_note = _pattern_compact_text(
@@ -844,11 +928,40 @@ def render_main_ai_market_view(
 
         data_text = "LIVE PASS" if feed_ok else "REFERENCE ONLY"
         data_note = snapshot.execution_guard.readiness
+        heavy = snapshot.heavyweights
+        top7_move = (
+            f"{heavy.weighted_move_pct:+.2f}%"
+            if heavy.weighted_move_pct is not None
+            else "MISSING"
+        )
+        prior_move = (
+            previous_snapshot.heavyweights.weighted_move_pct
+            if previous_snapshot is not None
+            else None
+        )
+        if heavy.weighted_move_pct is not None and prior_move is not None:
+            elapsed = max(0, round((snapshot.created_at - previous_snapshot.created_at).total_seconds() / 60))
+            top7_note = (
+                f"{elapsed} min badlav {heavy.weighted_move_pct - prior_move:+.2f}% · "
+                f"{heavy.advancing}↑/{heavy.declining}↓"
+            )
+        else:
+            top7_note = f"Badlav warming · {heavy.advancing}↑/{heavy.declining}↓"
+
+        news_display = normalized_news_display(snapshot.news_context)
+        if news_display.status == "READY":
+            news_text = f"{news_display.risk} RISK"
+            news_note = f"{news_display.bias} · {news_display.note}"
+        else:
+            news_text = "ZERO LIVE WEIGHT"
+            news_note = "Purani/unavailable news direction me count nahi"
         _render_compact_cards(
             [
                 ("3M W/M", wm_text, wm_note),
                 ("Special Candle", candle_text, candle_note),
+                ("NIFTY Top-7", top7_move, top7_note),
                 ("FII/DII", inst_text, inst_note),
+                ("News / Event", news_text, news_note),
                 ("Data / Entry", data_text, data_note),
             ]
         )
@@ -882,17 +995,28 @@ def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
         st.info("Protected CE/PE/Condor candidate abhi available nahi hai.")
         return
 
-    row = {
-        "Setup": name,
-        "Strategy suitability /100": score,
-        "Sell": plan_leg_text(plan.short_legs),
-        "Buy hedge": plan_leg_text(plan.hedge_legs),
-        "Credit pts": plan.estimated_credit_points,
-        "Max risk pts": plan.max_risk_points,
-        "Strike + hedge quality /100": plan.quality_score,
-        "Status": plan.status if is_selected else "REFERENCE ONLY",
-    }
-    st.dataframe(pd.DataFrame([row]), width="stretch", hide_index=True)
+    evaluation = _decision_evaluations(snapshot).get(name)
+    caution = (
+        evaluation.cautions[0]
+        if evaluation is not None and evaluation.cautions
+        else "Koi extra caution nahi"
+    )
+    entry_allowed = snapshot.execution_guard.readiness == "ENTRY READY" and is_selected
+    premium = (
+        f"Credit {plan.estimated_credit_points:.2f} pts"
+        if plan.estimated_credit_points is not None
+        else f"Debit {plan.estimated_debit_points:.2f} pts"
+        if plan.estimated_debit_points is not None
+        else "Premium —"
+    )
+    _render_compact_cards(
+        [
+            ("Best / Reference Setup", name, f"Fit {score:.1f}% · {'Selected' if is_selected else 'Reference only'}"),
+            ("Exact Structure", _plan_structure_text(plan), f"Quality {plan.quality_score:.0f}/100"),
+            ("Premium / Max Risk", premium, f"Max risk {plan.max_risk_points:.2f} pts" if plan.max_risk_points is not None else "Max risk —"),
+            ("Entry Allowed", "YES" if entry_allowed else "NO — WAIT", caution),
+        ]
+    )
     if snapshot.decision.final_action == "WAIT":
         st.info("Final Action WAIT hai — yeh strike pair sirf reference hai, entry signal nahi.")
     invalidation = candidate_invalidation_text(snapshot, name)
@@ -1063,23 +1187,21 @@ def render_decision(
             )
 
         rows.sort(key=lambda row: float(row["Fit %"]), reverse=True)
-        frame = pd.DataFrame(rows)
-
-        def _audit_row(row: pd.Series) -> list[str]:
-            if row["_pick"] == "BEST":
-                return [
-                    "background-color: rgba(34, 197, 94, 0.20); font-weight: 700"
-                ] * len(row)
-            if row["_pick"] == "REFERENCE":
-                return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
-            return [""] * len(row)
-
-        styled = (
-            frame.style.apply(_audit_row, axis=1)
-            .hide(axis="columns", subset=["_pick"])
-            .format({"Fit %": "{:.1f}%"}, na_rep="—")
-        )
-        st.dataframe(styled, width="stretch", hide_index=True, row_height=44)
+        cards = []
+        for row in rows:
+            pick = str(row["_pick"])
+            tone = "green" if pick == "BEST" else "amber" if pick == "REFERENCE" else ""
+            status = "ENTRY PICK" if pick == "BEST" else "REFERENCE ONLY" if pick == "REFERENCE" else str(row["Status"])
+            cards.append(
+                (
+                    f"{row['Setup']} · Fit {float(row['Fit %']):.1f}%",
+                    status,
+                    f"{row['Structure']} | {row['Premium / Risk pts']} | Karan: {row['Main evidence']} | Caution: {row['Main caution']}",
+                    tone,
+                )
+            )
+        html = _responsive_cards_html(cards)
+        st.html(html) if hasattr(st, "html") else st.markdown(html, unsafe_allow_html=True)
         if item.final_action == "WAIT":
             st.info(
                 f"WAIT need {item.wait_need.score:.1f}% hai. {leader_name} sirf amber reference leader hai; "
@@ -1182,35 +1304,20 @@ def render_market_outlook(snapshot: MarketSnapshot) -> None:
         "Signal memory and fake-move risk single opposite snapshot se action flip hone se rokte hain."
         + outlook_note
     )
-    row = {
-        "Bullish path %": item.bullish_path_pct,
-        "Range path %": item.range_path_pct,
-        "Bearish path %": item.bearish_path_pct,
-        "Fake-move risk %": item.fake_move_risk,
-        "Risk state": item.fake_move_state,
-        "Signal memory": item.signal_memory,
-        "Invalidation": item.invalidation_text,
-        "Status": item.status,
-    }
-    st.dataframe(
-        pd.DataFrame([row]),
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Bullish path %": st.column_config.ProgressColumn(
-                "Bullish path", min_value=0, max_value=100, format="%.1f%%"
-            ),
-            "Range path %": st.column_config.ProgressColumn(
-                "Range", min_value=0, max_value=100, format="%.1f%%"
-            ),
-            "Bearish path %": st.column_config.ProgressColumn(
-                "Bearish path", min_value=0, max_value=100, format="%.1f%%"
-            ),
-            "Fake-move risk %": st.column_config.ProgressColumn(
-                "Fake-move risk", min_value=0, max_value=100, format="%.1f%%"
-            ),
-        },
+    trade_status = (
+        "ENTRY READY"
+        if snapshot.execution_guard.readiness == "ENTRY READY"
+        else "DATA READY — TRADE WAIT"
     )
+    cards = [
+        ("Upar ka rasta", f"{item.bullish_path_pct:.1f}%", "Conditional, guarantee nahi", "green" if item.bullish_path_pct >= 55 else ""),
+        ("Range ka rasta", f"{item.range_path_pct:.1f}%", f"Signal memory {item.signal_memory}", "amber" if item.range_path_pct >= 55 else ""),
+        ("Neeche ka rasta", f"{item.bearish_path_pct:.1f}%", "Conditional, guarantee nahi", "red" if item.bearish_path_pct >= 55 else ""),
+        ("Fake-move risk", f"{item.fake_move_risk:.1f}% · {item.fake_move_state}", trade_status, "red" if item.fake_move_risk >= 60 else ""),
+    ]
+    html = _responsive_cards_html(cards)
+    st.html(html) if hasattr(st, "html") else st.markdown(html, unsafe_allow_html=True)
+    st.caption(f"Break confirm/invalid: {item.invalidation_text} · Status: {trade_status}")
     if item.reasons:
         st.caption("Fake-move checks: " + " | ".join(item.reasons))
 

@@ -98,8 +98,8 @@ def test_app_consolidates_status_in_main_ai_without_duplicate_top_sections():
     root = Path(__file__).resolve().parents[1]
     text = (root / "app.py").read_text(encoding="utf-8")
     assert "render_main_ai_market_view(view_snapshot, previous_view_snapshot)" in text
-    assert "render_barrier_map(view_snapshot)" in text
-    assert "render_evidence_matrix(view_snapshot)" in text
+    assert "render_compact_barrier_map(view_snapshot)" in text
+    assert "render_evidence_matrix(view_snapshot, previous_view_snapshot)" in text
     assert "render_pre_touch_barriers(snapshot)" not in text
     assert "render_best_protected_sells(snapshot)" not in text
     assert "Delete selected date" not in text

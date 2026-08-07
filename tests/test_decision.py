@@ -221,16 +221,16 @@ def test_level_cautions_are_strategy_specific():
         status="READY",
     )
     result = calculate_final_decision(**kwargs)
-    assert "CE sell has limited downside room before support" in result.ce_sell.cautions
+    assert "Support paas hai; bounce se CE Sell ko risk" in result.ce_sell.cautions
     assert (
-        "PE sell has limited upside room before resistance"
+        "Resistance paas hai; rejection se PE Sell ko risk"
         not in result.ce_sell.cautions
     )
     assert (
-        "PE sell has limited upside room before resistance" in result.pe_sell.cautions
+        "Resistance paas hai; rejection se PE Sell ko risk" in result.pe_sell.cautions
     )
     assert (
-        "CE sell has limited downside room before support"
+        "Support paas hai; bounce se CE Sell ko risk"
         not in result.pe_sell.cautions
     )
     assert any("balanced room" in item for item in result.iron_condor.cautions)

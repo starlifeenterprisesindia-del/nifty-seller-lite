@@ -378,7 +378,10 @@ def _row(
     }
 
 
-def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, Any]]:
+def build_compact_evidence_matrix(
+    snapshot: MarketSnapshot,
+    previous_snapshot: MarketSnapshot | None = None,
+) -> list[dict[str, Any]]:
     """Build eight compact rows from the same authoritative snapshot."""
 
     pa3 = snapshot.price_action.three_minute
@@ -476,26 +479,32 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
         snapshot.institutional_context.status != "MISSING"
         and snapshot.institutional_context.confidence > 0
     )
-    support_rows = [(*heavy_scores, 0.70)]
-    if inst_available:
-        support_rows.append((*inst_scores, 0.30))
-    support_bull, support_bear, support_neutral = _weighted_scores(support_rows)
-    confidence_weight = 0.70 + (0.30 if inst_available else 0.0)
-    support_confidence = (
-        snapshot.heavyweights.confidence * 0.70
-        + (
-            snapshot.institutional_context.confidence * 0.30
-            if inst_available
-            else 0.0
+    heavy_bull, heavy_bear, heavy_neutral = heavy_scores
+    move = getattr(snapshot.heavyweights, "weighted_move_pct", None)
+    move_text = f"{move:+.3f}%" if move is not None else "NA"
+    prior_move = (
+        getattr(previous_snapshot.heavyweights, "weighted_move_pct", None)
+        if previous_snapshot is not None
+        else None
+    )
+    if move is not None and prior_move is not None:
+        elapsed = max(
+            0,
+            round((snapshot.created_at - previous_snapshot.created_at).total_seconds() / 60),
         )
-    ) / max(confidence_weight, 0.01)
-    support_result = (
-        f"TOP-7 {_short_heavy(snapshot.heavyweights.state)} · "
-        + (
-            f"FII/DII {_short_institutional(snapshot.institutional_context.state)}"
-            if inst_available
-            else "FII/DII NA (ZERO WEIGHT)"
-        )
+        delta_text = f" · {elapsed}m badlav {move - prior_move:+.3f}%"
+    else:
+        delta_text = " · badlav warming"
+    heavy_result = (
+        f"WEIGHTED {move_text}{delta_text} · "
+        f"{getattr(snapshot.heavyweights, 'advancing', 0)} UP / {getattr(snapshot.heavyweights, 'declining', 0)} DOWN"
+    )
+    inst_bull, inst_bear, inst_neutral = inst_scores
+    inst_result = (
+        f"FII/DII {_short_institutional(snapshot.institutional_context.state)} · "
+        f"{getattr(snapshot.institutional_context, 'observations', 0)}/15 SESSIONS"
+        if inst_available
+        else "FII/DII DATA MISSING (ZERO WEIGHT)"
     )
 
     vix = snapshot.vix_context
@@ -522,9 +531,16 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
     vix_text = _short_direction(vix.seller_environment)
     if "BALANCED" in str(vix.seller_environment).upper():
         vix_text = "NORMAL"
-    risk_result = f"{session_text} · VIX {vix_text} · EVENT {snapshot.event_risk.level}"
-    if news_text and "HIGH" in news_text.upper():
-        risk_result += " · NEWS HIGH"
+    risk_result = f"{session_text} · VIX {vix_text} · DATA/FEED CHECK"
+    if news is None or news.status not in {"READY", "OLD"}:
+        news_result = f"EVENT {snapshot.event_risk.level} · FRESH NEWS NA · ZERO DIRECTION WEIGHT"
+        news_confidence = 0.0
+    elif news.status == "OLD":
+        news_result = f"EVENT {snapshot.event_risk.level} · NEWS OLD/LOW WEIGHT · {news.bias}"
+        news_confidence = 25.0
+    else:
+        news_result = f"EVENT {snapshot.event_risk.level} · NEWS {news.risk_level}/{news.bias} · FRESH"
+        news_confidence = 80.0
 
     patterns = getattr(snapshot, "patterns", None)
     wm = (
@@ -588,19 +604,35 @@ def build_compact_evidence_matrix(snapshot: MarketSnapshot) -> list[dict[str, An
             levels_result,
         ),
         _row(
-            "Top-7 & FII/DII",
-            support_bull,
-            support_bear,
-            support_neutral,
-            support_confidence,
-            support_result,
+            "NIFTY Top-7",
+            heavy_bull,
+            heavy_bear,
+            heavy_neutral,
+            snapshot.heavyweights.confidence,
+            heavy_result,
         ),
         _row(
-            "VIX / Data / Event Risk",
+            "FII/DII (15 Sessions)",
+            inst_bull,
+            inst_bear,
+            inst_neutral,
+            snapshot.institutional_context.confidence if inst_available else 0.0,
+            inst_result,
+        ),
+        _row(
+            "VIX / Data Integrity",
             None,
             None,
             None,
             _feed_confidence(snapshot),
             risk_result,
+        ),
+        _row(
+            "News / Event Risk",
+            None,
+            None,
+            None,
+            news_confidence,
+            news_result,
         ),
     ]

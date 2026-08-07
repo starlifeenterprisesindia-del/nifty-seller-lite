@@ -165,14 +165,15 @@ def safe_direction_evidence_score(snapshot: Any) -> float:
     return float(market_rukh_display(snapshot)[1])
 
 
-def safe_brain_hinglish_line(snapshot: Any) -> str:
+def safe_brain_hinglish_line(snapshot: Any, previous_snapshot: Any | None = None) -> str:
     """Build one consistent explanation from canonical snapshot fields."""
 
     decision = getattr(snapshot, "decision", None)
     final_action = _upper(getattr(decision, "final_action", "WAIT")) or "WAIT"
     rukh, _score, rukh_note = market_rukh_display(snapshot)
     option_bias = _option_bias(snapshot)
-    top7_state = _upper(getattr(getattr(snapshot, "heavyweight_intelligence", None), "state", ""))
+    heavyweights = getattr(snapshot, "heavyweights", None)
+    top7_state = _upper(getattr(heavyweights, "state", ""))
     barrier = getattr(snapshot, "barrier_map", None)
     resistance = _zone(getattr(barrier, "nearest_resistance", None))
     support = _zone(getattr(barrier, "nearest_support", None))
@@ -188,10 +189,14 @@ def safe_brain_hinglish_line(snapshot: Any) -> str:
         parts.append(f"Market ka rukh {rukh.lower()} hai")
 
     evidence: list[str] = []
-    if "BROAD BULL" in top7_state:
-        evidence.append("Top-7 heavy stocks positive hain")
-    elif "BROAD BEAR" in top7_state:
-        evidence.append("Top-7 heavy stocks pressure me hain")
+    weighted_move = getattr(heavyweights, "weighted_move_pct", None)
+    prior_heavy = getattr(previous_snapshot, "heavyweights", None)
+    prior_move = getattr(prior_heavy, "weighted_move_pct", None)
+    if weighted_move is not None:
+        top7_text = f"Top-7 weighted move {float(weighted_move):+.2f}% hai"
+        if prior_move is not None:
+            top7_text += f" aur last snapshot se {float(weighted_move) - float(prior_move):+.2f}% badla"
+        evidence.append(top7_text)
     if "BEAR" in option_bias:
         evidence.append("Options/OI bearish pressure dikha raha hai")
     elif "BULL" in option_bias:
@@ -202,12 +207,30 @@ def safe_brain_hinglish_line(snapshot: Any) -> str:
         parts.append(rukh_note)
 
     level_bits: list[str] = []
-    if resistance:
-        level_bits.append(f"upar {resistance} resistance hai")
-    if support:
-        level_bits.append(f"neeche {support} support hai")
+    r_level = getattr(barrier, "nearest_resistance", None)
+    s_level = getattr(barrier, "nearest_support", None)
+    range_bias = _upper(getattr(getattr(barrier, "trading_range", None), "breakout_bias", ""))
+    if resistance and r_level is not None:
+        r_strength = float(getattr(r_level, "strength", 0.0) or 0.0)
+        r_pressure = float(getattr(r_level, "break_pressure", 0.0) or 0.0)
+        r_verdict = "tootne ka risk" if r_pressure > r_strength else "filhaal majboot"
+        level_bits.append(
+            f"R1 {resistance}: bachne ki taakat {r_strength:.0f}, "
+            f"tootne ka pressure {r_pressure:.0f}—{r_verdict}; "
+            f"{float(r_level.upper):,.0f} ke upar close par confirm"
+        )
+    if support and s_level is not None:
+        s_strength = float(getattr(s_level, "strength", 0.0) or 0.0)
+        s_pressure = float(getattr(s_level, "break_pressure", 0.0) or 0.0)
+        s_verdict = "tootne ka risk" if s_pressure > s_strength else "filhaal majboot"
+        level_bits.append(
+            f"S1 {support}: bachne ki taakat {s_strength:.0f}, "
+            f"tootne ka pressure {s_pressure:.0f}—{s_verdict}; "
+            f"{float(s_level.lower):,.0f} ke neeche close par confirm"
+        )
     if level_bits:
-        parts.append(" aur ".join(level_bits))
+        chosen = level_bits[0] if "UPSIDE" in range_bias else level_bits[-1] if "DOWNSIDE" in range_bias else " aur ".join(level_bits)
+        parts.append(chosen)
 
     news = normalized_news_display(getattr(snapshot, "news_context", None))
     if news.status == "READY" and news.risk not in {"LOW", "NONE"}:

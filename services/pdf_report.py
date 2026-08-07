@@ -21,11 +21,11 @@ from reportlab.platypus import (
 )
 
 from analysis.evidence_matrix import build_compact_evidence_matrix
+from analysis.presentation_safety import safe_brain_hinglish_line
 from config import CONFIG
 from models import MarketSnapshot
 from services.summary_presenter import (
     best_existing_candidate,
-    brain_hinglish_line,
     direction_evidence_score,
     plan_leg_text,
     required_live_feed_state,
@@ -301,7 +301,7 @@ def _page_decor(canvas: Any, document: Any, snapshot: MarketSnapshot) -> None:
     canvas.restoreState()
 
 
-def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
+def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnapshot | None = None) -> bytes:
     """Render the current authoritative snapshot without recalculating any strategy.
 
     The report reads the already-built MarketSnapshot. It does not call Dhan, mutate
@@ -402,7 +402,12 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
     story.append(Spacer(1, 2 * mm))
-    story.append(_callout("AI samajh: " + brain_hinglish_line(snapshot), _BLUE))
+    story.append(
+        _callout(
+            "AI samajh: " + safe_brain_hinglish_line(snapshot, previous_snapshot),
+            _BLUE,
+        )
+    )
 
     roadmap = snapshot.barrier_map
     r1 = roadmap.nearest_resistance
@@ -473,7 +478,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
 
     # Evidence and decision.
     story.append(_section_title("3. Compact All-Features Evidence"))
-    matrix = build_compact_evidence_matrix(snapshot)
+    matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
     matrix_rows = [
         [
             row["Module"],
@@ -524,7 +529,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot) -> bytes:
     if roadmap_rows:
         story.append(
             _table(
-                ["Level", "Side", "Zone", "Strength", "Break pressure", "State", "Why"],
+                ["Level", "Side", "Zone", "Na tootne ki majbooti", "Tootne ka pressure", "State", "Kyun"],
                 roadmap_rows,
                 widths=[16 * mm, 24 * mm, 42 * mm, 25 * mm, 31 * mm, 36 * mm, 83 * mm],
                 compact=True,
@@ -1824,7 +1829,7 @@ def _quick_page_decor(canvas: Any, document: Any, snapshot: MarketSnapshot) -> N
     canvas.restoreState()
 
 
-def build_quick_market_pdf(snapshot: MarketSnapshot) -> bytes:
+def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnapshot | None = None) -> bytes:
     """Build a compact 2-page decision report from the existing snapshot only."""
 
     styles = _styles()
@@ -1889,7 +1894,12 @@ def build_quick_market_pdf(snapshot: MarketSnapshot) -> bytes:
         )
     )
     story.append(Spacer(1, 2 * mm))
-    story.append(_callout("AI samajh: " + brain_hinglish_line(snapshot), _BLUE))
+    story.append(
+        _callout(
+            "AI samajh: " + safe_brain_hinglish_line(snapshot, previous_snapshot),
+            _BLUE,
+        )
+    )
 
     candidate_name, candidate_score, candidate_plan, candidate_selected = best_existing_candidate(snapshot)
     story.append(_sub_title("Abhi ka Plan"))
@@ -1938,7 +1948,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot) -> bytes:
     if level_rows:
         story.append(
             _table(
-                ["Level", "Side", "Zone", "Strength", "Break", "State", "Kyun"],
+                ["Level", "Side", "Zone", "Na tootne ki majbooti", "Tootne ka pressure", "State", "Kyun"],
                 level_rows,
                 widths=[20 * mm, 32 * mm, 48 * mm, 31 * mm, 31 * mm, 48 * mm, 70 * mm],
                 compact=True,
@@ -1967,7 +1977,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot) -> bytes:
 
     story.append(PageBreak())
     story.append(_section_title("2. Main Evidence and Safety"))
-    matrix = build_compact_evidence_matrix(snapshot)
+    matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
     matrix_rows = []
     for row in matrix:
         matrix_rows.append([

@@ -1,5 +1,22 @@
-# Nifty Seller Lite — V2.17.2 Live Session + FII/DII Durability
+# Nifty Seller Lite — V2.18.0 Hinglish One-Brain UI
 
+
+## V2.18.0 changes
+
+- Support/Resistance cards now say clearly whether the score is the level's holding strength or breaking pressure.
+- Main AI includes the relevant barrier verdict and 3-minute close confirmation.
+- Nearest Levels and Core Market Evidence are combined near the top.
+- Top strategy is one compact card; all-five comparison stays in the lower audit.
+- NIFTY Top-7, FII/DII and News/Event are separate One-Brain evidence cards.
+- Top-7 shows current weighted move and previous-snapshot change when available.
+- Wide evidence, outlook and strategy tables are responsive mobile cards.
+- Quick and Full Audit PDFs use the same updated snapshot and wording.
+
+Expected version:
+
+```text
+2.18.0_HINGLISH_ONE_BRAIN_UI
+```
 
 ## V2.17.2 fixes
 
