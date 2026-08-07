@@ -188,11 +188,13 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100. Full map detailed section me hai."
     )
     core = snapshot.core_evidence
+    core_state = getattr(core, "market_state", getattr(core, "state", "UNRESOLVED"))
+    core_range = float(getattr(core, "range_score", 0.0) or 0.0)
     _render_compact_cards(
         [
             ("Bullish Evidence", f"{core.bullish_score:.1f}/100", "Upar ke completed-candle signals"),
             ("Bearish Evidence", f"{core.bearish_score:.1f}/100", "Neeche ke completed-candle signals"),
-            ("Range / Mixed", f"{core.range_score:.1f}/100", f"Core state {core.state}"),
+            ("Range / Mixed", f"{core_range:.1f}/100", f"Core state {core_state}"),
             ("Evidence Bharosa", f"{core.confidence:.1f}%", f"Status {core.status}"),
         ]
     )
