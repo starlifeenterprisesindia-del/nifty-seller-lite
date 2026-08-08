@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Presentation-only integrity helpers for Nifty Seller Lite.
 
 These helpers never calculate a strategy or alter the authoritative runtime snapshot.
 They only make user-facing text internally consistent before it is rendered on screen
 or frozen into a PDF report.
 """
+
+from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass

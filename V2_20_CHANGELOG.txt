@@ -1,0 +1,14 @@
+NIFTY SELLER LITE v2.20 — EXPIRY-AWARE SL + TARGET
+
+- Spot-to-Premium Calculator now records editable Entry NIFTY.
+- Expiry date and exact time remaining are read from the canonical snapshot.
+- Added intraday / 1 / 2 / 3-day maximum holding horizon, clipped at expiry.
+- Added structural Spot SL from the adverse Barrier Map zone plus ATR/zone buffer.
+- Added conservative emergency premium SL using the executable-side estimate band.
+- Added favorable T1/T2 targets with total P&L and risk/reward.
+- Added expiry-day time exit and non-expiry/overnight cautions.
+- Theta projection is now expiry-aware, nonlinear near expiry and bounded by time value.
+- Existing One-Brain direction, Barrier Map and canonical premium engine are reused;
+  this planner cannot vote on or change the strategy decision.
+
+Verification: 195 tests passed; Ruff and compileall passed.

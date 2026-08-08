@@ -1,4 +1,4 @@
-# Nifty Seller Lite 2.19
+# Nifty Seller Lite 2.20
 
 Compact, read-only NIFTY options decision-support app using one canonical strategy brain.
 
@@ -7,6 +7,7 @@ Compact, read-only NIFTY options decision-support app using one canonical strate
 - One-Brain final action and market direction
 - Nearest support/resistance and full R1/R2/S1/S2 map
 - Spot-to-Premium calculator with automatic barrier targets, ETA range, reach chance and total P&L
+- Expiry-aware structural SL, conservative premium SL, T1/T2 RR and time-exit plan
 - Optional manual upper/lower targets
 - Compact 5-15 minute outlook and all-five strategy audit
 - Collapsed market and options evidence

@@ -166,6 +166,7 @@ def calculate_target_premium(
     lots: int,
     feed_state: str = "UNAVAILABLE",
     iv_change_points: float = 0.0,
+    minutes_to_expiry: int | None = None,
 ) -> PremiumRangeEstimate:
     """Run one target through the canonical manual premium-range engine."""
 
@@ -196,6 +197,7 @@ def calculate_target_premium(
         lots=lots,
         feed_state=feed_state,
         iv_change_points=iv_change_points,
+        minutes_to_expiry=minutes_to_expiry,
     )
     return getattr(result, endpoint)
 
@@ -308,6 +310,8 @@ def _greek_components(
     target_minutes: int,
     vega: float | None,
     iv_change_points: float,
+    minutes_to_expiry: int | None = None,
+    current_time_value: float | None = None,
 ) -> tuple[float, float, float]:
     move = target_spot - current_spot
     spot_effect = 0.0
@@ -315,9 +319,46 @@ def _greek_components(
         spot_effect = delta * move
         if gamma is not None:
             spot_effect += 0.5 * gamma * move * move
-    theta_effect = theta * (target_minutes / 1440.0) if theta is not None and target_minutes > 0 else 0.0
+    theta_effect = _expiry_aware_theta_effect(
+        theta=theta,
+        target_minutes=target_minutes,
+        minutes_to_expiry=minutes_to_expiry,
+        current_time_value=current_time_value,
+    )
     iv_effect = vega * iv_change_points if vega is not None else 0.0
     return spot_effect, theta_effect, iv_effect
+
+
+def _expiry_aware_theta_effect(
+    *,
+    theta: float | None,
+    target_minutes: int,
+    minutes_to_expiry: int | None,
+    current_time_value: float | None,
+) -> float:
+    """Integrate a bounded near-expiry theta curve.
+
+    Broker theta is normally a one-day local estimate.  Linear scaling is fine for
+    short intraday horizons, but becomes unsafe close to expiry or across multiple
+    days.  A square-root time curve preserves the local theta slope, accelerates as
+    expiry approaches and can never remove more time value than the contract has.
+    """
+
+    if theta is None or target_minutes <= 0:
+        return 0.0
+    horizon = float(target_minutes)
+    if minutes_to_expiry is None or minutes_to_expiry <= 0:
+        effect = float(theta) * (horizon / 1440.0)
+    else:
+        total_days = max(float(minutes_to_expiry) / 1440.0, 1.0 / 1440.0)
+        elapsed_days = min(horizon, float(minutes_to_expiry)) / 1440.0
+        remaining_ratio = max(0.0, (total_days - elapsed_days) / total_days)
+        # Integral of a 1/sqrt(T) theta curve, calibrated to today's local theta.
+        effective_days = 2.0 * total_days * (1.0 - remaining_ratio ** 0.5)
+        effect = float(theta) * effective_days
+    if current_time_value is not None and current_time_value >= 0 and effect < 0:
+        effect = max(effect, -float(current_time_value))
+    return effect
 
 
 def _greek_estimate(
@@ -333,6 +374,7 @@ def _greek_estimate(
     target_minutes: int,
     vega: float | None,
     iv_change_points: float,
+    minutes_to_expiry: int | None = None,
 ) -> float | None:
     if delta is None:
         return None
@@ -345,6 +387,12 @@ def _greek_estimate(
         target_minutes=target_minutes,
         vega=vega,
         iv_change_points=iv_change_points,
+        minutes_to_expiry=minutes_to_expiry,
+        current_time_value=max(
+            0.0,
+            current_premium
+            - _intrinsic_value(side=side, strike=strike, spot=current_spot),
+        ),
     )
     intrinsic = _intrinsic_value(side=side, strike=strike, spot=target_spot)
     return max(intrinsic, current_premium + spot_effect + theta_effect + iv_effect, 0.0)
@@ -380,6 +428,7 @@ def _estimate_one(
     vega: float | None,
     iv_change_points: float,
     feed_state: str,
+    minutes_to_expiry: int | None = None,
     anchor_current: bool = False,
 ) -> PremiumRangeEstimate:
     intrinsic = _intrinsic_value(side=side, strike=strike, spot=target_spot)
@@ -392,6 +441,12 @@ def _estimate_one(
         target_minutes=target_minutes,
         vega=vega,
         iv_change_points=iv_change_points,
+        minutes_to_expiry=minutes_to_expiry,
+        current_time_value=max(
+            0.0,
+            current_premium
+            - _intrinsic_value(side=side, strike=strike, spot=current_spot),
+        ),
     )
 
     if anchor_current:
@@ -424,6 +479,7 @@ def _estimate_one(
             target_minutes=target_minutes,
             vega=vega,
             iv_change_points=iv_change_points,
+            minutes_to_expiry=minutes_to_expiry,
         )
         estimates: list[tuple[str, float]] = []
         if chain_estimate is not None:
@@ -604,6 +660,7 @@ def calculate_spot_premium_range(
     lots: int,
     feed_state: str = "UNAVAILABLE",
     iv_change_points: float = 0.0,
+    minutes_to_expiry: int | None = None,
 ) -> SpotPremiumCalculation:
     side = str(side).upper().strip()
     position = str(position).upper().strip()
@@ -628,8 +685,12 @@ def calculate_spot_premium_range(
         raise ValueError("Expected IV change -50 se +50 points ke beech hona chahiye")
     if lower_spot >= upper_spot:
         raise ValueError("Lower range, upper range se chhoti honi chahiye")
-    if target_minutes < 0 or target_minutes > 1440:
-        raise ValueError("Target time 0 se 1440 minute ke beech hona chahiye")
+    if target_minutes < 0 or target_minutes > 60 * 1440:
+        raise ValueError("Target time 0 se 60 din ke beech hona chahiye")
+    if minutes_to_expiry is not None and minutes_to_expiry < 0:
+        raise ValueError("Expiry ka remaining time negative nahi ho sakta")
+    if minutes_to_expiry is not None and target_minutes > minutes_to_expiry:
+        raise ValueError("Target time option expiry ke baad nahi ho sakta")
     if lot_size < 1 or lots < 1:
         raise ValueError("Lot size aur lots minimum 1 hone chahiye")
 
@@ -676,6 +737,7 @@ def calculate_spot_premium_range(
         theta=theta,
         vega=vega,
         feed_state=feed_state,
+        minutes_to_expiry=minutes_to_expiry,
     )
     lower = _estimate_one(
         label="LOWER RANGE",

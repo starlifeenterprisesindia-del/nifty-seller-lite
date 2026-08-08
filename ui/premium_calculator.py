@@ -10,6 +10,14 @@ from analysis.spot_premium_calculator import (
     calculate_target_premium,
     estimate_target_reach,
 )
+from analysis.sl_target_planner import (
+    build_sl_target_plan,
+    directional_intent,
+    expiry_context,
+    stop_buffer_points,
+    stop_reference,
+    stop_spot_price,
+)
 from models import MarketSnapshot
 
 
@@ -66,6 +74,8 @@ def _target_bundle(
     lots: int,
     feed_state: str,
     iv_change_points: float,
+    minutes_to_expiry: int | None,
+    holding_limit_minutes: int,
 ) -> dict[str, Any]:
     speed = snapshot.barrier_map.market_speed
     reach = estimate_target_reach(
@@ -81,6 +91,9 @@ def _target_bundle(
         break_pressure=break_pressure,
     )
     minutes = max(1, round((reach.minutes_low + reach.minutes_high) / 2))
+    minutes = min(minutes, max(1, int(holding_limit_minutes)))
+    if minutes_to_expiry is not None:
+        minutes = min(minutes, max(0, int(minutes_to_expiry)))
     premium = calculate_target_premium(
         option_chain=snapshot.option_chain,
         side=side,
@@ -95,14 +108,36 @@ def _target_bundle(
         lots=lots,
         feed_state=feed_state,
         iv_change_points=iv_change_points,
+        minutes_to_expiry=minutes_to_expiry,
     )
     return {
         "level": label,
         "target": target_spot,
         "eta": f"{reach.minutes_low}–{reach.minutes_high}m",
         "chance": reach.probability_pct,
+        "eta_low": reach.minutes_low,
+        "eta_high": reach.minutes_high,
+        "target_minutes": minutes,
         "premium": premium,
     }
+
+
+def _holding_limit(snapshot: MarketSnapshot, selection: str, expiry_minutes: int | None) -> int:
+    if selection == "1 din":
+        limit = 1440
+    elif selection == "2 din":
+        limit = 2880
+    elif selection == "3 din":
+        limit = 4320
+    else:
+        current = snapshot.created_at
+        close = current.replace(hour=15, minute=30, second=0, microsecond=0)
+        limit = max(0, int((close - current).total_seconds() // 60))
+        if limit <= 0:
+            limit = 240
+    if expiry_minutes is not None:
+        limit = min(limit, max(0, expiry_minutes))
+    return max(1, limit)
 
 
 def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
@@ -141,7 +176,8 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
         chain_state = snapshot.feed_status.get("option_chain")
         feed_state = str(getattr(chain_state, "use_state", "UNAVAILABLE") or "UNAVAILABLE").upper()
 
-        p1, p2, p3 = st.columns(3)
+        expiry_info = expiry_context(captured_at=snapshot.created_at, expiry=snapshot.expiry)
+        p1, p2, p3, p4 = st.columns(4)
         p1.metric("Current premium", f"₹{chain_price:,.2f}")
         entry_premium = p2.number_input(
             "Entry premium",
@@ -150,8 +186,24 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
             step=0.05,
             key=f"spc2_entry_{side}_{int(strike)}",
         )
-        lots = p3.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
+        entry_spot = p3.number_input(
+            "Entry NIFTY",
+            min_value=1.0,
+            value=float(live_spot),
+            step=1.0,
+            key="spc2_entry_spot",
+        )
+        lots = p4.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
         lot_size = int(snapshot.risk_profile.lot_size)
+
+        h1, h2 = st.columns(2)
+        holding = h1.selectbox(
+            "Maximum holding",
+            ["Aaj / Intraday", "1 din", "2 din", "3 din"],
+            key="spc2_holding",
+        )
+        h2.metric("Expiry / Time", expiry_info.label)
+        holding_limit = _holding_limit(snapshot, holding, expiry_info.minutes_remaining)
 
         manual_on = st.checkbox("Apna Upper/Lower target bhi check karo", key="spc2_manual_on")
         manual_lower = manual_upper = None
@@ -190,7 +242,9 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
             position,
             float(strike),
             float(entry_premium),
+            float(entry_spot),
             int(lots),
+            holding,
             bool(manual_on),
             float(manual_lower or 0),
             float(manual_upper or 0),
@@ -221,6 +275,8 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                             lots=int(lots),
                             feed_state=feed_state,
                             iv_change_points=float(iv_change),
+                            minutes_to_expiry=expiry_info.minutes_remaining,
+                            holding_limit_minutes=holding_limit,
                         )
                     )
                 manual = []
@@ -245,9 +301,71 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                                 lots=int(lots),
                                 feed_state=feed_state,
                                 iv_change_points=float(iv_change),
+                                minutes_to_expiry=expiry_info.minutes_remaining,
+                                holding_limit_minutes=holding_limit,
                             )
                         )
-                bundle = {"auto": auto, "manual": manual}
+                direction = directional_intent(side=side, position=position)
+                stop_level = stop_reference(
+                    barrier_map=snapshot.barrier_map, direction=direction
+                )
+                buffer_points = stop_buffer_points(
+                    atr3=snapshot.price_action.three_minute.atr14,
+                    zone_width=snapshot.levels.zone_width,
+                    expiry=expiry_info,
+                )
+                stop_spot = stop_spot_price(
+                    level=stop_level,
+                    direction=direction,
+                    buffer_points=buffer_points,
+                )
+                stop_item = _target_bundle(
+                    snapshot,
+                    label="SL",
+                    target_spot=stop_spot,
+                    strength=float(stop_level.strength),
+                    break_pressure=float(stop_level.break_pressure),
+                    side=side,
+                    position=position,
+                    strike=float(strike),
+                    current_spot=live_spot,
+                    current_premium=chain_price,
+                    entry_premium=float(entry_premium),
+                    lot_size=lot_size,
+                    lots=int(lots),
+                    feed_state=feed_state,
+                    iv_change_points=float(iv_change),
+                    minutes_to_expiry=expiry_info.minutes_remaining,
+                    holding_limit_minutes=holding_limit,
+                )
+                favorable_labels = ("R1", "R2") if direction == "BULLISH" else ("S1", "S2")
+                plan_targets = [
+                    (
+                        item["level"],
+                        float(item["target"]),
+                        item["premium"],
+                        int(item["eta_high"]),
+                    )
+                    for item in auto
+                    if item["level"] in favorable_labels
+                ]
+                plan = build_sl_target_plan(
+                    side=side,
+                    position=position,
+                    entry_premium=float(entry_premium),
+                    lot_size=lot_size,
+                    lots=int(lots),
+                    entry_spot=float(entry_spot),
+                    current_spot=live_spot,
+                    barrier_map=snapshot.barrier_map,
+                    atr3=snapshot.price_action.three_minute.atr14,
+                    zone_width=snapshot.levels.zone_width,
+                    expiry=expiry_info,
+                    stop_estimate=stop_item["premium"],
+                    target_estimates=plan_targets,
+                    holding_limit_minutes=holding_limit,
+                )
+                bundle = {"auto": auto, "manual": manual, "plan": plan}
                 st.session_state.spc2_bundle = bundle
                 st.session_state.spc2_signature = signature
             except Exception as exc:
@@ -276,6 +394,48 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                     {"Level": label, "NIFTY": f"{item['target']:,.0f}", "ETA • Chance": f"{item['eta']} • {item['chance']:.0f}%", "Premium": f"₹{estimate.best_price:,.2f}", "Total P&L": _money(estimate.total_pnl)}
                 )
         st.dataframe(rows, width="stretch", hide_index=True)
+
+        plan = bundle.get("plan")
+        if plan is not None:
+            st.write("**SL + Target Plan**")
+            plan_rows = [
+                {
+                    "Plan": f"SL ({plan.stop_level_label})",
+                    "NIFTY": f"{plan.stop_spot:,.2f}",
+                    "Premium": f"₹{plan.stop_premium:,.2f}",
+                    "P&L": _money(-plan.total_risk),
+                    "RR": "—",
+                    "Action": "3m close/hold par exit",
+                }
+            ]
+            plan_rows.extend(
+                {
+                    "Plan": item.label,
+                    "NIFTY": f"{item.spot:,.2f}",
+                    "Premium": f"₹{item.premium:,.2f}",
+                    "P&L": _money(item.total_pnl),
+                    "RR": f"{item.risk_reward:.2f}R" if item.risk_reward is not None else "—",
+                    "Action": item.action,
+                }
+                for item in plan.targets
+            )
+            plan_rows.append(
+                {
+                    "Plan": "TIME EXIT",
+                    "NIFTY": f"{plan.time_exit_minutes} min",
+                    "Premium": "Live bid/ask",
+                    "P&L": "—",
+                    "RR": "—",
+                    "Action": "Move na aaye to exit/check",
+                }
+            )
+            st.dataframe(plan_rows, width="stretch", hide_index=True)
+            st.info(
+                f"🧠 **Plan:** {plan.verdict} • SL buffer {plan.stop_buffer_points:.1f} pts • "
+                f"{expiry_info.label}."
+            )
+            if plan.warnings:
+                st.caption(" • ".join(plan.warnings))
 
         if bundle["manual"]:
             st.write("**Tumhare manual targets**")
@@ -317,6 +477,7 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                 lots=int(lots),
                 feed_state=feed_state,
                 iv_change_points=float(iv_change),
+                minutes_to_expiry=expiry_info.minutes_remaining,
             )
             st.caption(
                 f"Delta {detail.current_delta if detail.current_delta is not None else '—'} • "
