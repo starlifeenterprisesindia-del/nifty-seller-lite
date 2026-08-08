@@ -1,7 +1,28 @@
 import pandas as pd
 import pytest
 
-from analysis.spot_premium_calculator import calculate_spot_premium_range
+from analysis.spot_premium_calculator import (
+    calculate_spot_premium_range,
+    calculate_target_premium,
+    estimate_target_reach,
+)
+
+
+def test_target_reach_returns_bounded_eta_and_probability():
+    result = estimate_target_reach(
+        current_spot=24570,
+        target_spot=24620,
+        speed_score=40,
+        speed_direction="UP",
+        move_1m_points=2,
+        move_3m_points=8,
+        move_5m_points=12,
+        expected_remaining_move_points=150,
+        barrier_strength=60,
+        break_pressure=50,
+    )
+    assert 1 <= result.minutes_low < result.minutes_high <= 240
+    assert 5 <= result.probability_pct <= 95
 
 
 def sample_chain() -> pd.DataFrame:
@@ -39,6 +60,31 @@ def sample_chain() -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows)
+
+
+def test_single_barrier_target_reuses_manual_premium_engine():
+    kwargs = dict(
+        option_chain=sample_chain(),
+        side="CE",
+        position="SELL",
+        strike=24000,
+        current_spot=24000,
+        current_premium=65,
+        entry_premium=65,
+        target_minutes=15,
+        lot_size=65,
+        lots=2,
+        feed_state="LIVE",
+        iv_change_points=0,
+    )
+    target = calculate_target_premium(target_spot=24050, **kwargs)
+    manual = calculate_spot_premium_range(
+        lower_spot=23999.99,
+        upper_spot=24050,
+        **kwargs,
+    )
+    assert target.best_price == manual.upper.best_price
+    assert target.total_pnl == manual.upper.total_pnl
 
 
 def test_ce_premium_rises_with_spot_and_sell_pnl_moves_opposite():
@@ -350,13 +396,14 @@ def test_iv_change_that_makes_target_iv_non_positive_is_rejected():
         )
 
 
-def test_v214_ui_exposes_all_missing_premium_explainability_controls():
+def test_v219_ui_is_compact_and_keeps_optional_manual_and_iv_controls():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    ui = (root / "ui" / "components.py").read_text(encoding="utf-8")
-    assert "Expected IV change (points)" in ui
-    assert "Premium Breakdown — Abhi" in ui
-    assert "Premium Kyun Badlega? — Contribution Breakdown" in ui
-    assert "Sideways Time Decay — NIFTY aur IV same rahe to" in ui
-    assert "Selected strike OI" in ui
+    ui = (root / "ui" / "premium_calculator.py").read_text(encoding="utf-8")
+    assert "Calculate Premium at R1/R2/S1/S2" in ui
+    assert "Apna Upper/Lower target bhi check karo" in ui
+    assert "Advanced IV/Time details" in ui
+    assert "IV change scenario (optional)" in ui
+    assert "Premium Breakdown — Abhi" not in ui
+    assert "Selected strike OI" not in ui

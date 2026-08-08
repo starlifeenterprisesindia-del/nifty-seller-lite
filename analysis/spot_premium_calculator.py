@@ -80,6 +80,126 @@ class SpotPremiumCalculation:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class TargetReachEstimate:
+    """Bounded ETA/chance context for a user-selected or barrier target.
+
+    This is presentation evidence only.  It never selects a strategy and the
+    premium itself continues to come from ``calculate_spot_premium_range``.
+    """
+
+    minutes_low: int
+    minutes_high: int
+    probability_pct: float
+    eta_reliable: bool
+
+
+def estimate_target_reach(
+    *,
+    current_spot: float,
+    target_spot: float,
+    speed_score: float | None,
+    speed_direction: str | None,
+    move_1m_points: float | None,
+    move_3m_points: float | None,
+    move_5m_points: float | None,
+    expected_remaining_move_points: float | None,
+    barrier_strength: float | None = None,
+    break_pressure: float | None = None,
+) -> TargetReachEstimate:
+    """Estimate a conservative time band without pretending to know exact time."""
+
+    distance = abs(float(target_spot) - float(current_spot))
+    if distance < 0.01:
+        return TargetReachEstimate(0, 0, 100.0, True)
+
+    observed_rates: list[float] = []
+    for move, window in (
+        (move_1m_points, 1.0),
+        (move_3m_points, 3.0),
+        (move_5m_points, 5.0),
+    ):
+        numeric = _number(move)
+        if numeric is not None and abs(numeric) >= 0.25:
+            observed_rates.append(abs(numeric) / window)
+
+    if observed_rates:
+        observed_rates.sort()
+        points_per_minute = observed_rates[len(observed_rates) // 2]
+        reliable = len(observed_rates) >= 2
+    else:
+        remaining = _number(expected_remaining_move_points)
+        vix_rate = (remaining / 240.0) if remaining is not None and remaining > 0 else 0.45
+        speed_rate = 0.35 + max(0.0, min(100.0, float(speed_score or 0.0))) / 100.0
+        points_per_minute = max(0.35, min(4.0, (vix_rate + speed_rate) / 2.0))
+        reliable = False
+
+    center = max(1.0, min(240.0, distance / max(0.25, points_per_minute)))
+    low = max(1, int(round(center * 0.65)))
+    high = max(low + 1, int(round(center * 1.45)))
+
+    remaining = max(25.0, float(expected_remaining_move_points or 100.0))
+    probability = 82.0 - min(62.0, distance / remaining * 55.0)
+    target_direction = "UP" if target_spot > current_spot else "DOWN"
+    direction = str(speed_direction or "").upper()
+    if direction in {"UP", "DOWN"}:
+        probability += 9.0 if direction == target_direction else -12.0
+    strength = max(0.0, min(100.0, float(barrier_strength or 50.0)))
+    pressure = max(0.0, min(100.0, float(break_pressure or 50.0)))
+    probability += (pressure - strength) * 0.20
+    probability = max(5.0, min(95.0, probability))
+    return TargetReachEstimate(low, high, round(probability, 1), reliable)
+
+
+def calculate_target_premium(
+    *,
+    option_chain: pd.DataFrame,
+    side: str,
+    position: str,
+    strike: float,
+    current_spot: float,
+    current_premium: float,
+    entry_premium: float,
+    target_spot: float,
+    target_minutes: int,
+    lot_size: int,
+    lots: int,
+    feed_state: str = "UNAVAILABLE",
+    iv_change_points: float = 0.0,
+) -> PremiumRangeEstimate:
+    """Run one target through the canonical manual premium-range engine."""
+
+    if target_spot < current_spot:
+        lower_spot = target_spot
+        upper_spot = current_spot + 0.01
+        endpoint = "lower"
+    elif target_spot > current_spot:
+        lower_spot = max(0.01, current_spot - 0.01)
+        upper_spot = target_spot
+        endpoint = "upper"
+    else:
+        lower_spot = max(0.01, current_spot - 0.01)
+        upper_spot = current_spot + 0.01
+        endpoint = "current"
+    result = calculate_spot_premium_range(
+        option_chain=option_chain,
+        side=side,
+        position=position,
+        strike=strike,
+        current_spot=current_spot,
+        current_premium=current_premium,
+        entry_premium=entry_premium,
+        lower_spot=lower_spot,
+        upper_spot=upper_spot,
+        target_minutes=target_minutes,
+        lot_size=lot_size,
+        lots=lots,
+        feed_state=feed_state,
+        iv_change_points=iv_change_points,
+    )
+    return getattr(result, endpoint)
+
+
 def _number(value: Any) -> float | None:
     try:
         result = float(value)

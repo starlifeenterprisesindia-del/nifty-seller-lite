@@ -601,14 +601,6 @@ def build_compact_evidence_matrix(
 
     vix = snapshot.vix_context
     news = getattr(snapshot, "news_context", None)
-    if news is None:
-        news_text = ""
-    elif news.status == "READY":
-        news_text = f"; news {news.risk_level}/{news.bias}"
-    elif news.status == "OLD":
-        news_text = f"; news OLD low-weight/{news.bias}"
-    else:
-        news_text = f"; news {news.status}"
     session_code = str(getattr(snapshot.market_session, "code", "") or "")
     if snapshot.market_session.is_live:
         session_text = "MARKET LIVE"

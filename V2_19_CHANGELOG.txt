@@ -1,0 +1,14 @@
+NIFTY SELLER LITE V2.19.0
+
+- Added automatic R1/R2/S1/S2 option-premium, ETA band, reach chance and total P&L.
+- Kept optional manual upper/lower target calculation using the same premium engine.
+- Removed the visible Risk & One-Trade panel and Execution Guard UI.
+- Removed duplicate protected-setup presentation and repeated reference/disclaimer text.
+- Compact Strategy Audit, Core Evidence and Options Evidence views for phones.
+- Empty option movement windows now show one warming-up line instead of a None table.
+- Top-7 confidence is labelled as data coverage in the detailed UI.
+- Unavailable news shows zero weight instead of Neutral.
+- Unverified event context is explicitly ignored.
+- Quick PDF no longer displays risk-budget or Execution Guard rows.
+- Removed stale release notes, compiled caches and the unused root components.py duplicate.
+- Canonical One-Brain calculation and snapshot services remain unchanged.

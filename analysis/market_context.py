@@ -82,7 +82,6 @@ def calculate_market_context(
     fii_values = [_number(item.get("fii_cash_net")) for item in clean]
     dii_values = [_number(item.get("dii_cash_net")) for item in clean]
     futures_values = [_number(item.get("fii_index_futures_net")) for item in clean]
-    futures_contract_values = [_number(item.get("fii_index_futures_contracts")) for item in clean]
     futures_long_values = [_number(item.get("fii_futures_long_pct")) for item in clean]
     futures_short_values = [_number(item.get("fii_futures_short_pct")) for item in clean]
     latest_fii = _number(latest.get("fii_cash_net"))
@@ -194,13 +193,13 @@ def calculate_market_context(
     note = str(event_latest.get("event_note") or "") if event_latest else ""
     if level not in {"NONE", "LOW", "MEDIUM", "HIGH"}:
         level = "NONE"
-    if level in {"MEDIUM", "HIGH"} and not verified:
+    if not event_latest:
+        event_status = "NOT PROVIDED"
+    elif not verified:
         event_status = "UNVERIFIED — IGNORED"
         level = "NONE"
     elif event_latest:
         event_status = "READY"
-    else:
-        event_status = "NOT PROVIDED"
     event = EventRiskContext(
         as_of_date=str(event_latest.get("date")) if event_latest else None,
         level=level,

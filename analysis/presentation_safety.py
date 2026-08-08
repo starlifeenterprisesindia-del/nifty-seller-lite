@@ -173,7 +173,6 @@ def safe_brain_hinglish_line(snapshot: Any, previous_snapshot: Any | None = None
     rukh, _score, rukh_note = market_rukh_display(snapshot)
     option_bias = _option_bias(snapshot)
     heavyweights = getattr(snapshot, "heavyweights", None)
-    top7_state = _upper(getattr(heavyweights, "state", ""))
     barrier = getattr(snapshot, "barrier_map", None)
     resistance = _zone(getattr(barrier, "nearest_resistance", None))
     support = _zone(getattr(barrier, "nearest_support", None))

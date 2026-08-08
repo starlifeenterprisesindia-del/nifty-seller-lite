@@ -34,9 +34,9 @@ def test_simple_view_prioritizes_final_brain_levels_and_one_compact_setup():
     app = (root / "app.py").read_text(encoding="utf-8")
     main = app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)")
     levels = app.index("render_compact_barrier_map(view_snapshot)")
-    planner = app.index("render_compact_protected_setup(view_snapshot)")
-    assert main < levels < planner
-    assert 'with st.expander("Risk & one-trade discipline", expanded=False):' in app
+    calculator = app.index("render_spot_premium_calculator(view_snapshot)")
+    assert main < levels < calculator
+    assert 'with st.expander("Risk & one-trade discipline", expanded=False):' not in app
     assert 'with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):' in app
 
 
@@ -45,5 +45,5 @@ def test_detailed_screen_uses_one_combined_strategy_audit_without_full_planner_d
     app = (root / "app.py").read_text(encoding="utf-8")
     assert "render_decision(view_snapshot, audit_only=True)" in app
     assert "render_trade_plan(view_snapshot, compact=False)" not in app
-    assert 'guardian_active = snapshot.position_guardian.status != "IDLE"' in app
-    assert 'with st.expander("Manual one-trade journal", expanded=guardian_active):' in app
+    assert "render_execution_guard(view_snapshot)" not in app
+    assert "render_position_guardian(view_snapshot)" not in app

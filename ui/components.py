@@ -8,7 +8,6 @@ import pandas as pd
 import streamlit as st
 
 from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
-from analysis.spot_premium_calculator import calculate_spot_premium_range
 from analysis.presentation_safety import (
     candidate_invalidation_text,
     display_main_blocker,
@@ -305,361 +304,6 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         st.caption("Speed reasons: " + " | ".join(speed.reasons))
 
 
-def _calculator_contract_row(snapshot: MarketSnapshot, side: str, strike: float) -> pd.Series | None:
-    frame = snapshot.option_chain
-    if frame.empty or not {"side", "strike"}.issubset(frame.columns):
-        return None
-    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
-    if rows.empty:
-        return None
-    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
-    rows = rows.dropna(subset=["strike"])
-    if rows.empty:
-        return None
-    idx = (rows["strike"] - float(strike)).abs().idxmin()
-    return rows.loc[idx]
-
-
-
-def _cell_float(row: pd.Series | None, name: str) -> float:
-    if row is None:
-        return 0.0
-    value = pd.to_numeric(pd.Series([row.get(name)]), errors="coerce").iloc[0]
-    return float(value) if pd.notna(value) else 0.0
-
-
-def _inr(value: float) -> str:
-    sign = "-" if value < 0 else ""
-    number = abs(float(value))
-    whole, dot, fraction = f"{number:.2f}".partition(".")
-    if len(whole) > 3:
-        tail = whole[-3:]
-        head = whole[:-3]
-        groups = []
-        while head:
-            groups.append(head[-2:])
-            head = head[:-2]
-        whole = ",".join(reversed(groups)) + "," + tail
-    return f"{sign}₹{whole}.{fraction}" if dot else f"{sign}₹{whole}"
-
-
-def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
-    with st.expander("🧮 Spot-to-Premium Calculator — Range + IV + Time Value", expanded=False):
-        st.caption(
-            "Apni lower/upper NIFTY range aur expected IV change khud bharo. Calculator live option chain, "
-            "Delta, Gamma, Theta, Vega, Dhan-chain IV aur bid-ask se probable premium/P&L zone banata hai. "
-            "Intrinsic Value + Time Value breakdown aur 15/30/60-minute sideways decay bhi dikhata hai. "
-            "Yeh read-only utility hai; Main AI decision ko touch nahi karta."
-        )
-
-        option_frame = snapshot.option_chain
-        chain_state = snapshot.feed_status.get("option_chain")
-        feed_state = str(getattr(chain_state, "use_state", "UNAVAILABLE") or "UNAVAILABLE").upper()
-        live_spot = float(snapshot.nifty_quote.get("last_price") or 0.0)
-        if option_frame.empty or live_spot <= 0:
-            st.warning("Option chain ya NIFTY price available nahi hai. Fresh snapshot ke baad calculator use karo.")
-            return
-
-        top1, top2, top3 = st.columns(3)
-        with top1:
-            side = st.selectbox("Option type", ["CE", "PE"], key="spc_side")
-        with top2:
-            position = st.selectbox("Position", ["SELL", "BUY"], key="spc_position")
-        side_rows = option_frame[option_frame["side"].astype(str).str.upper().eq(side)].copy()
-        side_rows["strike"] = pd.to_numeric(side_rows["strike"], errors="coerce")
-        strikes = sorted(float(value) for value in side_rows["strike"].dropna().unique())
-        if not strikes:
-            st.warning(f"{side} strikes option chain me available nahi hain.")
-            return
-        default_strike = min(strikes, key=lambda value: abs(value - live_spot))
-        with top3:
-            strike_key = f"spc_strike_{side}"
-            if strike_key in st.session_state and st.session_state[strike_key] not in strikes:
-                st.session_state.pop(strike_key, None)
-            strike = st.selectbox(
-                "Strike",
-                strikes,
-                index=strikes.index(default_strike),
-                format_func=lambda value: f"{value:,.0f} {side}",
-                key=strike_key,
-            )
-
-        row = _calculator_contract_row(snapshot, side, strike)
-        chain_price = _cell_float(row, "last_price")
-        bid = _cell_float(row, "top_bid_price")
-        ask = _cell_float(row, "top_ask_price")
-        delta = _cell_float(row, "delta")
-        gamma = _cell_float(row, "gamma")
-        theta = _cell_float(row, "theta")
-        vega = _cell_float(row, "vega")
-        iv = _cell_float(row, "implied_volatility")
-        current_oi = _cell_float(row, "oi")
-        day_oi_change = _cell_float(row, "day_oi_change")
-        volume = _cell_float(row, "volume")
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Chain premium", f"₹{chain_price:,.2f}" if chain_price > 0 else "—")
-        m2.metric("Bid / Ask", f"₹{bid:,.2f} / ₹{ask:,.2f}" if bid or ask else "—")
-        m3.metric("Delta / Gamma", f"{delta:.3f} / {gamma:.5f}" if delta or gamma else "—")
-        m4.metric("Dhan IV / Theta / Vega", f"{iv:.2f} / {theta:.2f} / {vega:.2f}" if iv or theta or vega else "—")
-
-        f1, f2, f3 = st.columns(3)
-        f1.metric("Selected strike OI", f"{current_oi:,.0f}" if current_oi else "—")
-        f2.metric("Day OI change", f"{day_oi_change:+,.0f}" if day_oi_change else "0")
-        f3.metric("Volume", f"{volume:,.0f}" if volume else "—")
-        st.caption(
-            "Demand/flow context: OI, OI change aur volume market participation dikhate hain. "
-            "Inka exact rupee effect alag se claim nahi kiya jata; live option-chain smile final price proxy hai."
-        )
-
-        contract_key = f"{side}_{int(round(strike))}"
-        p1, p2, p3 = st.columns(3)
-        with p1:
-            use_live_spot = st.checkbox(
-                "Current NIFTY live snapshot se lo",
-                value=True,
-                key="spc_use_live_spot",
-            )
-            if use_live_spot:
-                current_spot = live_spot
-                st.caption(f"Current NIFTY: {current_spot:,.2f}")
-            else:
-                current_spot = st.number_input(
-                    "Manual current NIFTY",
-                    min_value=1.0,
-                    value=float(live_spot),
-                    step=1.0,
-                    key="spc_manual_current_spot",
-                )
-        with p2:
-            use_chain_price = st.checkbox(
-                "Current premium live chain se lo",
-                value=True,
-                key=f"spc_use_chain_{side}_{int(round(strike))}",
-            )
-            if use_chain_price:
-                current_premium = chain_price
-                st.caption(f"Current premium: ₹{current_premium:,.2f}")
-            else:
-                current_premium = st.number_input(
-                    "Current option premium",
-                    min_value=0.05,
-                    value=float(max(chain_price, 0.05)),
-                    step=0.05,
-                    key=f"spc_manual_current_{contract_key}",
-                )
-        with p3:
-            entry_premium = st.number_input(
-                "Tumhari entry premium",
-                min_value=0.05,
-                value=float(max(chain_price, 0.05)),
-                step=0.05,
-                key=f"spc_entry_{contract_key}",
-                help="BUY ki purchase price ya SELL ki sell price.",
-            )
-
-        default_lower = max(1.0, round((current_spot - 50.0) / 5.0) * 5.0)
-        default_upper = round((current_spot + 50.0) / 5.0) * 5.0
-        r1, r2, r3, r4 = st.columns(4)
-        with r1:
-            lower_spot = st.number_input(
-                "Lower NIFTY range",
-                min_value=1.0,
-                value=float(default_lower),
-                step=5.0,
-                key="spc_lower",
-                help="Apna support/target level khud bharo.",
-            )
-        with r2:
-            upper_spot = st.number_input(
-                "Upper NIFTY range",
-                min_value=1.0,
-                value=float(default_upper),
-                step=5.0,
-                key="spc_upper",
-                help="Apna resistance/target level khud bharo.",
-            )
-        with r3:
-            target_minutes = st.number_input(
-                "Range tak expected time (minutes)",
-                min_value=0,
-                max_value=1440,
-                value=15,
-                step=5,
-                key="spc_target_minutes",
-                help="0 immediate move; zyada time par Theta adjust hoga.",
-            )
-        with r4:
-            iv_change_points = st.number_input(
-                "Expected IV change (points)",
-                min_value=-20.0,
-                max_value=20.0,
-                value=0.0,
-                step=0.5,
-                key="spc_iv_change_points",
-                help="Example: Dhan IV 10 se 12 expected ho to +2.0; 10 se 8 ho to -2.0.",
-            )
-            if iv > 0:
-                st.caption(f"Target IV: {iv + float(iv_change_points):.2f}")
-            else:
-                st.caption("Valid Dhan IV/Vega na ho to IV effect apply nahi hoga.")
-
-        q1, q2 = st.columns(2)
-        with q1:
-            lots = st.number_input(
-                "Lots",
-                min_value=1,
-                max_value=100,
-                value=1,
-                step=1,
-                key="spc_lots",
-            )
-        with q2:
-            calculator_lot_size = st.number_input(
-                "Lot size",
-                min_value=1,
-                max_value=500,
-                value=int(snapshot.risk_profile.lot_size),
-                step=1,
-                key="spc_lot_size",
-            )
-
-        signature = (
-            snapshot.snapshot_id,
-            side,
-            position,
-            float(strike),
-            float(current_spot),
-            float(current_premium),
-            float(entry_premium),
-            float(lower_spot),
-            float(upper_spot),
-            int(target_minutes),
-            float(iv_change_points),
-            int(calculator_lot_size),
-            int(lots),
-            feed_state,
-        )
-        calculate = st.button("Calculate Premium Range", type="primary", width="stretch")
-        result = None
-        if calculate:
-            try:
-                result = calculate_spot_premium_range(
-                    option_chain=option_frame,
-                    side=side,
-                    position=position,
-                    strike=float(strike),
-                    current_spot=float(current_spot),
-                    current_premium=float(current_premium),
-                    entry_premium=float(entry_premium),
-                    lower_spot=float(lower_spot),
-                    upper_spot=float(upper_spot),
-                    target_minutes=int(target_minutes),
-                    iv_change_points=float(iv_change_points),
-                    lot_size=int(calculator_lot_size),
-                    lots=int(lots),
-                    feed_state=feed_state,
-                )
-                st.session_state.spc_result = result
-                st.session_state.spc_signature = signature
-            except Exception as exc:
-                st.error(f"Calculator input check karo: {exc}")
-        elif st.session_state.get("spc_signature") == signature:
-            result = st.session_state.get("spc_result")
-
-        if result is None:
-            st.info("Range, time aur IV scenario bharne ke baad **Calculate Premium Range** dabao.")
-            return
-
-        if result.status == "LIVE ESTIMATE":
-            st.success(f"LIVE option-chain estimate · Reliability {result.overall_reliability:.0f}/100")
-        else:
-            st.warning(
-                f"REFERENCE ONLY · Reliability {result.overall_reliability:.0f}/100 — broker premium verify karo."
-            )
-
-        st.write("**Premium Breakdown — Abhi**")
-        b1, b2, b3, b4 = st.columns(4)
-        b1.metric("Current premium", f"₹{result.current_premium:,.2f}")
-        b2.metric("Intrinsic Value", f"₹{result.current_intrinsic_value:,.2f}")
-        b3.metric("Time Value", f"₹{result.current_time_value:,.2f}")
-        b4.metric("Time Value share", f"{result.current_time_value_share_pct:.1f}%")
-        st.caption("Premium = Intrinsic Value + Time Value. Time Value me remaining time, IV aur demand/liquidity ka effect hota hai.")
-
-        table_rows = []
-        for estimate in (result.lower, result.current, result.upper):
-            table_rows.append(
-                {
-                    "NIFTY scenario": f"{estimate.label} · {estimate.target_spot:,.0f}",
-                    "Estimated premium": f"₹{estimate.best_price:,.2f}",
-                    "Probable zone": f"₹{estimate.low_price:,.2f}–₹{estimate.high_price:,.2f}",
-                    "Intrinsic": f"₹{estimate.intrinsic_value:,.2f}",
-                    "Time Value": f"₹{estimate.time_value:,.2f}",
-                    "Exit action": estimate.exit_action,
-                    "P&L / qty": _inr(estimate.pnl_per_quantity),
-                    f"P&L ({result.lots} lot)": _inr(estimate.total_pnl),
-                    "Result": estimate.outcome,
-                    "Reliability": f"{estimate.reliability:.0f}/100",
-                }
-            )
-        st.dataframe(table_rows, width="stretch", hide_index=True)
-
-        st.write("**Premium Kyun Badlega? — Contribution Breakdown**")
-        driver_rows = []
-        for estimate in (result.lower, result.upper):
-            driver_rows.append(
-                {
-                    "Scenario": f"NIFTY {estimate.target_spot:,.0f}",
-                    "Spot effect (Delta+Gamma)": _inr(estimate.spot_move_effect),
-                    "Time effect (Theta)": _inr(estimate.theta_effect),
-                    "IV effect (Vega)": _inr(estimate.iv_effect),
-                    "Live chain/smile adjustment": _inr(estimate.chain_smile_effect),
-                    "Final premium": f"₹{estimate.best_price:,.2f}",
-                }
-            )
-        st.dataframe(driver_rows, width="stretch", hide_index=True)
-        st.caption(
-            "Live chain/smile adjustment actual same-expiry option prices ka residual hai. "
-            "Isme market demand, skew, liquidity aur model difference ka combined proxy aa sakta hai; "
-            "yeh OI/volume ka exact rupee attribution nahi hai."
-        )
-
-        st.write("**Sideways Time Decay — NIFTY aur IV same rahe to**")
-        decay_rows = []
-        for decay in result.decay_scenarios:
-            decay_rows.append(
-                {
-                    "After": f"{decay.minutes} min",
-                    "Estimated premium": f"₹{decay.estimated_premium:,.2f}",
-                    "Premium change": _inr(decay.premium_change),
-                    "Remaining Time Value": f"₹{decay.remaining_time_value:,.2f}",
-                    "P&L / qty": _inr(decay.pnl_per_quantity),
-                    f"P&L ({result.lots} lot)": _inr(decay.total_pnl),
-                    "Result": decay.outcome,
-                    "Reliability": f"{decay.reliability:.0f}/100",
-                }
-            )
-        st.dataframe(decay_rows, width="stretch", hide_index=True)
-        st.caption("Sideways table Theta-only hai: spot aur IV same maane gaye hain. Real market me IV/bid-ask badalne se result alag ho sakta hai.")
-
-        st.info("🧠 **Calculator Samajh:** " + result.summary)
-        target_iv_text = f"{result.target_iv:.2f}" if result.target_iv is not None else "—"
-        st.caption(
-            f"Model inputs: Current {result.current_spot:,.2f} | {result.strike:,.0f} {result.side} "
-            f"{result.position} | Current premium ₹{result.current_premium:,.2f} | Entry ₹{result.entry_premium:,.2f} | "
-            f"Time {result.target_minutes} min | Delta {result.current_delta if result.current_delta is not None else '—'} | "
-            f"Theta {result.current_theta if result.current_theta is not None else '—'} | "
-            f"Vega {result.current_vega if result.current_vega is not None else '—'} | "
-            f"Dhan IV {result.current_iv if result.current_iv is not None else '—'} → Target IV {target_iv_text}"
-        )
-        st.caption(
-            "IV/Greeks source note: calculator Dhan option-chain values use karta hai. "
-            "HDFC Sky/Zerodha/Angel ka IV model, interest rate, timestamp ya rounding alag ho sakta hai; "
-            "exact IV parity expected nahi hai. Premium/bid-ask ko final verification mano."
-        )
-        for warning in result.warnings:
-            st.caption("• " + warning)
-
 def render_market_session(snapshot: MarketSnapshot) -> None:
     session = snapshot.market_session
     if session.is_live:
@@ -906,15 +550,14 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     if decision.final_action == "WAIT":
         css_class = "wait"
         title = "WAIT"
-        subtitle = f"Reference leader: {name} · Fit {score:.1f}%"
-        structure = "Fresh entry nahi · " + _plan_structure_text(plan)
+        subtitle = f"Best available: {name} · Fit {score:.1f}%"
+        structure = _plan_structure_text(plan)
     else:
         css_class = "ready"
         title = decision.final_action
         subtitle = f"BEST selected · Brain fit {score:.1f}%"
         structure = _plan_structure_text(plan)
-    readiness = snapshot.execution_guard.readiness
-    live_text = "LIVE" if feed_ok else "REFERENCE ONLY"
+    live_text = "LIVE" if feed_ok else "LAST DATA"
     hero = (
         '<style>'
         '.brain-hero{border-radius:16px;padding:16px 18px;margin:4px 0 12px;border:1px solid rgba(127,127,127,.24)}'
@@ -932,7 +575,7 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
         '<div class="brain-hero-top"><div>'
         '<div class="brain-hero-label">FINAL ONE-BRAIN</div>'
         f'<div class="brain-hero-action">{escape(title)}</div></div>'
-        f'<div class="brain-hero-badge">{escape(readiness)} · {escape(live_text)}</div></div>'
+        f'<div class="brain-hero-badge">{escape(live_text)}</div></div>'
         f'<div class="brain-hero-sub">{escape(subtitle)}</div>'
         f'<div class="brain-hero-structure">{escape(structure)}</div>'
         '</div>'
@@ -961,17 +604,12 @@ def render_main_ai_market_view(
 ) -> None:
     """Simple top-screen view of the existing canonical MarketSnapshot."""
 
-    decision = snapshot.decision
     barrier = snapshot.barrier_map
-    speed = barrier.market_speed
     feed_ok, _feed_text = required_live_feed_state(snapshot)
     direction, direction_score, direction_note = market_rukh_display(snapshot)
     spot = snapshot.nifty_quote.get("last_price")
 
     st.subheader("🧠 Main AI — Simple Trading View")
-    st.caption(
-        "Pehle final decision, phir top strategy aur nearest levels. Detailed proof neeche band sections me hai."
-    )
 
     with st.container(border=True):
         _render_final_action_hero(snapshot, feed_ok)
@@ -979,7 +617,6 @@ def render_main_ai_market_view(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
                 ("Market Rukh", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
-                ("Risk", f"{speed.state} {speed.score:.0f}/100", f"Direction {speed.direction}"),
             ]
         )
 
@@ -989,73 +626,48 @@ def render_main_ai_market_view(
         )
 
         patterns = getattr(snapshot, "patterns", None)
-        wm_text, wm_note = _pattern_compact_text(
+        wm_text, _wm_note = _pattern_compact_text(
             patterns.wm_3m if patterns is not None else None,
             fallback="NO VALID W/M",
         )
-        candle_text, candle_note = _pattern_compact_text(
+        candle_text, _candle_note = _pattern_compact_text(
             patterns.candle_3m if patterns is not None else None,
             fallback="NO IMPORTANT CANDLE",
         )
 
         inst = snapshot.institutional_context
         if inst.observations <= 0:
-            inst_text, inst_note = "MISSING", "FII/DII data nahi"
+            inst_text = "MISSING"
         elif "FII SELLING / DII ABSORPTION" in inst.state:
-            inst_text, inst_note = "FII SELL · DII BUY", f"{inst.observations}/15 sessions"
+            inst_text = "FII SELL · DII BUY"
         elif "FII BUYING / DII SELLING" in inst.state:
-            inst_text, inst_note = "FII BUY · DII SELL", f"{inst.observations}/15 sessions"
+            inst_text = "FII BUY · DII SELL"
         elif "SUPPORT" in inst.state:
-            inst_text, inst_note = "NET SUPPORT", f"{inst.observations}/15 sessions"
+            inst_text = "NET SUPPORT"
         elif "PRESSURE" in inst.state:
-            inst_text, inst_note = "NET PRESSURE", f"{inst.observations}/15 sessions"
+            inst_text = "NET PRESSURE"
         else:
-            inst_text, inst_note = "MIXED", f"{inst.observations}/15 sessions"
+            inst_text = "MIXED"
 
-        data_text = "LIVE PASS" if feed_ok else "REFERENCE ONLY"
-        data_note = snapshot.execution_guard.readiness
         heavy = snapshot.heavyweights
         top7_move = (
             f"{heavy.weighted_move_pct:+.2f}%"
             if heavy.weighted_move_pct is not None
             else "MISSING"
         )
-        prior_move = (
-            previous_snapshot.heavyweights.weighted_move_pct
-            if previous_snapshot is not None
-            else None
-        )
-        if heavy.weighted_move_pct is not None and prior_move is not None:
-            elapsed = max(0, round((snapshot.created_at - previous_snapshot.created_at).total_seconds() / 60))
-            top7_note = (
-                f"{elapsed} min badlav {heavy.weighted_move_pct - prior_move:+.2f}% · "
-                f"{heavy.advancing}↑/{heavy.declining}↓"
-            )
-        else:
-            top7_note = f"Badlav warming · {heavy.advancing}↑/{heavy.declining}↓"
-
         news_display = normalized_news_display(snapshot.news_context)
         if news_display.status == "READY":
             news_text = f"{news_display.risk} RISK"
-            news_note = f"{news_display.bias} · {news_display.note}"
         else:
             news_text = "ZERO LIVE WEIGHT"
-            news_note = "Purani/unavailable news direction me count nahi"
-        _render_compact_cards(
-            [
-                ("3M W/M", wm_text, wm_note),
-                ("Special Candle", candle_text, candle_note),
-                ("NIFTY Top-7", top7_move, top7_note),
-                ("FII/DII", inst_text, inst_note),
-                ("News / Event", news_text, news_note),
-                ("Data / Entry", data_text, data_note),
-            ]
+        st.caption(
+            f"W/M: {wm_text} • Candle: {candle_text} • Top-7: {top7_move} • "
+            f"FII/DII: {inst_text} • News: {news_text}"
         )
 
         resistance = _level_summary(barrier.nearest_resistance, fallback="R1")
         support = _level_summary(barrier.nearest_support, fallback="S1")
         st.caption(f"🔴 Resistance: {resistance}   |   🟢 Support: {support}")
-        st.caption(f"Main blocker: {display_main_blocker(snapshot)}")
 
         with st.expander("Last snapshot se badlav", expanded=False):
             changes = snapshot_change_items(snapshot, previous_snapshot)
@@ -1158,25 +770,11 @@ def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
 
 def render_news_context(snapshot: MarketSnapshot) -> None:
     news = snapshot.news_context
-    st.caption(
-        "News article ki publication time se freshness judge hoti hai. 90–180 min old news low weight hai; "
-        "180 min se purani/stale news ka decision weight zero rehta hai."
-    )
     news_display = normalized_news_display(news)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("News Bias", news_display.bias)
-    c2.metric("News Risk", news_display.risk)
-    c3.metric("Headlines", len(news.headlines))
-    c4.metric(
-        "Newest Age",
-        f"{news.newest_age_minutes:.0f} min" if news.newest_age_minutes is not None else "—",
-    )
     if news_display.status == "READY":
-        st.info(f"News status: READY — {news_display.note}. {news.summary}")
-    elif news_display.status.startswith("OLD"):
-        st.warning(f"News status: {news_display.status} — {news_display.note}")
+        st.info(f"**News:** {news_display.bias} • Risk {news_display.risk} • {len(news.headlines)} headlines")
     else:
-        st.warning(f"News status: {news_display.status} — {news_display.note}")
+        st.info("**News:** Unavailable • Weight 0%")
     if news.headlines:
         rows = []
         for item in news.headlines:
@@ -1214,11 +812,7 @@ def render_decision(
     displayed_score = evaluations[displayed_name].score
 
     if audit_only:
-        st.subheader("Strategy Audit — All 5 Setups")
-        st.caption(
-            "Yeh top screen ka duplicate decision card nahi hai. Yahan same One-Brain ke "
-            "5 setup scores, exact structure aur ek main caution audit ke liye ek hi table me hain."
-        )
+        st.subheader("Strategy Audit")
         bundle = snapshot.trade_plan
         plan_map = {
             "CE BUY": bundle.ce_buy,
@@ -1243,14 +837,8 @@ def render_decision(
                         if plan.estimated_credit_points is not None
                         else "—"
                     )
-                risk = (
-                    f"Risk {plan.max_risk_points:.2f}"
-                    if plan.max_risk_points is not None
-                    else "Risk —"
-                )
-                premium_risk = f"{premium} · {risk}"
             else:
-                premium_risk = "—"
+                premium = "—"
 
             pick = (
                 "BEST"
@@ -1264,8 +852,7 @@ def render_decision(
                     "Setup": name,
                     "Fit %": strategy.score,
                     "Structure": _plan_structure_text(plan),
-                    "Premium / Risk pts": premium_risk,
-                    "Main evidence": strategy.reasons[0] if strategy.reasons else "—",
+                    "Premium": premium,
                     "Main caution": strategy.cautions[0] if strategy.cautions else "None",
                     "Status": strategy.status,
                     "_pick": pick,
@@ -1273,32 +860,28 @@ def render_decision(
             )
 
         rows.sort(key=lambda row: float(row["Fit %"]), reverse=True)
-        cards = []
+        compact_rows = []
         for row in rows:
             pick = str(row["_pick"])
-            tone = "green" if pick == "BEST" else "amber" if pick == "REFERENCE" else ""
-            status = "ENTRY PICK" if pick == "BEST" else "REFERENCE ONLY" if pick == "REFERENCE" else str(row["Status"])
-            cards.append(
-                (
-                    f"{row['Setup']} · Fit {float(row['Fit %']):.1f}%",
-                    status,
-                    f"{row['Structure']} | {row['Premium / Risk pts']} | Karan: {row['Main evidence']} | Caution: {row['Main caution']}",
-                    tone,
-                )
+            status = "ENTRY" if pick == "BEST" else "BEST AVAILABLE • WAIT" if pick == "REFERENCE" else "AVOID"
+            compact_rows.append(
+                {
+                    "Strategy": row["Setup"],
+                    "Fit": f"{float(row['Fit %']):.0f}%",
+                    "Structure": row["Structure"],
+                    "Credit/Debit": row["Premium"],
+                    "Status": status,
+                }
             )
-        html = _responsive_cards_html(cards)
-        st.html(html) if hasattr(st, "html") else st.markdown(html, unsafe_allow_html=True)
+        st.dataframe(compact_rows, width="stretch", hide_index=True)
         if item.final_action == "WAIT":
             st.info(
-                f"WAIT need {item.wait_need.score:.1f}% hai. {leader_name} sirf amber reference leader hai; "
-                "green entry approval nahi."
+                f"🟡 WAIT — {leader_name} best available setup hai, lekin confirmation complete nahi."
             )
         else:
             st.success(
-                f"Selected by same One-Brain: {item.final_action} · Fit {displayed_score:.1f}% · "
-                f"Execution {item.execution_status}."
+                f"🟢 {item.final_action} · Fit {displayed_score:.1f}%"
             )
-        st.caption("Main blocker: " + display_main_blocker(snapshot))
         return
 
     st.subheader("Final One-Brain Decision")
@@ -1798,31 +1381,20 @@ def render_feed_status(snapshot: MarketSnapshot) -> None:
 
 def render_core_evidence(snapshot: MarketSnapshot) -> None:
     item = snapshot.core_evidence
-    st.caption(
-        "Core Market Evidence is one input to the final brain. It combines only the "
-        "completed-candle price, indicator, level and NIFTY-futures-volume modules."
+    st.dataframe(
+        [{
+            "Market": f"{item.market_state} {item.range_score:.0f}%",
+            "Bullish": f"{item.bullish_score:.0f}%",
+            "Bearish": f"{item.bearish_score:.0f}%",
+            "Bharosa": f"{item.confidence:.0f}%",
+        }],
+        width="stretch",
+        hide_index=True,
     )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Bullish Evidence Index", f"{item.bullish_score:.1f}/100")
-    c2.metric("Bearish Evidence Index", f"{item.bearish_score:.1f}/100")
-    c3.metric("Range / Mixed Index", f"{item.range_score:.1f}/100")
-    c4.metric("Evidence Confidence", f"{item.confidence:.1f}%")
     st.info(
-        f"**Core state:** {item.market_state}  |  **Move stage:** {item.move_stage}  |  "
-        f"**Status:** {item.status}"
+        f"**Kyon:** {(item.reasons or ('Mixed evidence',))[0]}  •  "
+        f"**Savdhani:** {(item.blockers or ('Koi major caution nahi',))[0]}"
     )
-    left, right = st.columns(2)
-    with left:
-        st.write("**Main evidence**")
-        for reason in item.reasons or ("No consolidated reason available",):
-            st.write(f"• {reason}")
-    with right:
-        st.write("**Current blockers / cautions**")
-        if item.blockers:
-            for blocker in item.blockers:
-                st.write(f"• {blocker}")
-        else:
-            st.write("• None in the core engine")
 
 
 def _price_action_row(item: Any) -> dict[str, Any]:
@@ -1850,19 +1422,16 @@ def render_price_action(snapshot: MarketSnapshot) -> None:
         f"Cross-timeframe view: **{bundle.combined_state}** — {bundle.relationship} "
         f"(confidence {bundle.confidence:.1f}%)."
     )
-    rows = [
-        _price_action_row(bundle.three_minute),
-        _price_action_row(bundle.fifteen_minute),
-    ]
+    rows = []
+    for item in (bundle.three_minute, bundle.fifteen_minute):
+        rows.append({
+            "Time": item.timeframe,
+            "Structure": item.structure,
+            "Current move": item.event,
+            "Invalidation": item.invalidation_level,
+            "Bharosa": f"{item.confidence:.0f}%",
+        })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-    with st.expander("Price Action reasons"):
-        st.json(
-            {
-                "3m": asdict(bundle.three_minute),
-                "15m": asdict(bundle.fifteen_minute),
-                "relationship": bundle.relationship,
-            }
-        )
 
 
 def _level_row(level: MarketLevel | None, fallback: str) -> dict[str, Any]:
@@ -1889,35 +1458,16 @@ def _level_row(level: MarketLevel | None, fallback: str) -> dict[str, Any]:
 
 def render_levels(snapshot: MarketSnapshot) -> None:
     item = snapshot.levels
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "Upside Room",
-        f"{item.upside_room:.1f} pts" if item.upside_room is not None else "—",
-    )
-    c2.metric(
-        "Downside Room",
-        f"{item.downside_room:.1f} pts" if item.downside_room is not None else "—",
-    )
-    c3.metric(
-        "Opening Range High",
-        f"{item.opening_range_high:,.2f}"
-        if item.opening_range_high is not None
-        else "—",
-    )
-    c4.metric(
-        "Opening Range Low",
-        f"{item.opening_range_low:,.2f}" if item.opening_range_low is not None else "—",
-    )
-    st.caption(
-        f"Current position: **{item.current_position}** | Zone width: "
-        f"{item.zone_width if item.zone_width is not None else '—'} points | Status: {item.status}"
-    )
-    rows = [
-        _level_row(item.immediate_support, "Immediate Support"),
-        _level_row(item.strong_support, "Strong Support"),
-        _level_row(item.immediate_resistance, "Immediate Resistance"),
-        _level_row(item.strong_resistance, "Strong Resistance"),
-    ]
+    rows = []
+    for level, fallback in (
+        (item.immediate_support, "S1"), (item.strong_support, "S2"),
+        (item.immediate_resistance, "R1"), (item.strong_resistance, "R2"),
+    ):
+        raw = _level_row(level, fallback)
+        rows.append({
+            "Level": raw["Level"], "Zone": raw["Zone"],
+            "Distance": raw["Distance"], "Strength": raw["Strength"], "Status": raw["Status"],
+        })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
@@ -1940,16 +1490,16 @@ def _volume_row(item: Any) -> dict[str, Any]:
 
 def render_volume(snapshot: MarketSnapshot) -> None:
     item = snapshot.volume
-    st.caption(
-        "Volume uses the nearest NIFTY futures contract, not NIFTY index pseudo-volume. "
-        "The baseline compares the same intraday time slot across prior sessions, with a "
-        "recent-bar fallback only when necessary."
-    )
-    st.write(
-        f"**Source:** {item.source} | **Overall view:** {item.overall_view} | "
-        f"**Confidence:** {item.confidence:.1f}% | **Status:** {item.status}"
-    )
-    rows = [_volume_row(item.three_minute), _volume_row(item.fifteen_minute)]
+    st.write(f"**Volume:** {item.overall_view} • Bharosa {item.confidence:.0f}%")
+    rows = []
+    for row in (item.three_minute, item.fifteen_minute):
+        rows.append({
+            "Time": row.timeframe,
+            "Relative volume": f"{row.relative_volume:.2f}×" if row.relative_volume is not None else "—",
+            "Participation": row.volume_state,
+            "Trend": row.volume_trend,
+            "Move support": row.move_support,
+        })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
@@ -2060,51 +1610,31 @@ def _indicator_row(item: TimeframeIndicators) -> dict[str, Any]:
 
 
 def render_indicators(snapshot: MarketSnapshot) -> None:
-    st.caption(
-        "EMA/MACD/RSI use completed candles from the same authoritative snapshot. "
-        "They remain evidence, not a standalone decision."
-    )
-    rows = [
-        _indicator_row(snapshot.indicators.three_minute),
-        _indicator_row(snapshot.indicators.fifteen_minute),
-    ]
+    rows = []
+    for item in (snapshot.indicators.three_minute, snapshot.indicators.fifteen_minute):
+        rows.append({
+            "Time": item.timeframe,
+            "EMA trend": item.ema_state,
+            "MACD": item.macd_state,
+            "RSI": f"{item.rsi14:.0f} • {item.rsi_state}" if item.rsi14 is not None else item.rsi_state,
+        })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-    with st.expander("Indicator JSON"):
-        st.json(
-            {
-                "3m": asdict(snapshot.indicators.three_minute),
-                "15m": asdict(snapshot.indicators.fifteen_minute),
-            }
-        )
 
 
 def render_option_intelligence(snapshot: MarketSnapshot) -> None:
     item = snapshot.option_intelligence
-    st.caption(
-        "Options Intelligence compares the current ATM±5 chain with bounded same-day "
-        "snapshots. These are normalized option-evidence percentages consumed by the final brain."
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Bullish Option Flow", f"{item.bullish_score:.1f}%")
-    c2.metric("Bearish Option Flow", f"{item.bearish_score:.1f}%")
-    c3.metric("Mixed / Decay", f"{item.range_score:.1f}%")
-    c4.metric("Flow Confidence", f"{item.confidence:.1f}%")
+    provisional = item.persistence != "CONFIRMED" or item.confidence < 75
+    st.dataframe([{
+        "Bias": f"{item.market_bias}{' • Provisional' if provisional else ''}",
+        "Bullish": f"{item.bullish_score:.0f}%",
+        "Bearish": f"{item.bearish_score:.0f}%",
+        "Mixed": f"{item.range_score:.0f}%",
+        "Bharosa": f"{item.confidence:.0f}%",
+    }], width="stretch", hide_index=True)
     st.info(
-        f"**Option bias:** {item.market_bias} | **Persistence:** {item.persistence} | "
-        f"**Basis:** {item.basis} | **Status:** {item.status}"
+        f"**Reason:** {(item.reasons or ('Option flow mixed',))[0]}  •  "
+        f"**Waiting:** {(item.blockers or ('Confirmation complete',))[0]}"
     )
-    left, right = st.columns(2)
-    with left:
-        st.write("**Main option evidence**")
-        for reason in item.reasons or ("No consolidated option reason available",):
-            st.write(f"• {reason}")
-    with right:
-        st.write("**State blockers / cautions**")
-        if item.blockers:
-            for blocker in item.blockers:
-                st.write(f"• {blocker}")
-        else:
-            st.write("• None")
 
 
 def render_option_flow_matrix(snapshot: MarketSnapshot) -> None:
@@ -2112,7 +1642,9 @@ def render_option_flow_matrix(snapshot: MarketSnapshot) -> None:
     if not rows:
         st.info("Option flow matrix is unavailable in this snapshot.")
         return
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    frame = pd.DataFrame(rows)
+    keep = [column for column in ("strike", "side", "last_price", "classification", "directional_bias", "flow_strength") if column in frame.columns]
+    st.dataframe(frame[keep], width="stretch", hide_index=True)
 
 
 def render_option_windows(snapshot: MarketSnapshot) -> None:
@@ -2133,11 +1665,11 @@ def render_option_windows(snapshot: MarketSnapshot) -> None:
                 "Status": item.status,
             }
         )
-    st.caption(
-        "A 1m/3m/5m window is used only when a historical sample is close enough to "
-        "that target. Distant old samples are rejected."
-    )
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    ready = [row for row in rows if row["Bias"] not in {"UNAVAILABLE", None}]
+    if not ready:
+        st.info(f"⏳ Movement confirmation warming up • Ready 0/{len(rows)}")
+        return
+    st.dataframe(pd.DataFrame(ready), width="stretch", hide_index=True)
 
 
 def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
@@ -2149,11 +1681,7 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
                 "Side": wall.side,
                 "Main Wall Strike": wall.strike,
                 "Wall OI": wall.oi,
-                "Previous Wall": wall.previous_strike,
-                "Migration pts": wall.migration_points,
                 "Strongest 3-Strike Cluster": wall.cluster_center,
-                "Cluster OI": wall.cluster_oi,
-                "Status": wall.status,
             }
         )
     st.dataframe(pd.DataFrame(walls), width="stretch", hide_index=True)
@@ -2181,24 +1709,9 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
 
 def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
     item = snapshot.heavyweights
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Top-7 Covered Weight", f"{item.covered_weight_pct:.2f}%")
-    c2.metric(
-        "Weighted Top-7 Move",
-        f"{item.weighted_move_pct:+.3f}%"
-        if item.weighted_move_pct is not None
-        else "—",
-    )
-    c3.metric(
-        "Est. Index Contribution",
-        f"{item.estimated_index_contribution_pct:+.3f}%"
-        if item.estimated_index_contribution_pct is not None
-        else "—",
-    )
-    c4.metric("Breadth", f"{item.advancing}↑ / {item.declining}↓ / {item.unchanged}→")
     st.info(
-        f"**Top-7 state:** {item.state} | **Confidence:** {item.confidence:.1f}% | "
-        f"**Weight date:** {snapshot.metadata.get('top7_weight_date', '—')} | **Status:** {item.status}"
+        f"**Top-7:** {item.state} • Move {item.weighted_move_pct or 0:+.3f}% • "
+        f"{item.advancing}↑/{item.declining}↓/{item.unchanged}→ • Data coverage {item.confidence:.0f}%"
     )
     rows = [asdict(row) for row in item.rows]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
@@ -2207,11 +1720,6 @@ def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
 def render_market_context(snapshot: MarketSnapshot) -> None:
     institutional = snapshot.institutional_context
     event = snapshot.event_risk
-    st.caption(
-        "FII/DII cash main background context hai. FII Index Futures me contracts sirf size dikhate hain; "
-        "direction Long % / Short % se nikalti hai aur ye secondary confirmation hai. "
-        "Same-date save update hota hai; latest 15 dates primary + mirror journal me rehti hain."
-    )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
         "Latest FII cash ₹ cr",
@@ -2238,7 +1746,8 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
         else "Long/Short missing"
     )
     c4.metric("FII Futures Bias", institutional.fii_futures_bias, delta=futures_split, delta_color="off")
-    st.info(f"**Institutional State:** {institutional.state} | **Verified Event Risk:** {event.level}")
+    event_text = event.level if event.verified else "Unverified • Weight 0%"
+    st.info(f"**Institutional:** {institutional.state} • **Event:** {event_text}")
     rows = [
         {
             "Window": "5 sessions",
@@ -2268,10 +1777,6 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
         f"**Observations:** {institutional.observations}/15 | "
         f"**As of:** {institutional.as_of_date or '—'} | "
         f"**Confidence:** {institutional.confidence:.1f}%"
-    )
-    st.write(
-        f"**Event status:** {event.status} | **Verified:** {'YES' if event.verified else 'NO'} | "
-        f"**Note:** {event.note or 'None'}"
     )
 
 

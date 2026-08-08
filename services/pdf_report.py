@@ -1854,44 +1854,33 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
     ]
     story.append(
         _table(
-            ["NIFTY", "Session", "Expiry", "Snapshot", "Mode"],
+            ["NIFTY", "Session", "Expiry", "Snapshot"],
             [[
                 snapshot.nifty_quote.get("last_price"),
                 snapshot.market_session.label,
                 snapshot.expiry or "-",
                 snapshot.snapshot_id[-12:],
-                "READ ONLY",
             ]],
-            widths=[42 * mm, 78 * mm, 38 * mm, 52 * mm, 40 * mm],
+            widths=[50 * mm, 95 * mm, 45 * mm, 60 * mm],
             compact=True,
-        )
-    )
-    story.append(Spacer(1, 3 * mm))
-    story.append(
-        _callout(
-            f"SESSION: {snapshot.market_session.label} - {snapshot.market_session.message}",
-            _GREEN if snapshot.market_session.is_live else _WARN,
         )
     )
 
     direction = {"BULLISH": "UP", "BEARISH": "DOWN", "RANGE": "RANGE"}.get(
         snapshot.decision.market_direction, snapshot.decision.market_direction
     )
-    speed = snapshot.barrier_map.market_speed
     feed_ok, _ = required_live_feed_state(snapshot)
     story.append(_section_title("1. Main AI - Market View"))
     story.append(
         _table(
-            ["Market rukh", "Rukh evidence", "Final action", "Entry readiness", "Market danger", "Data"],
+            ["Market rukh", "Rukh evidence", "Final action", "Decision bharosa"],
             [[
                 direction,
                 f"{direction_evidence_score(snapshot):.1f}/100",
                 snapshot.decision.final_action,
                 f"{snapshot.decision.decision_confidence:.1f}/100",
-                f"{speed.state} {speed.score:.1f}/100 {speed.direction}",
-                "LIVE" if feed_ok else "REFERENCE ONLY",
             ]],
-            widths=[38 * mm, 40 * mm, 44 * mm, 42 * mm, 50 * mm, 42 * mm],
+            widths=[62 * mm, 62 * mm, 62 * mm, 64 * mm],
             compact=True,
         )
     )
@@ -1916,14 +1905,12 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
                     plan_leg_text(candidate_plan.short_legs),
                     plan_leg_text(candidate_plan.hedge_legs),
                     f"{candidate_plan.quality_score:.1f}/100",
-                    candidate_plan.status if candidate_selected else "REFERENCE ONLY",
+                    "ENTRY" if candidate_selected else "WAIT",
                 ]],
                 widths=[36 * mm, 40 * mm, 36 * mm, 44 * mm, 44 * mm, 36 * mm, 43 * mm],
                 compact=True,
             )
         )
-        if not candidate_selected:
-            story.append(_paragraph("Final Action WAIT hai; candidate sirf reference hai, entry signal nahi.", styles["Body"]))
     else:
         story.append(_paragraph("Protected strike candidate abhi reliable tarah resolve nahi hua.", styles["Body"]))
 
@@ -1970,7 +1957,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
                 r.breakout_bias,
                 f"{snapshot.barrier_map.vix_risk}; daily +/-{vix_daily:.0f} pts" if vix_daily is not None else snapshot.barrier_map.vix_risk,
                 f"{inst.state}; {inst.observations}/15" if inst.observations else "MISSING",
-                f"{news.status}; {news.bias}/{news.risk_level}",
+                f"{news.bias}/{news.risk_level}" if news.status == "READY" else "UNAVAILABLE; WEIGHT 0%",
             ]],
             widths=[45 * mm, 34 * mm, 42 * mm, 54 * mm, 50 * mm, 48 * mm],
             compact=True,
@@ -1978,7 +1965,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
     )
 
     story.append(PageBreak())
-    story.append(_section_title("2. Main Evidence and Safety"))
+    story.append(_section_title("2. Main Evidence"))
     matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
     reference_name, impact_by_module = build_module_impact_audit(snapshot, matrix)
     matrix_rows = []
@@ -2005,36 +1992,30 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
     outlook = snapshot.decision.outlook
     story.append(
         _table(
-            ["Bullish path", "Range path", "Bearish path", "Fake-move risk", "Signal state", "Invalidation", "Status"],
+            ["Bullish path", "Range path", "Bearish path", "Fake-move risk", "Signal", "Invalidation"],
             [[
                 f"{outlook.bullish_path_pct:.1f}%",
                 f"{outlook.range_path_pct:.1f}%",
                 f"{outlook.bearish_path_pct:.1f}%",
-                f"{outlook.fake_move_risk:.1f}% {outlook.fake_move_state}",
-                outlook.signal_state,
+                f"{outlook.fake_move_risk:.1f}%",
+                snapshot.decision.final_action,
                 outlook.invalidation_text,
-                outlook.status,
             ]],
-            widths=[35 * mm, 35 * mm, 35 * mm, 44 * mm, 52 * mm, 55 * mm, 35 * mm],
+            widths=[38 * mm, 38 * mm, 38 * mm, 44 * mm, 42 * mm, 60 * mm],
             compact=True,
         )
     )
 
     ready_windows = sum(window.status == "READY" for window in snapshot.option_intelligence.windows)
     safety_rows = [
-        ["Required live feeds", "PASS / LIVE" if feed_ok else "REFERENCE / BLOCKED"],
-        ["Execution guard", snapshot.execution_guard.readiness],
+        ["Data feeds", "LIVE" if feed_ok else "LAST AVAILABLE"],
         ["Option flow reliability", f"{snapshot.option_intelligence.confidence:.1f}% | windows {ready_windows}/{CONFIG.execution_required_flow_windows}"],
         ["3m / 15m", snapshot.price_action.relationship],
-        ["Signal persistence", snapshot.execution_guard.signal_state],
-        ["Risk budget", f"Rs. {snapshot.risk_profile.risk_budget_rupees:,.2f}"],
         ["News freshness", f"{news.status} | newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else news.status],
         ["FII/DII journal", f"{inst.observations}/15 sessions"],
     ]
-    story.append(_sub_title("Safety Checklist"))
+    story.append(_sub_title("Data Check"))
     story.append(_table(["Check", "Current"], safety_rows, widths=[80 * mm, 170 * mm], compact=True))
-    story.append(Spacer(1, 3 * mm))
-    story.append(_callout("Quick report sirf current snapshot ko summarize karta hai. Full Audit PDF me raw/detail evidence available hai.", _BLUE))
 
     document.build(
         story,
