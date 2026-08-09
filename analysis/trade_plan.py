@@ -14,6 +14,7 @@ from models import (
     MarketSession,
     OptionIntelligence,
     OptionLeg,
+    ProtectedCandidate,
     SetupPlan,
     TradePlanBundle,
 )
@@ -56,32 +57,50 @@ def _distance_score(distance_pct: float) -> float:
     return clamp(100.0 - abs(distance_pct - target) / tolerance * 100.0, 0.0, 100.0)
 
 
-def _delta_score(delta: float | None) -> float:
+def _delta_score(
+    delta: float | None,
+    *,
+    target: float | None = None,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    target = float(target if target is not None else CONFIG.trade_target_abs_delta)
+    minimum = float(minimum if minimum is not None else CONFIG.trade_min_abs_delta)
+    maximum = float(maximum if maximum is not None else CONFIG.trade_max_abs_delta)
     if delta is None:
         return 45.0
     absolute = abs(delta)
-    if absolute < CONFIG.trade_min_abs_delta or absolute > CONFIG.trade_max_abs_delta:
+    if absolute < minimum or absolute > maximum:
         return 15.0
     return clamp(
         100.0
-        - abs(absolute - CONFIG.trade_target_abs_delta)
-        / max(CONFIG.trade_target_abs_delta, 0.01)
+        - abs(absolute - target)
+        / max(target, 0.01)
         * 100.0,
         0.0,
         100.0,
     )
 
 
-def _buy_delta_score(delta: float | None) -> float:
+def _buy_delta_score(
+    delta: float | None,
+    *,
+    target: float | None = None,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    target = float(target if target is not None else CONFIG.buy_target_abs_delta)
+    minimum = float(minimum if minimum is not None else CONFIG.buy_min_abs_delta)
+    maximum = float(maximum if maximum is not None else CONFIG.buy_max_abs_delta)
     if delta is None:
         return 42.0
     absolute = abs(delta)
-    if absolute < CONFIG.buy_min_abs_delta or absolute > CONFIG.buy_max_abs_delta:
+    if absolute < minimum or absolute > maximum:
         return 12.0
     return clamp(
         100.0
-        - abs(absolute - CONFIG.buy_target_abs_delta)
-        / max(CONFIG.buy_target_abs_delta, 0.01)
+        - abs(absolute - target)
+        / max(target, 0.01)
         * 100.0,
         0.0,
         100.0,
@@ -124,10 +143,18 @@ def _select_long_leg(
     side: str,
     spot: float,
     levels: LevelBundle,
+    target_delta: float = 0.50,
+    min_delta: float = 0.30,
+    max_delta: float = 0.72,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _buy_candidate_rows(frame, side, spot)
     if rows.empty:
         return None, 0.0, (f"No usable ATM/near-ITM {side} buy row",)
+    if "delta" in rows.columns:
+        deltas = pd.to_numeric(rows["delta"], errors="coerce").abs()
+        in_band = rows[deltas.between(min_delta, max_delta, inclusive="both")]
+        if not in_band.empty:
+            rows = in_band.reset_index(drop=True)
     oi_series = rows.get("oi", pd.Series(dtype=float))
     volume_series = rows.get("volume", pd.Series(dtype=float))
     scored: list[tuple[float, pd.Series, float | None, float, str]] = []
@@ -152,7 +179,13 @@ def _select_long_leg(
         level_score, level_reason = _buy_level_score(side, strike, ask, spot, levels)
         total = (
             liquidity * 0.42
-            + _buy_delta_score(_number(row.get("delta"))) * 0.28
+            + _buy_delta_score(
+                _number(row.get("delta")),
+                target=target_delta,
+                minimum=min_delta,
+                maximum=max_delta,
+            )
+            * 0.28
             + distance_score * 0.12
             + level_score * 0.18
         )
@@ -184,30 +217,59 @@ def _buy_plan(
     frame: pd.DataFrame,
     spot: float,
     levels: LevelBundle,
+    target_delta: float = 0.50,
+    min_delta: float = 0.30,
+    max_delta: float = 0.72,
+    hedge_steps: int = 3,
 ) -> SetupPlan:
     leg, quality, reasons = _select_long_leg(
-        frame, side=side, spot=spot, levels=levels
+        frame,
+        side=side,
+        spot=spot,
+        levels=levels,
+        target_delta=target_delta,
+        min_delta=min_delta,
+        max_delta=max_delta,
     )
     if leg is None:
         return SetupPlan.unavailable(name, reasons[0])
-    debit = _buy_price(leg)
-    if debit is None or debit <= 0:
+    hedge = _select_buy_hedge_leg(
+        frame, side=side, main=leg, spot=spot, target_steps=hedge_steps
+    )
+    if hedge is None:
+        return SetupPlan.unavailable(
+            name, "No liquid farther-OTM short hedge for the buy spread"
+        )
+    long_price = _buy_price(leg)
+    hedge_price = _sell_price(hedge)
+    if long_price is None or hedge_price is None:
         return SetupPlan.unavailable(name, "Executable ask/LTP is missing")
+    debit = long_price - hedge_price
+    width = abs(hedge.strike - leg.strike)
+    if debit <= 0 or width <= 0 or debit >= width:
+        return SetupPlan.unavailable(name, "Debit spread price/width is invalid")
     lower_be = leg.strike - debit if side == "PE" else None
     upper_be = leg.strike + debit if side == "CE" else None
+    quality = round(
+        clamp(quality * 0.75 + hedge.liquidity_score * 0.25, 0.0, 100.0), 1
+    )
     status = "READY" if quality >= CONFIG.buy_min_plan_quality else "CAUTION"
     return SetupPlan(
         name=name,
-        short_legs=(),
+        short_legs=(hedge,),
         hedge_legs=(),
         estimated_credit_points=None,
-        width_points=None,
+        width_points=round(width, 2),
         max_risk_points=round(debit, 2),
         lower_breakeven=round(lower_be, 2) if lower_be is not None else None,
         upper_breakeven=round(upper_be, 2) if upper_be is not None else None,
         quality_score=quality,
         status=status,
-        reasons=reasons,
+        reasons=reasons
+        + (
+            f"Farther-OTM hedge {hedge.strike:,.0f} {side}",
+            f"Defined max profit {width - debit:.2f} points",
+        ),
         blocker=(
             "None"
             if status == "READY"
@@ -215,6 +277,62 @@ def _buy_plan(
         ),
         long_legs=(leg,),
         estimated_debit_points=round(debit, 2),
+    )
+
+
+def _select_buy_hedge_leg(
+    frame: pd.DataFrame,
+    *,
+    side: str,
+    main: OptionLeg,
+    spot: float,
+    target_steps: int,
+) -> OptionLeg | None:
+    """Sell one farther-OTM option to turn every directional buy into a debit spread."""
+
+    if frame.empty:
+        return None
+    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
+    rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
+    rows = rows.dropna(subset=["strike", "last_price"])
+    rows = rows[rows["last_price"] >= CONFIG.trade_min_hedge_premium]
+    if side == "CE":
+        rows = rows[rows["strike"] > main.strike]
+    else:
+        rows = rows[rows["strike"] < main.strike]
+    if rows.empty:
+        return None
+    step = _strike_step(frame)
+    if step is None or step <= 0:
+        return None
+    target_gap = max(1, int(target_steps)) * step
+    target_strike = main.strike + target_gap if side == "CE" else main.strike - target_gap
+    oi_series = rows.get("oi", pd.Series(dtype=float))
+    volume_series = rows.get("volume", pd.Series(dtype=float))
+    scored: list[tuple[float, pd.Series, float | None, float]] = []
+    for _, row in rows.iterrows():
+        bid = _number(row.get("top_bid_price")) or _number(row.get("last_price"))
+        if bid is None or bid <= 0:
+            continue
+        spread_pct, spread_score = _spread_metrics(row)
+        oi_score = _percentile_score(_number(row.get("oi")), oi_series)
+        volume_score = _percentile_score(_number(row.get("volume")), volume_series)
+        liquidity = spread_score * 0.50 + oi_score * 0.30 + volume_score * 0.20
+        distance = abs(float(row["strike"]) - target_strike)
+        distance_score = clamp(100.0 - distance / max(target_gap, step) * 70.0, 10.0, 100.0)
+        total = liquidity * 0.70 + distance_score * 0.30
+        scored.append((total, row, spread_pct, liquidity))
+    if not scored:
+        return None
+    _, row, spread_pct, liquidity = max(scored, key=lambda item: item[0])
+    return _row_to_leg(
+        row,
+        role="HEDGE SHORT",
+        side=side,
+        spot=spot,
+        liquidity_score=liquidity,
+        spread_pct=spread_pct,
     )
 
 
@@ -302,10 +420,18 @@ def _select_short_leg(
     spot: float,
     levels: LevelBundle,
     options: OptionIntelligence,
+    target_delta: float = 0.20,
+    min_delta: float = 0.08,
+    max_delta: float = 0.38,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _candidate_rows(frame, side, spot)
     if rows.empty:
         return None, 0.0, (f"No usable OTM {side} row in current option window",)
+    if "delta" in rows.columns:
+        deltas = pd.to_numeric(rows["delta"], errors="coerce").abs()
+        in_band = rows[deltas.between(min_delta, max_delta, inclusive="both")]
+        if not in_band.empty:
+            rows = in_band.reset_index(drop=True)
 
     scores: list[tuple[float, pd.Series, float | None, float, str, str]] = []
     oi_series = rows.get("oi", pd.Series(dtype=float))
@@ -321,7 +447,13 @@ def _select_short_leg(
         wall_score, wall_reason = _wall_score(side, strike, options)
         total = (
             liquidity * 0.35
-            + _delta_score(_number(row.get("delta"))) * 0.25
+            + _delta_score(
+                _number(row.get("delta")),
+                target=target_delta,
+                minimum=min_delta,
+                maximum=max_delta,
+            )
+            * 0.25
             + _distance_score(distance_pct) * 0.20
             + level_score * 0.10
             + wall_score * 0.10
@@ -361,6 +493,7 @@ def _select_hedge_leg(
     side: str,
     short: OptionLeg,
     spot: float,
+    target_steps: int = 3,
 ) -> OptionLeg | None:
     """Choose the best farther-OTM hedge, not merely the first available strike.
 
@@ -407,7 +540,10 @@ def _select_hedge_leg(
     oi_series = rows.get("oi", pd.Series(dtype=float))
     volume_series = rows.get("volume", pd.Series(dtype=float))
     scored: list[tuple[float, pd.Series, float | None, float]] = []
-    target_steps = max(CONFIG.trade_hedge_steps, min(3, CONFIG.trade_max_hedge_steps))
+    target_steps = max(
+        CONFIG.trade_hedge_steps,
+        min(int(target_steps), CONFIG.trade_max_hedge_steps),
+    )
     target_gap = target_steps * step
     for _, row in eligible.iterrows():
         strike = float(row["strike"])
@@ -459,13 +595,30 @@ def _vertical_plan(
     spot: float,
     levels: LevelBundle,
     options: OptionIntelligence,
+    target_delta: float = 0.20,
+    min_delta: float = 0.08,
+    max_delta: float = 0.38,
+    hedge_steps: int = 3,
 ) -> SetupPlan:
     short, quality, reasons = _select_short_leg(
-        frame, side=side, spot=spot, levels=levels, options=options
+        frame,
+        side=side,
+        spot=spot,
+        levels=levels,
+        options=options,
+        target_delta=target_delta,
+        min_delta=min_delta,
+        max_delta=max_delta,
     )
     if short is None:
         return SetupPlan.unavailable(name, reasons[0])
-    hedge = _select_hedge_leg(frame, side=side, short=short, spot=spot)
+    hedge = _select_hedge_leg(
+        frame,
+        side=side,
+        short=short,
+        spot=spot,
+        target_steps=hedge_steps,
+    )
     if hedge is None:
         return SetupPlan.unavailable(
             name, "No valid farther-OTM hedge in current option window"
@@ -570,6 +723,79 @@ def _apply_runtime_status(
     return replace(plan, status="READY", blocker="None")
 
 
+def _candidate_action(decision: FinalDecision, selected: str) -> str:
+    if selected in {"CE BUY", "PE BUY", "CE SELL", "PE SELL"}:
+        return selected
+    evaluations = {
+        "CE BUY": decision.ce_buy,
+        "PE BUY": decision.pe_buy,
+        "CE SELL": decision.ce_sell,
+        "PE SELL": decision.pe_sell,
+    }
+    return max(evaluations, key=lambda name: float(evaluations[name].score))
+
+
+def _protected_candidate_profiles(
+    *,
+    action: str,
+    frame: pd.DataFrame,
+    spot: float,
+    levels: LevelBundle,
+    options: OptionIntelligence,
+) -> tuple[ProtectedCandidate, ...]:
+    side = "CE" if action.startswith("CE") else "PE"
+    is_buy = action.endswith("BUY")
+    if is_buy:
+        specs = (
+            ("LOW RISK", 0.45, 0.30, 0.56, 2, "Kam ₹ risk; OTM/Theta ko check karo"),
+            ("BALANCED", 0.58, 0.46, 0.68, 3, "Default balance of response and defined risk"),
+            ("HIGH RISK", 0.68, 0.58, 0.82, 4, "Higher debit and faster directional response"),
+        )
+    else:
+        specs = (
+            ("LOW RISK", 0.15, 0.07, 0.22, 2, "Farther OTM credit spread; lower credit"),
+            ("BALANCED", 0.28, 0.20, 0.34, 3, "Default balance of credit and distance"),
+            ("HIGH RISK", 0.38, 0.30, 0.48, 4, "Nearer market short strike; loss moves faster"),
+        )
+
+    result: list[ProtectedCandidate] = []
+    for rank, (profile, target, minimum, maximum, steps, note) in enumerate(specs, 1):
+        if is_buy:
+            plan = _buy_plan(
+                name=action,
+                side=side,
+                frame=frame,
+                spot=spot,
+                levels=levels,
+                target_delta=target,
+                min_delta=minimum,
+                max_delta=maximum,
+                hedge_steps=steps,
+            )
+        else:
+            plan = _vertical_plan(
+                name=action,
+                side=side,
+                frame=frame,
+                spot=spot,
+                levels=levels,
+                options=options,
+                target_delta=target,
+                min_delta=minimum,
+                max_delta=maximum,
+                hedge_steps=steps,
+            )
+        result.append(
+            ProtectedCandidate(
+                profile=profile,
+                plan=plan,
+                risk_rank=rank,
+                note=note,
+            )
+        )
+    return tuple(result)
+
+
 def calculate_trade_plan(
     *,
     frame: pd.DataFrame,
@@ -583,8 +809,8 @@ def calculate_trade_plan(
     """Convert the same One-Brain choice into a concrete option structure.
 
     The brain compares CE BUY, PE BUY, CE SELL, PE SELL and IRON CONDOR. This
-    planner never re-ranks them; it only selects a liquid primary leg and mandatory
-    protection for seller structures from the same option-chain snapshot.
+    planner never re-ranks them; it only selects liquid equal-quantity verticals.
+    Every directional BUY and SELL therefore has mandatory same-expiry protection.
     """
 
     if frame.empty or spot <= 0 or not expiry:
@@ -610,10 +836,24 @@ def calculate_trade_plan(
         name="PE SELL", side="PE", frame=frame, spot=spot, levels=levels, options=options
     )
     condor = _condor_plan(ce_sell, pe_sell)
-    ce_buy = _buy_plan(name="CE BUY", side="CE", frame=frame, spot=spot, levels=levels)
-    pe_buy = _buy_plan(name="PE BUY", side="PE", frame=frame, spot=spot, levels=levels)
+    ce_buy = _buy_plan(
+        name="CE BUY", side="CE", frame=frame, spot=spot, levels=levels,
+        target_delta=0.58, min_delta=0.46, max_delta=0.68, hedge_steps=3,
+    )
+    pe_buy = _buy_plan(
+        name="PE BUY", side="PE", frame=frame, spot=spot, levels=levels,
+        target_delta=0.58, min_delta=0.46, max_delta=0.68, hedge_steps=3,
+    )
 
     selected = decision.final_action.replace(" WITH HEDGE", "")
+    candidate_setup = _candidate_action(decision, selected)
+    protected_candidates = _protected_candidate_profiles(
+        action=candidate_setup,
+        frame=frame,
+        spot=spot,
+        levels=levels,
+        options=options,
+    )
     plans = {
         "CE BUY": ce_buy,
         "PE BUY": pe_buy,
@@ -621,6 +861,16 @@ def calculate_trade_plan(
         "PE SELL": pe_sell,
         "IRON CONDOR": condor,
     }
+    balanced = next(
+        (
+            item.plan
+            for item in protected_candidates
+            if item.profile == "BALANCED" and item.plan.available
+        ),
+        None,
+    )
+    if balanced is not None and candidate_setup in plans:
+        plans[candidate_setup] = balanced
     plans = {
         name: _apply_runtime_status(
             plan,
@@ -658,4 +908,6 @@ def calculate_trade_plan(
         selected_setup=selected if selected in plans else "WAIT",
         status=status,
         blocker=blocker,
+        candidate_setup=candidate_setup,
+        protected_candidates=protected_candidates,
     )

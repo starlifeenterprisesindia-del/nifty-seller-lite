@@ -1,0 +1,8 @@
+Nifty Seller Lite 2.21 — Protected CE/PE Candidates
+
+- Added one compact three-row candidate table: LOW RISK, BALANCED and HIGH RISK.
+- Every directional BUY is now a same-expiry equal-quantity debit spread.
+- Every directional SELL remains a same-expiry equal-quantity credit spread.
+- No naked CE/PE candidate and no ratio spread is generated.
+- BALANCED remains the canonical default; candidate rows do not create a second brain.
+- One-Brain final action, evidence calculations and Iron Condor logic remain unchanged.

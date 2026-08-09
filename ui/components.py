@@ -538,10 +538,97 @@ def _plan_structure_text(plan: Any | None) -> str:
     if plan is None or not plan.available:
         return "Strike unresolved"
     if plan.is_buy:
-        return f"BUY {plan_leg_text(plan.long_legs)}"
+        hedge = (
+            f" · HEDGE SELL {plan_leg_text(plan.short_legs)}"
+            if plan.short_legs
+            else ""
+        )
+        return f"BUY {plan_leg_text(plan.long_legs)}{hedge}"
     short_text = plan_leg_text(plan.short_legs)
     hedge_text = plan_leg_text(plan.hedge_legs)
     return f"SELL {short_text} · HEDGE {hedge_text}"
+
+
+def render_protected_candidates(snapshot: MarketSnapshot) -> None:
+    """Three compact risk profiles for the existing CE/PE One-Brain action."""
+
+    bundle = snapshot.trade_plan
+    candidates = tuple(getattr(bundle, "protected_candidates", ()) or ())
+    if not candidates:
+        return
+    action = str(getattr(bundle, "candidate_setup", "") or "CE/PE")
+    selected = snapshot.decision.final_action.replace(" WITH HEDGE", "")
+    reference = selected != action
+
+    st.subheader("🛡️ Best CE/PE Protected Candidates")
+    st.caption(
+        f"{action}{' reference' if reference else ''} • Har row same-expiry equal-quantity hedge hai. "
+        "Balanced default hai; yeh One-Brain action ko change nahi karta."
+    )
+    lot_size = max(1, int(snapshot.risk_profile.lot_size))
+    rows: list[dict[str, Any]] = []
+    for candidate in candidates:
+        plan = candidate.plan
+        if not plan.available:
+            rows.append(
+                {
+                    "Mode": candidate.profile,
+                    "Main + Hedge": "Unavailable",
+                    "Net": "—",
+                    "Max loss/lot": "—",
+                    "Max profit/lot": "—",
+                    "Quality": "—",
+                    "_rank": candidate.risk_rank,
+                }
+            )
+            continue
+        if plan.is_buy:
+            main = plan.long_legs[0]
+            hedge = plan.short_legs[0] if plan.short_legs else None
+            structure = (
+                f"BUY {main.strike:,.0f} {main.side} / SELL {hedge.strike:,.0f} {hedge.side}"
+                if hedge is not None
+                else f"BUY {main.strike:,.0f} {main.side}"
+            )
+            net_points = float(plan.estimated_debit_points or 0.0)
+            net = f"Debit {net_points:.2f}"
+            max_profit_points = max(0.0, float(plan.width_points or 0.0) - net_points)
+        else:
+            main = plan.short_legs[0]
+            hedge = plan.hedge_legs[0]
+            structure = (
+                f"SELL {main.strike:,.0f} {main.side} / BUY {hedge.strike:,.0f} {hedge.side}"
+            )
+            net_points = float(plan.estimated_credit_points or 0.0)
+            net = f"Credit {net_points:.2f}"
+            max_profit_points = net_points
+        max_loss_points = max(0.0, float(plan.max_risk_points or 0.0))
+        rows.append(
+            {
+                "Mode": candidate.profile,
+                "Main + Hedge": structure,
+                "Net": net,
+                "Max loss/lot": f"₹{max_loss_points * lot_size:,.0f}",
+                "Max profit/lot": f"₹{max_profit_points * lot_size:,.0f}",
+                "Quality": f"{plan.quality_score:.0f}/100",
+                "_rank": candidate.risk_rank,
+            }
+        )
+    frame = pd.DataFrame(rows)
+
+    def _candidate_style(row: pd.Series) -> list[str]:
+        if row["Mode"] == "BALANCED":
+            return ["background-color: rgba(59,130,246,.18);font-weight:700"] * len(row)
+        if row["Mode"] == "HIGH RISK":
+            return ["background-color: rgba(239,68,68,.09)"] * len(row)
+        return [""] * len(row)
+
+    styled = frame.style.apply(_candidate_style, axis=1).hide(
+        axis="columns", subset=["_rank"]
+    )
+    st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
+    if snapshot.decision.final_action == "WAIT":
+        st.info("Final Action WAIT hai—yeh candidates sirf comparison/reference hain, entry signal nahi.")
 
 
 def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
@@ -1111,7 +1198,7 @@ def render_trade_plan(
 
         if plan.is_buy:
             primary = _leg_label(plan.long_legs, prefix="BUY")
-            protection = "—"
+            protection = _leg_label(plan.short_legs, prefix="SELL")
             premium = (
                 f"Debit {plan.estimated_debit_points:.2f}"
                 if plan.estimated_debit_points is not None

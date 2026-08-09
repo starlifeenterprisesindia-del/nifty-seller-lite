@@ -50,6 +50,7 @@ from ui.components import (
     render_vix_context,
     render_volume,
     render_walls_and_pcr,
+    render_protected_candidates,
 )
 from ui.premium_calculator import render_spot_premium_calculator
 
@@ -498,6 +499,7 @@ previous_view_snapshot = (
 render_market_session(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
 render_compact_barrier_map(view_snapshot)
+render_protected_candidates(view_snapshot)
 render_spot_premium_calculator(view_snapshot)
 
 with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):

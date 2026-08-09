@@ -589,6 +589,14 @@ class SetupPlan:
 
 
 @dataclass(frozen=True)
+class ProtectedCandidate:
+    profile: str
+    plan: SetupPlan
+    risk_rank: int
+    note: str
+
+
+@dataclass(frozen=True)
 class TradePlanBundle:
     as_of: datetime
     expiry: str | None
@@ -605,6 +613,8 @@ class TradePlanBundle:
     pe_buy: SetupPlan = field(
         default_factory=lambda: SetupPlan.unavailable("PE BUY", "Buy plan unavailable")
     )
+    candidate_setup: str = "WAIT"
+    protected_candidates: tuple[ProtectedCandidate, ...] = ()
 
 
 @dataclass(frozen=True)

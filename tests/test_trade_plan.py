@@ -226,7 +226,7 @@ def test_best_hedge_search_stays_within_configured_window():
     assert gap <= 250
 
 
-def test_selected_ce_buy_plan_uses_one_liquid_long_leg_without_hedge():
+def test_selected_ce_buy_plan_is_a_defined_risk_debit_spread():
     result = calculate_trade_plan(
         frame=option_frame(),
         spot=24350,
@@ -241,7 +241,21 @@ def test_selected_ce_buy_plan_uses_one_liquid_long_leg_without_hedge():
     assert result.ce_buy.status == "READY"
     assert len(result.ce_buy.long_legs) == 1
     assert result.ce_buy.long_legs[0].side == "CE"
-    assert not result.ce_buy.short_legs
+    assert len(result.ce_buy.short_legs) == 1
+    assert result.ce_buy.short_legs[0].side == "CE"
+    assert result.ce_buy.short_legs[0].strike > result.ce_buy.long_legs[0].strike
     assert not result.ce_buy.hedge_legs
     assert result.ce_buy.estimated_debit_points > 0
     assert result.ce_buy.max_risk_points == result.ce_buy.estimated_debit_points
+    assert result.ce_buy.width_points > result.ce_buy.estimated_debit_points
+    assert result.candidate_setup == "CE BUY"
+    assert tuple(item.profile for item in result.protected_candidates) == (
+        "LOW RISK",
+        "BALANCED",
+        "HIGH RISK",
+    )
+    for item in result.protected_candidates:
+        assert item.plan.long_legs
+        assert item.plan.short_legs
+        assert not item.plan.hedge_legs
+        assert item.plan.short_legs[0].strike > item.plan.long_legs[0].strike

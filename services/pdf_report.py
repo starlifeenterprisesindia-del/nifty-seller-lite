@@ -1355,7 +1355,11 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             if setup.is_buy
             else "SELL " + _trade_leg_text(setup.short_legs)
         )
-        protection = "-" if setup.is_buy else "BUY " + _trade_leg_text(setup.hedge_legs)
+        protection = (
+            "SELL " + _trade_leg_text(setup.short_legs)
+            if setup.is_buy
+            else "BUY " + _trade_leg_text(setup.hedge_legs)
+        )
         premium = (
             f"Debit {setup.estimated_debit_points:.2f}"
             if setup.estimated_debit_points is not None
