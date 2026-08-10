@@ -6,3 +6,4 @@ Nifty Seller Lite 2.21 — Protected CE/PE Candidates
 - No naked CE/PE candidate and no ratio spread is generated.
 - BALANCED remains the canonical default; candidate rows do not create a second brain.
 - One-Brain final action, evidence calculations and Iron Condor logic remain unchanged.
+- v2.21.1 mobile fix: B/R/N abbreviations now show full Bull/Bear/Neutral labels.

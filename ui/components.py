@@ -369,7 +369,11 @@ def render_evidence_matrix(
         if previous is None:
             return "Pehla snapshot"
         deltas = []
-        for key, short in (("Bullish %", "B"), ("Bearish %", "R"), ("Neutral %", "N")):
+        for key, short in (
+            ("Bullish %", "Bull"),
+            ("Bearish %", "Bear"),
+            ("Neutral %", "Neutral"),
+        ):
             current_value = row.get(key)
             previous_value = previous.get(key)
             if current_value is not None and previous_value is not None:
@@ -388,9 +392,9 @@ def render_evidence_matrix(
     for row in rows:
         mix = " · ".join(
             (
-                score_text(row.get("Bullish %"), "B"),
-                score_text(row.get("Bearish %"), "R"),
-                score_text(row.get("Neutral %"), "N"),
+                score_text(row.get("Bullish %"), "Bull "),
+                score_text(row.get("Bearish %"), "Bear "),
+                score_text(row.get("Neutral %"), "Neutral "),
             )
         )
         confidence = (
@@ -430,13 +434,13 @@ def render_evidence_matrix(
         '@media(max-width:760px){'
         '.evt{font-size:.68rem}.evt th,.evt td{padding:6px 4px}'
         '.evt-bull,.evt-bear,.evt-neutral,.evt-impact{display:none}'
-        '.evt-mix{display:table-cell;width:24%;white-space:normal}'
-        '.evt-module{width:22%}.evt-conf{width:13%;text-align:center}.evt-result{width:41%}'
+        '.evt-mix{display:table-cell;width:29%;white-space:normal;line-height:1.45}'
+        '.evt-module{width:20%}.evt-conf{width:12%;text-align:center}.evt-result{width:39%}'
         '.evt-result b{font-size:.68rem}.evt-result span,.evt-result em{display:block;font-size:.61rem}'
         '}'
         '</style><div class="evt-wrap"><table class="evt"><thead><tr>'
         '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th>'
-        '<th class="evt-mix">B/R/N</th><th>Bharosa</th><th class="evt-impact">One-Brain mein Asar</th><th>Abhi ka result / Badlav</th>'
+        '<th class="evt-mix">Bull / Bear / Neutral</th><th>Bharosa</th><th class="evt-impact">One-Brain mein Asar</th><th>Abhi ka result / Badlav</th>'
         '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
     )
     st.html(table_html) if hasattr(st, "html") else st.markdown(
