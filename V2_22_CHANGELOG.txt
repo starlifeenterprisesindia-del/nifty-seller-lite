@@ -1,0 +1,10 @@
+Nifty Seller Lite 2.22 — News, VIX and Impact Delta
+
+- Compact News indicator: Bullish/Bearish/Mixed, Normal/Caution/Dangerous, Asar /9.
+- Removed the long on-screen headline table.
+- Fresh news alone can receive controlled live weight.
+- 3–24 hour news is context-only with zero One-Brain direction weight.
+- Last context remains visible safely if every RSS request temporarily fails.
+- VIX row shows value, daily change, regime, movement and risk points.
+- One-Brain impact shows current, previous snapshot and delta/arrow.
+- No second decision brain was added.

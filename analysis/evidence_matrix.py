@@ -263,11 +263,43 @@ def build_module_impact_audit(
             maximum, max_text = 4.0, "Max 4 pts"
         elif module == "News / Event Risk":
             news = getattr(snapshot, "news_context", None)
-            risk = str(getattr(news, "risk_level", "NONE"))
-            audit[module] = f"WAIT/Risk modifier · {risk}"
+            status = str(getattr(news, "status", "UNAVAILABLE")).upper()
+            risk = str(getattr(news, "risk_level", "NONE")).upper()
+            bias = str(getattr(news, "bias", "NEUTRAL")).upper()
+            if status == "READY":
+                points = {"HIGH": 9, "MEDIUM": 5, "LOW": 2}.get(risk, 0)
+            elif status == "OLD":
+                points = min(2, {"HIGH": 9, "MEDIUM": 5, "LOW": 2}.get(risk, 0))
+            else:
+                points = 0
+            severity = (
+                "DANGEROUS" if risk == "HIGH" and status == "READY"
+                else "CAUTION" if points >= 3 or status == "OLD"
+                else "NORMAL" if points > 0
+                else "NO LIVE NEWS"
+            )
+            signed = -points if bias == "BEARISH" else points if bias == "BULLISH" else 0
+            audit[module] = f"{bias} · {severity} · Asar {signed:+d}/9"
             continue
         elif module == "VIX / Data Integrity":
-            audit[module] = f"Max {weights[module]:.0f}% · risk/seller environment"
+            vix = getattr(snapshot, "vix_context", None)
+            value = getattr(vix, "last_price", None)
+            change = getattr(vix, "change_pct", None)
+            regime = str(getattr(vix, "regime", "UNAVAILABLE")).upper()
+            movement = str(getattr(vix, "movement", "UNAVAILABLE")).upper()
+            risk_points = (
+                9 if regime == "HIGH" or movement == "RISING FAST"
+                else 6 if regime == "ELEVATED" or movement == "RISING"
+                else 3 if regime == "LOW"
+                else 2 if regime == "NORMAL"
+                else 0
+            )
+            value_text = f"{float(value):.2f}" if value is not None else "NA"
+            change_text = f"{float(change):+.2f}%" if change is not None else "NA"
+            audit[module] = (
+                f"VIX {value_text} ({change_text}) · {regime}/{movement}"
+                f" · Risk {risk_points}/{weights[module]:.0f}"
+            )
             continue
         else:
             maximum = weights.get(module, 0.0)
@@ -612,16 +644,27 @@ def build_compact_evidence_matrix(
         session_text = "SESSION NOT CONFIRMED"
     else:
         session_text = "MARKET CLOSED"
-    vix_text = _short_direction(vix.seller_environment)
-    if "BALANCED" in str(vix.seller_environment).upper():
-        vix_text = "NORMAL"
-    risk_result = f"{session_text} · VIX {vix_text} · DATA/FEED CHECK"
+    vix_last = getattr(vix, "last_price", None)
+    vix_change_value = getattr(vix, "change_pct", None)
+    vix_value = f"{vix_last:.2f}" if vix_last is not None else "NA"
+    vix_change = (
+        f"{vix_change_value:+.2f}%" if vix_change_value is not None else "NA"
+    )
+    risk_result = (
+        f"{session_text} · VIX {vix_value} ({vix_change}) · "
+        f"{getattr(vix, 'regime', 'UNAVAILABLE')}/"
+        f"{getattr(vix, 'movement', 'UNAVAILABLE')} · "
+        f"{_short_direction(vix.seller_environment)}"
+    )
     if news is None or news.status not in {"READY", "OLD"}:
         news_result = f"EVENT {snapshot.event_risk.level} · FRESH NEWS NA · ZERO DIRECTION WEIGHT"
         news_confidence = 0.0
     elif news.status == "OLD":
         news_result = f"EVENT {snapshot.event_risk.level} · NEWS OLD/LOW WEIGHT · {news.bias}"
         news_confidence = 25.0
+    elif news.status == "CONTEXT ONLY":
+        news_result = f"EVENT {snapshot.event_risk.level} · NEWS CONTEXT/0 WEIGHT · {news.bias}"
+        news_confidence = 0.0
     else:
         news_result = f"EVENT {snapshot.event_risk.level} · NEWS {news.risk_level}/{news.bias} · FRESH"
         news_confidence = 80.0

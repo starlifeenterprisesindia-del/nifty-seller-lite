@@ -129,6 +129,8 @@ class MarketNewsService:
             return "READY"
         if newest_age_minutes <= CONFIG.news_stale_minutes:
             return "OLD"
+        if newest_age_minutes <= CONFIG.news_context_minutes:
+            return "CONTEXT ONLY"
         return "STALE"
 
     @staticmethod
@@ -177,7 +179,7 @@ class MarketNewsService:
             age_minutes = None
             if published is not None:
                 age_minutes = max(0.0, (now - published.astimezone(now.tzinfo)).total_seconds() / 60.0)
-                if age_minutes > CONFIG.news_stale_minutes:
+                if age_minutes > CONFIG.news_context_minutes:
                     continue
             headlines.append(
                 NewsHeadline(
@@ -210,6 +212,8 @@ class MarketNewsService:
         if status == "OLD":
             risk = self._downgrade_risk_for_old(risk)
             summary = "OLD / low-weight context. " + summary
+        elif status == "CONTEXT ONLY":
+            summary = "CONTEXT ONLY / decision weight zero. " + summary
         elif status in {"STALE", "UNAVAILABLE"}:
             bias, risk = "NEUTRAL", "NONE"
             summary = "Fresh market-moving news available nahi hai; news decision weight zero hai."
@@ -229,7 +233,7 @@ class MarketNewsService:
         root = ElementTree.fromstring(xml_text)
         rows: list[dict[str, Any]] = []
         now_utc = MarketNewsService._now_utc(now)
-        max_age_seconds = CONFIG.news_stale_minutes * 60
+        max_age_seconds = CONFIG.news_context_minutes * 60
         for item in root.findall(".//item"):
             title = (item.findtext("title") or "").strip()
             if not title or MarketNewsService._title_date_is_stale(title, now):
@@ -328,12 +332,35 @@ class MarketNewsService:
             newest_age = min(ages, default=None)
         status = self._freshness_status(newest_age)
         if not clean:
+            # If every live request failed, preserve the last same-day context instead
+            # of replacing it with an empty payload. Freshness still controls weight.
+            if failures == len(self.QUERIES) and self.cache_path.exists():
+                try:
+                    previous_payload = json.loads(
+                        self.cache_path.read_text(encoding="utf-8")
+                    )
+                    fallback = self._context_from_payload(previous_payload, now)
+                    if fallback.headlines:
+                        return NewsContext(
+                            as_of=fallback.as_of,
+                            headlines=fallback.headlines,
+                            bias=fallback.bias,
+                            risk_level=fallback.risk_level,
+                            summary="RSS unavailable; last context shown. " + fallback.summary,
+                            newest_age_minutes=fallback.newest_age_minutes,
+                            status=fallback.status,
+                            source=fallback.source + " (last context)",
+                        )
+                except Exception:
+                    pass
             status = "UNAVAILABLE" if failures == len(self.QUERIES) else "NO FRESH NEWS"
             bias, risk = "NEUTRAL", "NONE"
             summary = "Fresh market-moving news available nahi hai; news decision weight zero hai."
         elif status == "OLD":
             risk = self._downgrade_risk_for_old(risk)
             summary = "OLD / low-weight context. " + summary
+        elif status == "CONTEXT ONLY":
+            summary = "CONTEXT ONLY / decision weight zero. " + summary
 
         payload = {
             "fetched_at": now.isoformat(),

@@ -7,3 +7,6 @@ Nifty Seller Lite 2.21 — Protected CE/PE Candidates
 - BALANCED remains the canonical default; candidate rows do not create a second brain.
 - One-Brain final action, evidence calculations and Iron Condor logic remain unchanged.
 - v2.21.1 mobile fix: B/R/N abbreviations now show full Bull/Bear/Neutral labels.
+- v2.21.2 evidence clarity: One-Brain impact shows last contribution and delta/arrow.
+- v2.22 compact News indicator, 24h zero-weight context fallback, useful VIX details,
+  and last-snapshot delta for both risk modifiers.

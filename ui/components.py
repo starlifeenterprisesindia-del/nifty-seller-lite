@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from html import escape
 from typing import Any
@@ -351,6 +352,58 @@ def render_evidence_matrix(
     )
     previous_by_module = {str(row["Module"]): row for row in previous_rows}
     reference_name, impact_by_module = build_module_impact_audit(snapshot, rows)
+    previous_impact_by_module = (
+        build_module_impact_audit(previous_snapshot, previous_rows)[1]
+        if previous_snapshot is not None
+        else {}
+    )
+
+    impact_pattern = re.compile(
+        r"Abhi\s+([0-9]+(?:\.[0-9]+)?)\s+pts\s+(Bull|Bear|Range)",
+        re.IGNORECASE,
+    )
+    risk_pattern = re.compile(
+        r"(?:Asar\s+([+-]?\d+)/9|Risk\s+(\d+)/(?:9|12))",
+        re.IGNORECASE,
+    )
+
+    def impact_with_last(module: str, current_text: str) -> str:
+        """Append a compact, truthful last-snapshot contribution comparison."""
+
+        current_match = impact_pattern.search(current_text)
+        if current_match is None:
+            current_risk = risk_pattern.search(current_text)
+            if current_risk is None:
+                return current_text
+            current_value = float(current_risk.group(1) or current_risk.group(2))
+            if previous_snapshot is None:
+                return f"{current_text} · Last —"
+            previous_text = previous_impact_by_module.get(module, "")
+            previous_risk = risk_pattern.search(previous_text)
+            if previous_risk is None:
+                return f"{current_text} · Last NA"
+            previous_value = float(previous_risk.group(1) or previous_risk.group(2))
+            delta = current_value - previous_value
+            arrow = "↑" if delta > 0.05 else "↓" if delta < -0.05 else "→"
+            return f"{current_text} · Last {previous_value:+.0f} · Δ {delta:+.0f}{arrow}"
+        if previous_snapshot is None:
+            return f"{current_text} · Last —"
+        previous_text = previous_impact_by_module.get(module, "")
+        previous_match = impact_pattern.search(previous_text)
+        if previous_match is None:
+            return f"{current_text} · Last NA"
+        current_points = float(current_match.group(1))
+        previous_points = float(previous_match.group(1))
+        current_direction = current_match.group(2).title()
+        previous_direction = previous_match.group(2).title()
+        if current_direction != previous_direction:
+            return (
+                f"{current_text} · Last {previous_points:.1f} {previous_direction}"
+                f" → {current_direction}"
+            )
+        delta = current_points - previous_points
+        arrow = "↑" if delta > 0.05 else "↓" if delta < -0.05 else "→"
+        return f"{current_text} · Last {previous_points:.1f} · Δ {delta:+.1f}{arrow}"
 
     def score_text(value: Any, short: str) -> str:
         return f"{short}{float(value):.0f}" if value is not None else f"{short}—"
@@ -403,7 +456,10 @@ def render_evidence_matrix(
             else "—"
         )
         change = change_text(row)
-        impact = impact_by_module.get(str(row["Module"]), "—")
+        module = str(row["Module"])
+        impact = impact_with_last(
+            module, impact_by_module.get(module, "—")
+        )
         body.append(
             '<tr>'
             f'<td class="evt-module">{escape(str(row["Module"]))}</td>'
@@ -861,24 +917,31 @@ def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
 
 def render_news_context(snapshot: MarketSnapshot) -> None:
     news = snapshot.news_context
-    news_display = normalized_news_display(news)
-    if news_display.status == "READY":
-        st.info(f"**News:** {news_display.bias} • Risk {news_display.risk} • {len(news.headlines)} headlines")
+    status = str(news.status).upper()
+    risk = str(news.risk_level).upper()
+    bias = str(news.bias).upper()
+    if status == "READY":
+        points = {"HIGH": 9, "MEDIUM": 5, "LOW": 2}.get(risk, 0)
+    elif status == "OLD":
+        points = min(2, {"HIGH": 9, "MEDIUM": 5, "LOW": 2}.get(risk, 0))
     else:
-        st.info("**News:** Unavailable • Weight 0%")
-    if news.headlines:
-        rows = []
-        for item in news.headlines:
-            rows.append(
-                {
-                    "Age min": item.age_minutes,
-                    "Impact": item.impact,
-                    "Bias": item.bias,
-                    "Headline": item.title,
-                    "Source": item.source,
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        points = 0
+    severity = (
+        "DANGEROUS" if risk == "HIGH" and status == "READY"
+        else "CAUTION" if points >= 3 or status == "OLD"
+        else "NORMAL" if points > 0
+        else "NO LIVE NEWS"
+    )
+    signed = -points if bias == "BEARISH" else points if bias == "BULLISH" else 0
+    age = (
+        f"{news.newest_age_minutes:.0f}m"
+        if news.newest_age_minutes is not None
+        else "NA"
+    )
+    st.info(
+        f"**News Indicator:** {bias} • {severity} • Asar {signed:+d}/9 • "
+        f"{status} • Age {age}"
+    )
 
 
 def _decision_evaluations(snapshot: MarketSnapshot) -> dict[str, Any]:

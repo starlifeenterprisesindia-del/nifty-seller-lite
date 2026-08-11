@@ -1,9 +1,14 @@
-# Nifty Seller Lite 2.21
+# Nifty Seller Lite 2.22
 
 Directional CE/PE candidates now appear in three compact protected profiles:
 LOW RISK, BALANCED and HIGH RISK. Every BUY or SELL candidate uses a same-expiry,
 equal-quantity hedge; no naked directional candidate is produced. The One-Brain
 action remains authoritative and BALANCED is the default candidate profile.
+
+The compact evidence view now shows each module's current One-Brain contribution,
+last-snapshot contribution and delta. VIX displays its value/change/regime/movement.
+News is reduced to a compact direction/severity/impact indicator; 3–24 hour headlines
+may remain as context but always carry zero live decision weight.
 
 Compact, read-only NIFTY options decision-support app using one canonical strategy brain.
 

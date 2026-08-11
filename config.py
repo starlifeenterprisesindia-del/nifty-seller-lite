@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.21.1_MOBILE_EVIDENCE_LABELS"
+    version: str = "2.22.0_NEWS_VIX_IMPACT"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -123,6 +123,9 @@ class AppConfig:
     news_fresh_minutes: int = 30
     news_recent_minutes: int = 90
     news_stale_minutes: int = 180
+    # Older same-day headlines may remain as screen-only context. They never receive
+    # One-Brain direction weight after news_stale_minutes.
+    news_context_minutes: int = 1440
     news_title_date_max_days: int = 2
     news_max_headlines: int = 12
 

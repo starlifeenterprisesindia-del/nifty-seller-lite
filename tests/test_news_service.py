@@ -8,7 +8,7 @@ IST = ZoneInfo("Asia/Kolkata")
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=IST)
 
 
-def test_news_parser_keeps_recent_and_classifies_impact_and_bias():
+def test_news_parser_keeps_fresh_and_same_day_context():
     published = (NOW - timedelta(minutes=20)).strftime("%a, %d %b %Y %H:%M:%S %z")
     old = (NOW - timedelta(hours=20)).strftime("%a, %d %b %Y %H:%M:%S %z")
     xml = f"""<?xml version='1.0' encoding='UTF-8'?>
@@ -27,7 +27,7 @@ def test_news_parser_keeps_recent_and_classifies_impact_and_bias():
       </item>
     </channel></rss>"""
     rows = MarketNewsService._parse_feed(xml, NOW)
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert rows[0]["impact"] == "HIGH"
     assert rows[0]["bias"] == "BULLISH"
 
@@ -90,9 +90,31 @@ def test_cached_news_becomes_old_and_low_weight_after_90_minutes(tmp_path):
     assert "low-weight" in context.summary
 
 
-def test_news_older_than_180_minutes_has_zero_weight_status(tmp_path):
+def test_news_older_than_180_minutes_is_context_only_with_zero_live_weight(tmp_path):
     service = MarketNewsService(tmp_path / "news.json")
     published = NOW - timedelta(minutes=181)
+    payload = {
+        "fetched_at": NOW.isoformat(),
+        "headlines": [{
+            "title": "Nifty falls on global risk - Example News",
+            "source": "Example News",
+            "published_at": published.isoformat(),
+            "impact": "HIGH",
+            "bias": "BEARISH",
+            "link": "",
+        }],
+        "source": "test",
+    }
+    context = service._context_from_payload(payload, NOW)
+    assert context.status == "CONTEXT ONLY"
+    assert context.risk_level == "HIGH"
+    assert context.headlines
+    assert "decision weight zero" in context.summary
+
+
+def test_news_older_than_context_window_is_removed(tmp_path):
+    service = MarketNewsService(tmp_path / "news.json")
+    published = NOW - timedelta(minutes=1441)
     payload = {
         "fetched_at": NOW.isoformat(),
         "headlines": [{
