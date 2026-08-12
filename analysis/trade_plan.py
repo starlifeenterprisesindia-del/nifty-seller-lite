@@ -871,6 +871,10 @@ def calculate_trade_plan(
     )
     if balanced is not None and candidate_setup in plans:
         plans[candidate_setup] = balanced
+    # The audit must show one internally consistent protected structure. If the
+    # balanced directional candidate changed a CE/PE sell wing, rebuild the condor
+    # from those exact displayed standalone sell legs.
+    plans["IRON CONDOR"] = _condor_plan(plans["CE SELL"], plans["PE SELL"])
     plans = {
         name: _apply_runtime_status(
             plan,

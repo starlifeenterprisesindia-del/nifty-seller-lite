@@ -157,6 +157,28 @@ def test_bullish_engulfing_near_support_is_important_candle():
     assert result.bullish_score > result.bearish_score
 
 
+def test_special_candle_can_be_labelled_as_completed_five_minute_signal():
+    timestamps = pd.date_range(
+        "2026-08-01 09:15:00", periods=8, freq="5min", tz=IST
+    )
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [110, 109, 108, 107, 106, 105, 105, 100.5],
+            "high": [111, 110, 109, 108, 107, 106, 106, 107],
+            "low": [108, 107, 106, 105, 104, 103, 100, 99.5],
+            "close": [109, 108, 107, 106, 105, 104, 101, 106],
+            "volume": [1000.0] * 7 + [1800.0],
+            "open_interest": [0.0] * 8,
+            "is_complete": [True] * 8,
+        }
+    )
+    result = detect_special_candle(frame, _levels(), _volume("BULLISH"), "5M")
+
+    assert result.family == "5M CANDLE"
+    assert "5-minute" in result.reasons[0]
+
+
 def test_mid_range_doji_is_suppressed_to_keep_ui_quiet():
     values = [100, 101, 102, 103, 104, 105]
     frame = _frame(values)

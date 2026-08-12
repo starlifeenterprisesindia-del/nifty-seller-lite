@@ -190,6 +190,14 @@ def test_condor_has_two_short_legs_and_two_hedges():
     assert len(plan.short_legs) == 2
     assert len(plan.hedge_legs) == 2
     assert plan.lower_breakeven < plan.upper_breakeven
+    assert {leg.strike for leg in plan.short_legs} == {
+        result.ce_sell.short_legs[0].strike,
+        result.pe_sell.short_legs[0].strike,
+    }
+    assert {leg.strike for leg in plan.hedge_legs} == {
+        result.ce_sell.hedge_legs[0].strike,
+        result.pe_sell.hedge_legs[0].strike,
+    }
 
 
 def test_missing_farther_otm_hedge_makes_plan_unavailable():

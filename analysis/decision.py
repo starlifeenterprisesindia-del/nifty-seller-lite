@@ -317,8 +317,9 @@ def _pattern_adjustments(
 ) -> tuple[float, float, float, float, bool, tuple[str, ...]]:
     """Return bounded pattern evidence for the canonical brain.
 
-    W/M and candle shapes come from the same completed 3-minute price stream, so
-    their combined impact is capped and reduced when they conflict. They never
+    W/M uses completed 3-minute structure and the main candle uses completed
+    5-minute candles (falling back to legacy 3-minute data). Their combined impact
+    is capped and reduced when they conflict. They never
     emit an action or bypass the normal score, WAIT and fake-move gates.
     """
 
@@ -336,14 +337,14 @@ def _pattern_adjustments(
         points = CONFIG.pattern_wm_max_adjustment * (wm.confidence / 100.0) * stage_factor
         effects.append((wm.direction, points, f"3m {wm.name} {wm.stage.lower()}"))
 
-    candle = patterns.candle_3m
+    candle = getattr(patterns, "candle_5m", None) or patterns.candle_3m
     if (
         candle.status == "READY"
         and candle.direction in {"BULLISH", "BEARISH"}
         and candle.confidence >= CONFIG.pattern_min_brain_confidence
     ):
         points = CONFIG.pattern_candle_max_adjustment * (candle.confidence / 100.0)
-        effects.append((candle.direction, points, f"3m {candle.name}"))
+        effects.append((candle.direction, points, f"5m {candle.name}"))
 
     neutral_wait = 0.0
     if (
@@ -536,7 +537,8 @@ def _fake_move_risk(
 
     if patterns is not None and patterns.status == "READY":
         wm_direction = patterns.wm_3m.direction
-        candle_direction = patterns.candle_3m.direction
+        main_candle = getattr(patterns, "candle_5m", None) or patterns.candle_3m
+        candle_direction = main_candle.direction
         usable_directions = {
             item
             for item in (wm_direction, candle_direction)
@@ -544,7 +546,7 @@ def _fake_move_risk(
         }
         if len(usable_directions) > 1:
             risk += 10
-            reasons.append("3-minute W/M and candle evidence conflict")
+            reasons.append("3-minute W/M and 5-minute candle evidence conflict")
         pattern_direction = patterns.combined_direction
         if pattern_direction in {"BULLISH", "BEARISH"} and pattern_direction != direction:
             risk += 10

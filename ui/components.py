@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import asdict
 from html import escape
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -129,6 +132,45 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
 def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
     item = snapshot.barrier_map
 
+    def pattern_level_text(
+        signal: Any | None, fallback: str, *, show_possible_effect: bool = False
+    ) -> tuple[str, str]:
+        if signal is None or str(getattr(signal, "name", "")).upper() in {
+            "",
+            "NO VALID W/M",
+            "NO IMPORTANT CANDLE",
+        }:
+            return fallback, "Abhi nearest level par valid signal nahi"
+        name = str(signal.name)
+        direction = str(getattr(signal, "direction", "NEUTRAL"))
+        strength = str(getattr(signal, "strength", "NORMAL"))
+        confidence = float(getattr(signal, "confidence", 0.0) or 0.0)
+        level_value = getattr(signal, "level_value", None)
+        level_label = str(getattr(signal, "level_label", "") or "Nearest level")
+        level_text = (
+            f"{level_label} {float(level_value):,.0f} ke paas"
+            if level_value is not None
+            else "Nearest level confirmation nahi"
+        )
+        stage = str(getattr(signal, "stage", "") or "")
+        note = (
+            f"{direction} · {strength} · Bharosa {confidence:.0f}% · "
+            f"{stage} · {level_text}"
+        )
+        if show_possible_effect:
+            effect = (
+                "Upar bounce/continuation"
+                if direction.upper() == "BULLISH"
+                else "Neeche rejection/pressure"
+                if direction.upper() == "BEARISH"
+                else "Indecision—level break ka wait"
+            )
+            note += (
+                f" · Mumkin asar: {effect} · "
+                f"Chance (signal bharosa) {confidence:.0f}%"
+            )
+        return name, note
+
     def level_text(level: Any | None, fallback: str) -> tuple[str, str]:
         if level is None:
             return "Unresolved", fallback
@@ -154,6 +196,39 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         if range_item.lower is not None and range_item.upper is not None
         else "Range unresolved"
     )
+    patterns = getattr(snapshot, "patterns", None)
+    wm_name, wm_note = pattern_level_text(
+        getattr(patterns, "wm_3m", None), "NO VALID W/M"
+    )
+    main_candle = (
+        getattr(patterns, "candle_5m", None)
+        or getattr(patterns, "candle_3m", None)
+    )
+    candle_name, candle_note = pattern_level_text(
+        main_candle,
+        "NO IMPORTANT CANDLE",
+        show_possible_effect=True,
+    )
+    if candle_name != "NO IMPORTANT CANDLE":
+        main_direction = str(getattr(main_candle, "direction", "NEUTRAL")).upper()
+
+        def confirmation_text(signal: Any | None) -> str:
+            name = str(getattr(signal, "name", "") or "").upper()
+            direction = str(getattr(signal, "direction", "NEUTRAL") or "NEUTRAL").upper()
+            if name in {"", "NO IMPORTANT CANDLE"}:
+                return "NA"
+            if main_direction not in {"BULLISH", "BEARISH"}:
+                return direction
+            if direction == main_direction:
+                return "YES"
+            if direction in {"BULLISH", "BEARISH"}:
+                return "CONFLICT"
+            return "NO"
+
+        candle_note += (
+            f" · 3M confirm {confirmation_text(getattr(patterns, 'candle_3m', None))}"
+            f" · 15M confirm {confirmation_text(getattr(patterns, 'candle_15m', None))}"
+        )
 
     st.subheader("🧭 Nearest Levels + Core Market Evidence")
     html = (
@@ -166,12 +241,19 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
         '.cbm-l{font-size:.74rem;font-weight:800;opacity:.75;letter-spacing:.04em}'
         '.cbm-v{font-size:1.25rem;font-weight:900;margin-top:4px}'
         '.cbm-n{font-size:.72rem;opacity:.72;margin-top:4px;line-height:1.3}'
-        '@media(max-width:760px){.cbm-grid{grid-template-columns:1fr}.cbm{padding:10px}.cbm-v{font-size:1.12rem}}'
+        '.cbm-patterns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 8px}'
+        '.cbm.pattern{padding:9px 11px}.cbm.pattern .cbm-v{font-size:1rem}'
+        '.cbm.wm{border-color:rgba(168,85,247,.38);background:rgba(168,85,247,.07)}'
+        '.cbm.candle{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.07)}'
+        '@media(max-width:760px){.cbm-grid,.cbm-patterns{grid-template-columns:1fr}.cbm{padding:10px}.cbm-v{font-size:1.12rem}.cbm.pattern{padding:8px 10px}}'
         '</style>'
         '<div class="cbm-grid">'
         f'<div class="cbm res"><div class="cbm-l">AGLI RUKAWAT</div><div class="cbm-v">{escape(resistance)}</div><div class="cbm-n">{escape(resistance_note)}</div></div>'
         f'<div class="cbm spot"><div class="cbm-l">NIFTY ABHI</div><div class="cbm-v">{escape(spot)}</div><div class="cbm-n">Range {range_item.confidence:.0f}/100 · {escape(range_item.breakout_bias)} · Confirmation tak WAIT</div></div>'
         f'<div class="cbm sup"><div class="cbm-l">AGLA SAHARA</div><div class="cbm-v">{escape(support)}</div><div class="cbm-n">{escape(support_note)}</div></div>'
+        '</div><div class="cbm-patterns">'
+        f'<div class="cbm pattern wm"><div class="cbm-l">3-MINUTE W/M @ NEAREST LEVEL</div><div class="cbm-v">{escape(wm_name)}</div><div class="cbm-n">{escape(wm_note)}</div></div>'
+        f'<div class="cbm pattern candle"><div class="cbm-l">5-MINUTE CANDLE @ NEAREST LEVEL</div><div class="cbm-v">{escape(candle_name)}</div><div class="cbm-n">{escape(candle_note)}</div></div>'
         '</div>'
     )
     if hasattr(st, "html"):
@@ -357,6 +439,39 @@ def render_evidence_matrix(
         if previous_snapshot is not None
         else {}
     )
+    impact_history_path = Path("data/last_one_brain_impact.json")
+    if previous_snapshot is None:
+        try:
+            saved = json.loads(impact_history_path.read_text(encoding="utf-8"))
+            if (
+                str(saved.get("snapshot_id") or "") != str(snapshot.snapshot_id)
+                and str(saved.get("date") or "") == snapshot.created_at.date().isoformat()
+                and isinstance(saved.get("impacts"), dict)
+            ):
+                previous_impact_by_module = {
+                    str(key): str(value)
+                    for key, value in saved["impacts"].items()
+                }
+        except (OSError, ValueError, TypeError):
+            pass
+    try:
+        impact_history_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = impact_history_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "date": snapshot.created_at.date().isoformat(),
+                    "created_at": snapshot.created_at.isoformat(),
+                    "impacts": impact_by_module,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary, impact_history_path)
+    except OSError:
+        pass
 
     impact_pattern = re.compile(
         r"Abhi\s+([0-9]+(?:\.[0-9]+)?)\s+pts\s+(Bull|Bear|Range)",
@@ -376,8 +491,8 @@ def render_evidence_matrix(
             if current_risk is None:
                 return current_text
             current_value = float(current_risk.group(1) or current_risk.group(2))
-            if previous_snapshot is None:
-                return f"{current_text} · Last —"
+            if not previous_impact_by_module:
+                return f"{current_text} · Last: pehla snapshot"
             previous_text = previous_impact_by_module.get(module, "")
             previous_risk = risk_pattern.search(previous_text)
             if previous_risk is None:
@@ -386,8 +501,8 @@ def render_evidence_matrix(
             delta = current_value - previous_value
             arrow = "↑" if delta > 0.05 else "↓" if delta < -0.05 else "→"
             return f"{current_text} · Last {previous_value:+.0f} · Δ {delta:+.0f}{arrow}"
-        if previous_snapshot is None:
-            return f"{current_text} · Last —"
+        if not previous_impact_by_module:
+            return f"{current_text} · Last: pehla snapshot"
         previous_text = previous_impact_by_module.get(module, "")
         previous_match = impact_pattern.search(previous_text)
         if previous_match is None:
@@ -778,7 +893,12 @@ def render_main_ai_market_view(
             fallback="NO VALID W/M",
         )
         candle_text, _candle_note = _pattern_compact_text(
-            patterns.candle_3m if patterns is not None else None,
+            (
+                getattr(patterns, "candle_5m", None)
+                or patterns.candle_3m
+                if patterns is not None
+                else None
+            ),
             fallback="NO IMPORTANT CANDLE",
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -188,18 +189,89 @@ with st.sidebar:
         st.success("Dhan credentials found")
     else:
         st.error("Dhan credentials missing")
+    auto_due = bool(st.session_state.pop("auto_snapshot_due", False))
     refresh_requested = st.button(
         "Fetch Fresh Snapshot", type="primary", width="stretch"
     )
     refresh = False
-    if refresh_requested:
+    if refresh_requested or auto_due:
         now_tick = datetime.now().timestamp()
         last_tick = float(st.session_state.get("last_snapshot_fetch_ts", 0.0))
         remaining = CONFIG.snapshot_min_refresh_seconds - (now_tick - last_tick)
         if remaining > 0:
-            st.warning(f"Please wait {remaining:.1f}s before another Dhan snapshot.")
+            if refresh_requested:
+                st.warning(f"Please wait {remaining:.1f}s before another Dhan snapshot.")
         else:
             refresh = True
+
+    with st.expander("⏱️ Auto Snapshot", expanded=False):
+        auto_enabled = st.toggle("Auto Snapshot ON", key="auto_snapshot_enabled")
+        duration_minutes = st.selectbox(
+            "Kitni der chale",
+            (5, 15, 30),
+            index=1,
+            format_func=lambda value: f"{value} minute",
+            key="auto_snapshot_duration_minutes",
+            disabled=not auto_enabled,
+        )
+        interval_seconds = st.selectbox(
+            "Har kitni der snapshot",
+            (60, 30),
+            index=0,
+            format_func=lambda value: "1 minute" if value == 60 else "30 second",
+            key="auto_snapshot_interval_seconds",
+            disabled=not auto_enabled,
+        )
+        if auto_enabled and "auto_snapshot_started_at" not in st.session_state:
+            st.session_state.auto_snapshot_started_at = time.time()
+        if not auto_enabled:
+            st.session_state.pop("auto_snapshot_started_at", None)
+
+        @st.fragment(run_every=interval_seconds if auto_enabled else None)
+        def auto_snapshot_scheduler() -> None:
+            if not st.session_state.get("auto_snapshot_enabled", False):
+                st.caption("OFF — manual snapshot available hai")
+                return
+            now_value = time.time()
+            started = float(
+                st.session_state.get("auto_snapshot_started_at", now_value)
+            )
+            duration_seconds = int(
+                st.session_state.get("auto_snapshot_duration_minutes", 15)
+            ) * 60
+            elapsed = max(0.0, now_value - started)
+            if elapsed >= duration_seconds:
+                st.session_state.auto_snapshot_enabled = False
+                st.session_state.pop("auto_snapshot_started_at", None)
+                st.success("Auto Snapshot duration poori — automatic OFF")
+                st.rerun()
+
+            current_snapshot = st.session_state.get("snapshot")
+            market_live = bool(
+                current_snapshot is not None
+                and getattr(current_snapshot.market_session, "is_live", False)
+            )
+            remaining_run = max(0, round((duration_seconds - elapsed) / 60))
+            if not market_live:
+                st.caption(
+                    f"PAUSED — market live nahi · {remaining_run} min duration baaki"
+                )
+                return
+            last_fetch = float(
+                st.session_state.get("last_snapshot_fetch_ts", now_value)
+            )
+            interval = int(
+                st.session_state.get("auto_snapshot_interval_seconds", 60)
+            )
+            next_in = max(0, round(interval - (now_value - last_fetch)))
+            st.caption(
+                f"ON · Agla snapshot ~{next_in}s · {remaining_run} min baaki"
+            )
+            if now_value - last_fetch >= interval:
+                st.session_state.auto_snapshot_due = True
+                st.rerun()
+
+        auto_snapshot_scheduler()
     clear_instrument_cache = False
     clear_option_state = False
     # Destructive maintenance is hidden from the normal trading UI. It can be

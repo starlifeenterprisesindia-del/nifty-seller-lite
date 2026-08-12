@@ -1,4 +1,4 @@
-# Nifty Seller Lite 2.22
+# Nifty Seller Lite 2.24
 
 Directional CE/PE candidates now appear in three compact protected profiles:
 LOW RISK, BALANCED and HIGH RISK. Every BUY or SELL candidate uses a same-expiry,
@@ -9,6 +9,10 @@ The compact evidence view now shows each module's current One-Brain contribution
 last-snapshot contribution and delta. VIX displays its value/change/regime/movement.
 News is reduced to a compact direction/severity/impact indicator; 3–24 hour headlines
 may remain as context but always carry zero live decision weight.
+
+Nearest Levels includes 3-minute W/M structure and a completed 5-minute Special
+Candle with 3-minute/15-minute confirmation, possible effect and signal confidence.
+Optional Auto Snapshot can run for 5/15/30 minutes at 30-second or 1-minute intervals.
 
 Compact, read-only NIFTY options decision-support app using one canonical strategy brain.
 

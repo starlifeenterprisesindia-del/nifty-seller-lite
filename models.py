@@ -130,6 +130,8 @@ class PatternEvidenceBundle:
     combined_direction: str
     combined_confidence: float
     status: str
+    candle_5m: PatternSignal | None = None
+    candle_15m: PatternSignal | None = None
 
 
 @dataclass(frozen=True)

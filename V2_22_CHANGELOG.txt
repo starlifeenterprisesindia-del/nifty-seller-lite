@@ -8,3 +8,15 @@ Nifty Seller Lite 2.22 — News, VIX and Impact Delta
 - VIX row shows value, daily change, regime, movement and risk points.
 - One-Brain impact shows current, previous snapshot and delta/arrow.
 - No second decision brain was added.
+- v2.22.1: Nearest Levels now shows compact 3-minute W/M and Special Candle cards,
+  including direction, strength, confidence, stage and matched nearest level.
+- v2.22.2: One-Brain impact comparison survives browser refresh/device session through
+  a same-day compact local record; first snapshot is labelled clearly instead of Last —.
+- v2.23: Optional market-live Auto Snapshot supports 5/15/30-minute runs at 30-second
+  or 1-minute intervals, countdown, automatic stop, overlap guard and manual fallback.
+- v2.23.1: Nearest-level 3-minute candle card explains its possible effect and shows
+  the existing signal-confidence percentage as chance/bharosa, not a guarantee.
+- v2.24: W/M stays on 3-minute structure; the main Special Candle moves to completed
+  5-minute candles with 3-minute early and 15-minute strong confirmation labels.
+- Strategy Audit Iron Condor is rebuilt from the exact CE/PE sell legs displayed in
+  the standalone rows, removing strike/credit inconsistency.

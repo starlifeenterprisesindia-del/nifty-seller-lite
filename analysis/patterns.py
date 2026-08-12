@@ -386,16 +386,24 @@ def detect_special_candle(
     candles_3m: pd.DataFrame,
     levels: LevelBundle,
     volume: VolumeBundle,
+    timeframe: str = "3M",
 ) -> PatternSignal:
+    timeframe = str(timeframe or "3M").upper()
+    family = f"{timeframe} CANDLE"
+    timeframe_words = {
+        "3M": "3-minute",
+        "5M": "5-minute",
+        "15M": "15-minute",
+    }.get(timeframe, timeframe)
     source = _current_session(candles_3m)
     if len(source) < 6:
-        return _empty_signal("3M CANDLE", "NO IMPORTANT CANDLE", f"INSUFFICIENT 3M CANDLES ({len(source)}/6)")
+        return _empty_signal(family, "NO IMPORTANT CANDLE", f"INSUFFICIENT {timeframe} CANDLES ({len(source)}/6)")
     atr = atr_value(source)
     if atr is None or atr <= 0:
-        return _empty_signal("3M CANDLE", "NO IMPORTANT CANDLE", "ATR UNAVAILABLE")
+        return _empty_signal(family, "NO IMPORTANT CANDLE", "ATR UNAVAILABLE")
     detected = _candle_pattern(source)
     if detected is None:
-        return _empty_signal("3M CANDLE", "NO IMPORTANT CANDLE", "READY")
+        return _empty_signal(family, "NO IMPORTANT CANDLE", "READY")
 
     name, direction, bars = detected
     recent = source.tail(bars)
@@ -425,14 +433,14 @@ def detect_special_candle(
         "DOJI": 38.0,
     }[name]
     confidence = base
-    reasons: list[str] = [f"{name} on latest completed 3-minute candle(s)"]
+    reasons: list[str] = [f"{name} on latest completed {timeframe_words} candle(s)"]
     if level.near:
         confidence += 16.0
         reasons.append(f"Near {side.lower()} {level.value:.2f}")
     elif name in {"HAMMER", "SHOOTING STAR", "DOJI"}:
         # These shapes are noisy in the middle of a range, so hide them rather than
         # filling the compact screen with low-quality pattern labels.
-        return _empty_signal("3M CANDLE", "NO IMPORTANT CANDLE", "READY")
+        return _empty_signal(family, "NO IMPORTANT CANDLE", "READY")
     else:
         confidence -= 6.0
 
@@ -456,7 +464,7 @@ def detect_special_candle(
     else:
         bull_score, bear_score, neutral_score = _directional_scores(direction, "CONFIRMED", strength)
     return PatternSignal(
-        family="3M CANDLE",
+        family=family,
         name=name,
         direction=direction,
         stage="CONFIRMED",
@@ -478,9 +486,23 @@ def calculate_pattern_evidence(
     candles_3m: pd.DataFrame,
     levels: LevelBundle,
     volume: VolumeBundle,
+    *,
+    candles_5m: pd.DataFrame | None = None,
+    candles_15m: pd.DataFrame | None = None,
 ) -> PatternEvidenceBundle:
     wm = detect_wm_pattern(candles_3m, levels, volume)
-    candle = detect_special_candle(candles_3m, levels, volume)
+    candle_3m = detect_special_candle(candles_3m, levels, volume, "3M")
+    candle_5m = (
+        detect_special_candle(candles_5m, levels, volume, "5M")
+        if candles_5m is not None
+        else candle_3m
+    )
+    candle_15m = (
+        detect_special_candle(candles_15m, levels, volume, "15M")
+        if candles_15m is not None
+        else None
+    )
+    candle = candle_5m
     usable = [
         item
         for item in (wm, candle)
@@ -504,8 +526,10 @@ def calculate_pattern_evidence(
     return PatternEvidenceBundle(
         as_of=as_of,
         wm_3m=wm,
-        candle_3m=candle,
+        candle_3m=candle_3m,
         combined_direction=combined,
         combined_confidence=round(clamp(confidence, 0.0, 92.0), 1),
         status="READY" if not source.empty else "UNAVAILABLE",
+        candle_5m=candle_5m,
+        candle_15m=candle_15m,
     )

@@ -676,9 +676,9 @@ def build_compact_evidence_matrix(
         else _blank_pattern("3M W/M", "NO VALID W/M")
     )
     candle = (
-        patterns.candle_3m
+        (getattr(patterns, "candle_5m", None) or patterns.candle_3m)
         if patterns is not None
-        else _blank_pattern("3M CANDLE", "NO IMPORTANT CANDLE")
+        else _blank_pattern("5M CANDLE", "NO IMPORTANT CANDLE")
     )
 
     return [

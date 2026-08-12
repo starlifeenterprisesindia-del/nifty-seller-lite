@@ -662,7 +662,21 @@ class SnapshotService:
             candles_3m,
             candles_15m,
         )
-        patterns = calculate_pattern_evidence(candles_3m, levels, volume)
+        marked_5m = mark_completed_candles(
+            aggregate_candles(
+                candles_1m.drop(columns=["is_complete"], errors="ignore"), 5
+            ),
+            5,
+            current,
+        )
+        candles_5m = self._completed_only(marked_5m)
+        patterns = calculate_pattern_evidence(
+            candles_3m,
+            levels,
+            volume,
+            candles_5m=candles_5m,
+            candles_15m=candles_15m,
+        )
         core_evidence = calculate_core_market_evidence(
             price_action,
             indicators,

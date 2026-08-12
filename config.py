@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.22.0_NEWS_VIX_IMPACT"
+    version: str = "2.24.0_FINAL_COMBINED"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
