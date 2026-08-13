@@ -64,6 +64,7 @@ def test_large_buying_uses_green_direction_and_same_brain_inputs():
     assert result.direction == "BUYING"
     assert result.confirmation_count == 2
     assert result.futures_setup == "LONG BUILD-UP"
+    assert result.activity_type == "LONG BUILD-UP"
 
 
 def test_single_snapshot_stays_warming_up():
@@ -88,3 +89,21 @@ def test_normal_activity_never_shows_confirmed_persistence():
     assert result.state == "NORMAL"
     assert result.confirmation_count == 0
     assert result.persistence == "NORMAL"
+
+
+def test_short_covering_is_not_labelled_as_fresh_long_build_up():
+    inputs = _inputs("UP")
+    inputs["future_candles_1m"]["open_interest"] = [103000, 101500, 100000]
+    inputs["options"].market_bias = "MIXED"
+    inputs["options"].bullish_score = 40
+    inputs["options"].bearish_score = 40
+    inputs["heavyweights"].state = "BROAD BEARISH"
+    result = calculate_big_player_activity(
+        **inputs,
+        history=[{"direction": "BUYING", "score": 75}],
+    )
+    assert result.direction == "BUYING"
+    assert result.activity_type == "SHORT COVERING"
+    assert "fresh long buying confirm nahi" in " | ".join(result.cautions)
+    assert "Purane sellers" in result.participant_explanation
+    assert "fresh long buying" in result.next_confirmation

@@ -933,18 +933,23 @@ def render_main_ai_market_view(
         )
         activity = getattr(snapshot, "big_player_activity", None)
         if activity is not None:
-            icon = "🟢" if activity.direction == "BUYING" else "🔴" if activity.direction == "SELLING" else "🟣"
+            activity_type = str(getattr(activity, "activity_type", ""))
+            closing_flow = activity_type in {"SHORT COVERING", "LONG UNWINDING"}
+            icon = "🟡" if closing_flow else "🟢" if activity.direction == "BUYING" else "🔴" if activity.direction == "SELLING" else "🟣"
+            display_direction = activity_type if closing_flow else activity.direction
             confirmation_text = (
                 "No danger confirmation"
                 if activity.state == "NORMAL"
                 else f"{activity.confirmation_count}/{activity.confirmation_total}"
             )
             activity_line = (
-                f"{icon} **Big Player:** {activity.state} {activity.direction} "
+                f"{icon} **Big Player:** {activity.state} {display_direction} "
                 f"{activity.score:.0f}/100 · {confirmation_text} "
                 f"· Reversal {activity.reversal_risk}"
             )
-            if activity.score >= 75 and activity.direction == "SELLING":
+            if closing_flow and activity.score >= 60:
+                st.warning(activity_line)
+            elif activity.score >= 75 and activity.direction == "SELLING":
                 st.error(activity_line)
             elif activity.score >= 75 and activity.direction == "BUYING":
                 st.success(activity_line)
@@ -952,6 +957,8 @@ def render_main_ai_market_view(
                 st.warning(activity_line)
             else:
                 st.caption(activity_line)
+            if closing_flow:
+                st.caption("↳ " + activity.participant_explanation)
 
         resistance = _level_summary(barrier.nearest_resistance, fallback="R1")
         support = _level_summary(barrier.nearest_support, fallback="S1")
@@ -973,12 +980,20 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
     if item is None:
         return
 
-    if item.direction == "BUYING":
+    activity_type = str(getattr(item, "activity_type", "DIRECTIONAL ACTIVITY"))
+    closing_flow = activity_type in {"SHORT COVERING", "LONG UNWINDING"}
+    if closing_flow:
+        direction_class, icon = "closing", "🟡"
+        display_direction = activity_type
+    elif item.direction == "BUYING":
         direction_class, icon = "buy", "🟢"
+        display_direction = item.direction
     elif item.direction == "SELLING":
         direction_class, icon = "sell", "🔴"
+        display_direction = item.direction
     else:
         direction_class, icon = "mixed", "🟣"
+        display_direction = item.direction
     severity = (
         "extreme" if item.state == "EXTREME ACTIVITY" else
         "danger" if item.state == "VERY STRONG" else
@@ -1002,6 +1017,8 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         '.bpa-hero.sell{border-color:#facc15;background:rgba(250,204,21,.07)}'
         '.bpa-hero.sell.strong{border-color:#f97316;background:rgba(249,115,22,.13)}'
         '.bpa-hero.sell.danger,.bpa-hero.sell.extreme{border-color:#ef4444;background:rgba(239,68,68,.17)}'
+        '.bpa-hero.closing{border-color:#f59e0b;background:rgba(245,158,11,.13)}'
+        '.bpa-hero.closing.danger,.bpa-hero.closing.extreme{box-shadow:0 0 0 3px rgba(245,158,11,.15),0 0 20px rgba(245,158,11,.20)}'
         '.bpa-hero.mixed{border-color:#a855f7;background:rgba(168,85,247,.09)}'
         '.bpa-hero.buy.extreme{box-shadow:0 0 0 3px rgba(21,128,61,.18),0 0 22px rgba(21,128,61,.24)}'
         '.bpa-hero.sell.extreme{box-shadow:0 0 0 3px rgba(239,68,68,.18),0 0 22px rgba(239,68,68,.25)}'
@@ -1015,7 +1032,7 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         '@media(max-width:760px){.bpa-head{display:block}.bpa-score{font-size:1.35rem;margin-top:6px}.bpa-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bpa-title{font-size:1.12rem}}'
         '</style>'
         f'<div class="bpa-hero {direction_class} {severity}">'
-        f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(item.state)} · {escape(item.direction)}</div>'
+        f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(item.state)} · {escape(display_direction)}</div>'
         f'<div class="bpa-sub">{escape(confirmation_text)} · Reversal risk {escape(item.reversal_risk)} · {escape(item.time_window)}</div></div>'
         f'<div class="bpa-score">{item.score:.0f}/100</div></div>'
         '<div class="bpa-grid">'
@@ -1031,6 +1048,8 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         st.markdown(html, unsafe_allow_html=True)
 
     cards = [
+        ("Players kya kar rahe", item.participant_explanation, "Price + futures OI ka seedha matlab", "amber" if closing_flow else "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
+        ("Agli confirmation", item.next_confirmation, "Iske baad move ko fresh/strong maanenge", "amber"),
         ("Options confirmation", item.option_confirmation, "ATM± strikes ka combined flow", "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
         ("Top-7 confirmation", item.top7_confirmation, "Heavyweight participation", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
         ("Level reaction", item.level_reaction, "Support/resistance par price response", "amber"),

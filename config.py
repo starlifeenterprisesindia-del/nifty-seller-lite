@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.25.1_ACTIVITY_CONFIRMATION_OI_FIX"
+    version: str = "2.25.2_FRESH_BUILDUP_VS_COVERING"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12

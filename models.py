@@ -502,6 +502,9 @@ class BigPlayerActivity:
     reasons: tuple[str, ...]
     cautions: tuple[str, ...]
     status: str
+    activity_type: str = "DIRECTIONAL ACTIVITY"
+    participant_explanation: str = "Participation mixed hai"
+    next_confirmation: str = "Agla snapshot aur level reaction dekho"
 
 
 def _unavailable_strategy(name: str) -> StrategyEvaluation:

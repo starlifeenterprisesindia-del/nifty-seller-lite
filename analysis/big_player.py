@@ -106,6 +106,36 @@ def calculate_big_player_activity(
     ratio = three.relative_volume if three.status == "READY" else None
     intensity = _volume_intensity(ratio)
     futures_setup, oi_change, futures_direction = _future_setup(future_candles_1m)
+    activity_type = (
+        futures_setup
+        if futures_setup
+        in {"LONG BUILD-UP", "SHORT BUILD-UP", "SHORT COVERING", "LONG UNWINDING"}
+        else "DIRECTIONAL ACTIVITY"
+    )
+    participant_explanation, next_confirmation = {
+        "LONG BUILD-UP": (
+            "Naye buyers futures me long positions bana rahe hain",
+            "Options + Top-7 bullish aur resistance ke upar close se fresh buying confirm hogi",
+        ),
+        "SHORT BUILD-UP": (
+            "Naye sellers futures me short positions bana rahe hain",
+            "Options + Top-7 bearish aur support ke neeche close se fresh selling confirm hogi",
+        ),
+        "SHORT COVERING": (
+            "Purane sellers apni short positions band kar rahe hain; isliye price upar hai",
+            "OI dobara badhe, Options + Top-7 bullish hon aur resistance break ho to fresh long buying maanenge",
+        ),
+        "LONG UNWINDING": (
+            "Purane buyers apni long positions band kar rahe hain; isliye price neeche hai",
+            "OI badhe, Options + Top-7 bearish hon aur support break ho to fresh short selling maanenge",
+        ),
+    }.get(
+        activity_type,
+        (
+            "Buyer/seller participation abhi mixed hai",
+            "Agla snapshot, volume, OI aur nearest level reaction dekho",
+        ),
+    )
 
     option_gap = float(options.bullish_score) - float(options.bearish_score)
     option_direction = "BUY" if option_gap >= 8 else "SELL" if option_gap <= -8 else "NEUTRAL"
@@ -203,6 +233,14 @@ def calculate_big_player_activity(
         status = "READY"
     if options.confidence < 50:
         cautions.append("Option-flow bharosa low hai")
+    if activity_type == "SHORT COVERING":
+        cautions.append("Price up hai, lekin fresh long buying confirm nahi")
+        if option_direction != "BUY" or top7_direction != "BUY":
+            cautions.append("Options/Top-7 fresh buying ko confirm nahi kar rahe")
+    elif activity_type == "LONG UNWINDING":
+        cautions.append("Price down hai, lekin fresh short selling confirm nahi")
+        if option_direction != "SELL" or top7_direction != "SELL":
+            cautions.append("Options/Top-7 fresh selling ko confirm nahi kar rahe")
 
     return BigPlayerActivity(
         direction=direction,
@@ -224,4 +262,7 @@ def calculate_big_player_activity(
         reasons=tuple(dict.fromkeys(reasons))[:4],
         cautions=tuple(dict.fromkeys(cautions))[:3],
         status=status,
+        activity_type=activity_type,
+        participant_explanation=participant_explanation,
+        next_confirmation=next_confirmation,
     )

@@ -17,3 +17,11 @@ v2.25.1 hotfix
 - Persistence counts only WATCH-or-higher snapshots (score 40+).
 - Futures OI now reads the canonical `open_interest` candle field returned by the
   existing Dhan candle parser; legacy `oi` remains a safe fallback.
+
+v2.25.2 refinement
+- Separates fresh LONG/SHORT BUILD-UP from SHORT COVERING/LONG UNWINDING.
+- Closing-position flows use amber caution instead of fresh-buy/fresh-sell colours.
+- Plain Hinglish explains whether new players entered or old positions were closed,
+  plus the exact next confirmation to watch.
+- Short covering/long unwinding receive only half the normal bounded One-Brain
+  adjustment because they are weaker evidence of fresh directional commitment.

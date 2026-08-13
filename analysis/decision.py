@@ -971,6 +971,10 @@ def calculate_final_decision(
         and big_player.score >= 60
     ):
         activity_adjust = min(6.0, max(0.0, (big_player.score - 55.0) * 0.14))
+        if big_player.activity_type in {"SHORT COVERING", "LONG UNWINDING"}:
+            # Position closing can move price sharply, but it is weaker evidence of
+            # fresh directional commitment than new long/short build-up.
+            activity_adjust *= 0.5
         if big_player.direction == "BUYING":
             pe += activity_adjust
             ce_buy += activity_adjust
