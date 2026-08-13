@@ -11,3 +11,9 @@ Nifty Seller Lite v2.25.0 — Big Player Activity
   specific institution, place orders or create a second decision brain.
 - Confirmed 2/3 activity has a maximum six-point bounded adjustment inside the
   existing calculate_final_decision function.
+
+v2.25.1 hotfix
+- NORMAL activity no longer displays a misleading CONFIRMED 2/3 label.
+- Persistence counts only WATCH-or-higher snapshots (score 40+).
+- Futures OI now reads the canonical `open_interest` candle field returned by the
+  existing Dhan candle parser; legacy `oi` remains a safe fallback.

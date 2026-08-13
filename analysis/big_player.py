@@ -31,18 +31,27 @@ def _time_window(as_of: datetime) -> str:
 
 
 def _future_setup(frame: pd.DataFrame) -> tuple[str, float | None, str]:
-    if frame is None or frame.empty or "oi" not in frame.columns:
+    if frame is None or frame.empty:
         return "OI UNAVAILABLE", None, "NEUTRAL"
     source = frame.copy()
+    oi_column = (
+        "open_interest"
+        if "open_interest" in source.columns
+        else "oi"
+        if "oi" in source.columns
+        else None
+    )
+    if oi_column is None:
+        return "OI UNAVAILABLE", None, "NEUTRAL"
     if "is_complete" in source.columns:
         source = source[source["is_complete"].fillna(False).astype(bool)]
-    source = source.dropna(subset=["close", "oi"]).tail(4)
+    source = source.dropna(subset=["close", oi_column]).tail(4)
     if len(source) < 2:
         return "OI WARMING UP", None, "NEUTRAL"
     first = source.iloc[0]
     last = source.iloc[-1]
-    old_oi = float(first["oi"])
-    new_oi = float(last["oi"])
+    old_oi = float(first[oi_column])
+    new_oi = float(last[oi_column])
     oi_change = ((new_oi - old_oi) / abs(old_oi) * 100.0) if old_oi else None
     price_change = float(last["close"]) - float(first["close"])
     oi_rising = oi_change is not None and oi_change > 0.05
@@ -146,13 +155,19 @@ def calculate_big_player_activity(
         level_reaction = "SELLING TESTING SUPPORT"
 
     matching = 0
-    if direction in {"BUYING", "SELLING"}:
-        recent = [str(item.get("direction", "")) for item in history[-2:]] + [direction]
+    recent_history = history[-2:]
+    total = min(3, len(recent_history) + 1)
+    if direction in {"BUYING", "SELLING"} and score >= 40:
+        recent = [
+            str(item.get("direction", ""))
+            if float(item.get("score", 0.0) or 0.0) >= 40
+            else "NORMAL"
+            for item in recent_history
+        ] + [direction]
         matching = sum(item == direction for item in recent[-3:])
-        total = min(3, len(recent))
+        persistence = "CONFIRMED" if matching >= 2 else "WARMING UP"
     else:
-        total = min(3, len(history[-2:]) + 1)
-    persistence = "CONFIRMED" if matching >= 2 else "WARMING UP" if direction != "MIXED" else "MIXED"
+        persistence = "NORMAL" if score < 40 else "MIXED"
 
     if absorption and score >= 55:
         state = "ABSORPTION"

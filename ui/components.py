@@ -934,9 +934,14 @@ def render_main_ai_market_view(
         activity = getattr(snapshot, "big_player_activity", None)
         if activity is not None:
             icon = "🟢" if activity.direction == "BUYING" else "🔴" if activity.direction == "SELLING" else "🟣"
+            confirmation_text = (
+                "No danger confirmation"
+                if activity.state == "NORMAL"
+                else f"{activity.confirmation_count}/{activity.confirmation_total}"
+            )
             activity_line = (
                 f"{icon} **Big Player:** {activity.state} {activity.direction} "
-                f"{activity.score:.0f}/100 · {activity.confirmation_count}/{activity.confirmation_total} "
+                f"{activity.score:.0f}/100 · {confirmation_text} "
                 f"· Reversal {activity.reversal_risk}"
             )
             if activity.score >= 75 and activity.direction == "SELLING":
@@ -983,6 +988,11 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
     )
     volume_text = f"{item.futures_volume_ratio:.2f}x" if item.futures_volume_ratio is not None else "—"
     oi_text = f"{item.futures_oi_change_pct:+.2f}%" if item.futures_oi_change_pct is not None else "—"
+    confirmation_text = (
+        "No large-activity confirmation"
+        if item.state == "NORMAL"
+        else f"{item.persistence} {item.confirmation_count}/{item.confirmation_total}"
+    )
     html = (
         '<style>'
         '.bpa-hero{border:2px solid rgba(127,127,127,.28);border-radius:16px;padding:14px;margin:5px 0 12px;background:rgba(127,127,127,.05)}'
@@ -1006,7 +1016,7 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         '</style>'
         f'<div class="bpa-hero {direction_class} {severity}">'
         f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(item.state)} · {escape(item.direction)}</div>'
-        f'<div class="bpa-sub">{escape(item.persistence)} {item.confirmation_count}/{item.confirmation_total} · Reversal risk {escape(item.reversal_risk)} · {escape(item.time_window)}</div></div>'
+        f'<div class="bpa-sub">{escape(confirmation_text)} · Reversal risk {escape(item.reversal_risk)} · {escape(item.time_window)}</div></div>'
         f'<div class="bpa-score">{item.score:.0f}/100</div></div>'
         '<div class="bpa-grid">'
         f'<div class="bpa-cell"><div class="bpa-label">Buying</div><div class="bpa-value">{item.buy_score:.0f}/100</div></div>'

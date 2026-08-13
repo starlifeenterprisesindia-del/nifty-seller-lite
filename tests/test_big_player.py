@@ -10,7 +10,7 @@ def _inputs(direction: str = "DOWN") -> dict:
     closes = [24350.0, 24345.0, 24338.0] if direction == "DOWN" else [24338.0, 24345.0, 24350.0]
     future = pd.DataFrame(
         [
-            {"timestamp": f"2026-08-13 13:2{index}", "close": close, "oi": 100000 + index * 1500, "is_complete": True}
+            {"timestamp": f"2026-08-13 13:2{index}", "close": close, "open_interest": 100000 + index * 1500, "is_complete": True}
             for index, close in enumerate(closes)
         ]
     )
@@ -45,7 +45,10 @@ def _inputs(direction: str = "DOWN") -> dict:
 def test_confirmed_large_selling_flags_reversal_danger():
     result = calculate_big_player_activity(
         **_inputs("DOWN"),
-        history=[{"direction": "SELLING"}, {"direction": "SELLING"}],
+        history=[
+            {"direction": "SELLING", "score": 82},
+            {"direction": "SELLING", "score": 88},
+        ],
     )
     assert result.direction == "SELLING"
     assert result.confirmation_count == 3
@@ -56,7 +59,7 @@ def test_confirmed_large_selling_flags_reversal_danger():
 def test_large_buying_uses_green_direction_and_same_brain_inputs():
     result = calculate_big_player_activity(
         **_inputs("UP"),
-        history=[{"direction": "BUYING"}],
+        history=[{"direction": "BUYING", "score": 80}],
     )
     assert result.direction == "BUYING"
     assert result.confirmation_count == 2
@@ -67,3 +70,21 @@ def test_single_snapshot_stays_warming_up():
     result = calculate_big_player_activity(**_inputs("DOWN"), history=[])
     assert result.confirmation_count == 1
     assert result.persistence == "WARMING UP"
+
+
+def test_normal_activity_never_shows_confirmed_persistence():
+    inputs = _inputs("DOWN")
+    inputs["volume"].three_minute.relative_volume = 0.36
+    inputs["options"].bullish_score = 35
+    inputs["options"].bearish_score = 39
+    inputs["heavyweights"].state = "MIXED / FLAT"
+    result = calculate_big_player_activity(
+        **inputs,
+        history=[
+            {"direction": "SELLING", "score": 25},
+            {"direction": "SELLING", "score": 30},
+        ],
+    )
+    assert result.state == "NORMAL"
+    assert result.confirmation_count == 0
+    assert result.persistence == "NORMAL"
