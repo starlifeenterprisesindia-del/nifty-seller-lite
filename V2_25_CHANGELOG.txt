@@ -1,0 +1,13 @@
+Nifty Seller Lite v2.25.0 — Big Player Activity
+
+- Added one responsive Big Player Activity screen for phone and laptop.
+- Uses the same authoritative One-Brain snapshot: time-normalized NIFTY futures
+  volume, futures price/OI setup, ATM option flow, Top-7 and barrier reaction.
+- Shows BUYING / SELLING / MIXED, 0–100 activity, 2/3 persistence, reversal risk,
+  time window, futures setup and compact reasons.
+- Colour severity becomes stronger as participation rises; extreme selling is red,
+  extreme buying is dark green and conflicts/absorption remain clearly labelled.
+- Stores only a bounded same-day direction/score journal. It does not identify a
+  specific institution, place orders or create a second decision brain.
+- Confirmed 2/3 activity has a maximum six-point bounded adjustment inside the
+  existing calculate_final_decision function.

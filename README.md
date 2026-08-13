@@ -14,6 +14,12 @@ Nearest Levels includes 3-minute W/M structure and a completed 5-minute Special
 Candle with 3-minute/15-minute confirmation, possible effect and signal confidence.
 Optional Auto Snapshot can run for 5/15/30 minutes at 30-second or 1-minute intervals.
 
+Big Player Activity is a separate responsive evidence screen fed by the same
+authoritative One-Brain snapshot. It combines time-normalized NIFTY-futures volume,
+futures price/OI, ATM option flow, Top-7 participation and barrier reaction. A 2/3
+same-session persistence gate is required before its bounded decision adjustment;
+the app never claims to identify a particular institution.
+
 Compact, read-only NIFTY options decision-support app using one canonical strategy brain.
 
 ## Main screen

@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.24.1_AUTO_SNAPSHOT_LOOP_FIX"
+    version: str = "2.25.0_BIG_PLAYER_ACTIVITY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -84,6 +84,11 @@ class AppConfig:
     option_state_path: str = "data/option_state.json"
     option_state_max_snapshots: int = 180
     option_state_dedupe_seconds: int = 20
+    # Same-session compact activity memory. It stores only direction/score/state,
+    # never credentials, orders or trader identity.
+    big_player_state_path: str = "data/big_player_state.json"
+    big_player_state_max_snapshots: int = 60
+    big_player_dedupe_seconds: int = 20
     option_min_price_move_pct: float = 0.50
     option_min_price_move_points: float = 0.25
     option_min_oi_move_pct: float = 0.20

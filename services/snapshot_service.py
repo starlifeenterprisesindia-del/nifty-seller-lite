@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from analysis.barrier_map import calculate_barrier_map
+from analysis.big_player import calculate_big_player_activity
 from analysis.candles import (
     aggregate_candles,
     candles_from_dhan,
@@ -39,6 +40,7 @@ from services.errors import SnapshotBuildError
 from services.context_store import MarketContextStore
 from services.instrument_master import InstrumentMaster, ResolvedInstrument
 from services.option_state_store import OptionStateStore
+from services.activity_state_store import ActivityStateStore
 from services.news_service import MarketNewsService
 
 
@@ -54,12 +56,14 @@ class SnapshotService:
         context_store: MarketContextStore | None = None,
         discipline_store: DisciplineStore | None = None,
         news_service: MarketNewsService | None = None,
+        activity_state_store: ActivityStateStore | None = None,
     ):
         self.client = client
         self.master = instrument_master or InstrumentMaster()
         self.option_state_store = option_state_store or OptionStateStore()
         self.context_store = context_store or MarketContextStore()
         self.discipline_store = discipline_store or DisciplineStore()
+        self.activity_state_store = activity_state_store or ActivityStateStore()
         # Kept injectable so unit tests and offline analysis never need public internet.
         self.news_service = news_service
 
@@ -883,6 +887,26 @@ class SnapshotService:
             option_history=option_history,
         )
 
+        activity_history = self.activity_state_store.load(current)
+        big_player_activity = calculate_big_player_activity(
+            as_of=current,
+            market_session=market_session,
+            volume=volume,
+            future_candles_1m=future_candles_1m,
+            options=option_intelligence,
+            heavyweights=heavyweights,
+            barrier_map=barrier_map,
+            core=core_evidence,
+            history=activity_history,
+        )
+        if market_session.is_live:
+            self.activity_state_store.append(
+                current,
+                direction=big_player_activity.direction,
+                score=big_player_activity.score,
+                state=big_player_activity.state,
+            )
+
         discipline_error: str | None = None
         signal_appended = False
         try:
@@ -915,6 +939,7 @@ class SnapshotService:
             price_action=price_action,
             volume=volume,
             patterns=patterns,
+            big_player=big_player_activity,
             signal_history=discipline_state.signal_history,
             as_of=current,
             current_price=(float(current_price) if current_price is not None else None),
@@ -1075,6 +1100,7 @@ class SnapshotService:
             expiry=expiry,
             option_chain=option_frame,
             feed_status=statuses,
+            big_player_activity=big_player_activity,
             patterns=patterns,
             metadata={
                 "version": CONFIG.version,
@@ -1097,6 +1123,8 @@ class SnapshotService:
                 "pre_touch_status": pre_touch_barriers.status,
                 "barrier_map_engine": "analysis.barrier_map.calculate_barrier_map",
                 "barrier_map_status": barrier_map.status,
+                "big_player_engine": "analysis.big_player.calculate_big_player_activity",
+                "big_player_status": big_player_activity.status,
                 "news_status": news_context.status,
                 "trade_plan_engine": "analysis.trade_plan.calculate_trade_plan",
                 "trade_plan_status": trade_plan.status,

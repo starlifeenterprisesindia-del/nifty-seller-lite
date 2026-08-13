@@ -6,6 +6,7 @@ from typing import Any, Iterable
 from analysis.technical_utils import clamp
 from config import CONFIG
 from models import (
+    BigPlayerActivity,
     CoreMarketEvidence,
     EventRiskContext,
     FinalDecision,
@@ -858,6 +859,7 @@ def calculate_final_decision(
     price_action: PriceActionBundle | None = None,
     volume: VolumeBundle | None = None,
     patterns: PatternEvidenceBundle | None = None,
+    big_player: BigPlayerActivity | None = None,
     signal_history: tuple[dict[str, Any], ...] = (),
     as_of: datetime | None = None,
     current_price: float | None = None,
@@ -958,6 +960,33 @@ def calculate_final_decision(
     # bounded source is reused, not double-counted as another independent brain.
     ce_buy += pattern_pe
     pe_buy += pattern_ce
+
+    # Big-player activity is one bounded confirmation inside this same function.
+    # It cannot independently choose an action and contributes at most six points.
+    big_player_note: str | None = None
+    if (
+        big_player is not None
+        and big_player.status == "READY"
+        and big_player.confirmation_count >= 2
+        and big_player.score >= 60
+    ):
+        activity_adjust = min(6.0, max(0.0, (big_player.score - 55.0) * 0.14))
+        if big_player.direction == "BUYING":
+            pe += activity_adjust
+            ce_buy += activity_adjust
+            ce -= activity_adjust * 0.5
+            pe_buy -= activity_adjust * 0.5
+        elif big_player.direction == "SELLING":
+            ce += activity_adjust
+            pe_buy += activity_adjust
+            pe -= activity_adjust * 0.5
+            ce_buy -= activity_adjust * 0.5
+        if big_player.direction in {"BUYING", "SELLING"}:
+            condor -= activity_adjust * 0.6
+            big_player_note = (
+                f"Big Player {big_player.direction} {big_player.score:.0f}/100 "
+                f"confirmed {big_player.confirmation_count}/{big_player.confirmation_total}"
+            )
 
     if core.move_stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
         ce -= 6
@@ -1072,6 +1101,13 @@ def calculate_final_decision(
     condor_cautions = list(condor_level_cautions)
     ce_buy_cautions = list(ce_buy_level_cautions) + list(ce_buy_momentum_cautions)
     pe_buy_cautions = list(pe_buy_level_cautions) + list(pe_buy_momentum_cautions)
+    if big_player_note and big_player is not None:
+        if big_player.direction == "BUYING":
+            ce_cautions.append(big_player_note)
+            pe_buy_cautions.append(big_player_note)
+        elif big_player.direction == "SELLING":
+            pe_cautions.append(big_player_note)
+            ce_buy_cautions.append(big_player_note)
     if options.confidence < CONFIG.decision_min_option_confidence:
         warning = "Option-flow continuity is not mature"
         ce_cautions.append(warning)

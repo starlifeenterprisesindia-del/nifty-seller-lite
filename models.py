@@ -475,6 +475,35 @@ class MarketOutlook:
     status: str
 
 
+@dataclass(frozen=True)
+class BigPlayerActivity:
+    """Bounded activity evidence produced inside the authoritative snapshot.
+
+    It detects unusual participation; it never claims the identity of a trader or
+    institution and never places an order.
+    """
+
+    direction: str
+    state: str
+    score: float
+    buy_score: float
+    sell_score: float
+    confirmation_count: int
+    confirmation_total: int
+    persistence: str
+    reversal_risk: str
+    time_window: str
+    futures_volume_ratio: float | None
+    futures_oi_change_pct: float | None
+    futures_setup: str
+    option_confirmation: str
+    top7_confirmation: str
+    level_reaction: str
+    reasons: tuple[str, ...]
+    cautions: tuple[str, ...]
+    status: str
+
+
 def _unavailable_strategy(name: str) -> StrategyEvaluation:
     return StrategyEvaluation(
         name=name,
@@ -781,6 +810,7 @@ class MarketSnapshot:
     expiry: str | None
     option_chain: pd.DataFrame
     feed_status: dict[str, FeedStatus]
+    big_player_activity: BigPlayerActivity | None = None
     patterns: PatternEvidenceBundle | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -816,6 +846,11 @@ class MarketSnapshot:
                 "news_context": asdict(self.news_context),
                 "pre_touch_barriers": asdict(self.pre_touch_barriers),
                 "barrier_map": asdict(self.barrier_map),
+                "big_player_activity": (
+                    asdict(self.big_player_activity)
+                    if self.big_player_activity is not None
+                    else None
+                ),
                 "decision": asdict(self.decision),
                 "trade_plan": asdict(self.trade_plan),
                 "execution_guard": asdict(self.execution_guard),

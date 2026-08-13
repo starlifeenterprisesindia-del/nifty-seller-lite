@@ -931,6 +931,22 @@ def render_main_ai_market_view(
             f"W/M: {wm_text} • Candle: {candle_text} • Top-7: {top7_move} • "
             f"FII/DII: {inst_text} • News: {news_text}"
         )
+        activity = getattr(snapshot, "big_player_activity", None)
+        if activity is not None:
+            icon = "🟢" if activity.direction == "BUYING" else "🔴" if activity.direction == "SELLING" else "🟣"
+            activity_line = (
+                f"{icon} **Big Player:** {activity.state} {activity.direction} "
+                f"{activity.score:.0f}/100 · {activity.confirmation_count}/{activity.confirmation_total} "
+                f"· Reversal {activity.reversal_risk}"
+            )
+            if activity.score >= 75 and activity.direction == "SELLING":
+                st.error(activity_line)
+            elif activity.score >= 75 and activity.direction == "BUYING":
+                st.success(activity_line)
+            elif activity.score >= 60:
+                st.warning(activity_line)
+            else:
+                st.caption(activity_line)
 
         resistance = _level_summary(barrier.nearest_resistance, fallback="R1")
         support = _level_summary(barrier.nearest_support, fallback="S1")
@@ -945,6 +961,80 @@ def render_main_ai_market_view(
                 ]
                 _render_compact_cards(cards)
             st.caption(snapshot_change_hinglish(snapshot, previous_snapshot))
+
+
+def render_big_player_activity(snapshot: MarketSnapshot) -> None:
+    item = getattr(snapshot, "big_player_activity", None)
+    if item is None:
+        return
+
+    if item.direction == "BUYING":
+        direction_class, icon = "buy", "🟢"
+    elif item.direction == "SELLING":
+        direction_class, icon = "sell", "🔴"
+    else:
+        direction_class, icon = "mixed", "🟣"
+    severity = (
+        "extreme" if item.state == "EXTREME ACTIVITY" else
+        "danger" if item.state == "VERY STRONG" else
+        "strong" if item.state == "STRONG" else
+        "watch" if item.state in {"WATCH", "ABSORPTION"} else
+        "normal"
+    )
+    volume_text = f"{item.futures_volume_ratio:.2f}x" if item.futures_volume_ratio is not None else "—"
+    oi_text = f"{item.futures_oi_change_pct:+.2f}%" if item.futures_oi_change_pct is not None else "—"
+    html = (
+        '<style>'
+        '.bpa-hero{border:2px solid rgba(127,127,127,.28);border-radius:16px;padding:14px;margin:5px 0 12px;background:rgba(127,127,127,.05)}'
+        '.bpa-hero.buy{border-color:#86efac;background:rgba(34,197,94,.07)}'
+        '.bpa-hero.buy.strong{border-color:#22c55e;background:rgba(34,197,94,.13)}'
+        '.bpa-hero.buy.danger,.bpa-hero.buy.extreme{border-color:#15803d;background:rgba(21,128,61,.18)}'
+        '.bpa-hero.sell{border-color:#facc15;background:rgba(250,204,21,.07)}'
+        '.bpa-hero.sell.strong{border-color:#f97316;background:rgba(249,115,22,.13)}'
+        '.bpa-hero.sell.danger,.bpa-hero.sell.extreme{border-color:#ef4444;background:rgba(239,68,68,.17)}'
+        '.bpa-hero.mixed{border-color:#a855f7;background:rgba(168,85,247,.09)}'
+        '.bpa-hero.buy.extreme{box-shadow:0 0 0 3px rgba(21,128,61,.18),0 0 22px rgba(21,128,61,.24)}'
+        '.bpa-hero.sell.extreme{box-shadow:0 0 0 3px rgba(239,68,68,.18),0 0 22px rgba(239,68,68,.25)}'
+        '.bpa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}'
+        '.bpa-title{font-size:1.35rem;font-weight:900}.bpa-score{font-size:1.65rem;font-weight:950;white-space:nowrap}'
+        '.bpa-sub{font-size:.85rem;font-weight:750;margin-top:5px;opacity:.85}'
+        '.bpa-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}'
+        '.bpa-cell{border-radius:10px;padding:9px;background:rgba(127,127,127,.09);min-width:0}'
+        '.bpa-label{font-size:.69rem;font-weight:800;opacity:.68;text-transform:uppercase}'
+        '.bpa-value{font-size:.88rem;font-weight:850;margin-top:3px;overflow-wrap:anywhere}'
+        '@media(max-width:760px){.bpa-head{display:block}.bpa-score{font-size:1.35rem;margin-top:6px}.bpa-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bpa-title{font-size:1.12rem}}'
+        '</style>'
+        f'<div class="bpa-hero {direction_class} {severity}">'
+        f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(item.state)} · {escape(item.direction)}</div>'
+        f'<div class="bpa-sub">{escape(item.persistence)} {item.confirmation_count}/{item.confirmation_total} · Reversal risk {escape(item.reversal_risk)} · {escape(item.time_window)}</div></div>'
+        f'<div class="bpa-score">{item.score:.0f}/100</div></div>'
+        '<div class="bpa-grid">'
+        f'<div class="bpa-cell"><div class="bpa-label">Buying</div><div class="bpa-value">{item.buy_score:.0f}/100</div></div>'
+        f'<div class="bpa-cell"><div class="bpa-label">Selling</div><div class="bpa-value">{item.sell_score:.0f}/100</div></div>'
+        f'<div class="bpa-cell"><div class="bpa-label">Futures Volume</div><div class="bpa-value">{volume_text}</div></div>'
+        f'<div class="bpa-cell"><div class="bpa-label">Futures OI</div><div class="bpa-value">{oi_text} · {escape(item.futures_setup)}</div></div>'
+        '</div></div>'
+    )
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+
+    cards = [
+        ("Options confirmation", item.option_confirmation, "ATM± strikes ka combined flow", "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
+        ("Top-7 confirmation", item.top7_confirmation, "Heavyweight participation", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
+        ("Level reaction", item.level_reaction, "Support/resistance par price response", "amber"),
+        ("Time activity", item.time_window, "Time direction nahi banata; sensitivity adjust karta hai", "amber"),
+    ]
+    st.html(_responsive_cards_html(cards)) if hasattr(st, "html") else st.markdown(_responsive_cards_html(cards), unsafe_allow_html=True)
+    if item.reasons:
+        st.caption("Kyun: " + " | ".join(item.reasons))
+    if item.cautions:
+        st.caption("Caution: " + " | ".join(item.cautions))
+    st.caption(
+        "Exact institution ki pehchan nahi hoti. Yeh same One-Brain snapshot ka bounded activity evidence hai; "
+        "2/3 confirmation ke bina direct trade signal nahi."
+    )
 
 
 def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
