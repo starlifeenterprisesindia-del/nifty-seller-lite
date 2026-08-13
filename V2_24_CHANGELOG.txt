@@ -10,3 +10,5 @@ Nifty Seller Lite 2.24 — Final Combined Update
 - Auto Snapshot: market-live pause, countdown, automatic OFF and overlap guard.
 - News/VIX compact risk indicators and protected CE/PE candidates remain included.
 - No second decision brain and no order placement.
+- v2.24.1 fixes the Auto Snapshot 0-second rerun loop by reserving each interval
+  before the full-app refresh and allowing the snapshot build to complete once.

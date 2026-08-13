@@ -194,7 +194,10 @@ with st.sidebar:
         "Fetch Fresh Snapshot", type="primary", width="stretch"
     )
     refresh = False
-    if refresh_requested or auto_due:
+    if auto_due:
+        # The scheduler has already enforced its selected interval.
+        refresh = True
+    elif refresh_requested:
         now_tick = datetime.now().timestamp()
         last_tick = float(st.session_state.get("last_snapshot_fetch_ts", 0.0))
         remaining = CONFIG.snapshot_min_refresh_seconds - (now_tick - last_tick)
@@ -257,8 +260,9 @@ with st.sidebar:
                     f"PAUSED — market live nahi · {remaining_run} min duration baaki"
                 )
                 return
-            last_fetch = float(
-                st.session_state.get("last_snapshot_fetch_ts", now_value)
+            last_fetch = max(
+                float(st.session_state.get("last_snapshot_fetch_ts", now_value)),
+                float(st.session_state.get("auto_snapshot_reserved_at", 0.0)),
             )
             interval = int(
                 st.session_state.get("auto_snapshot_interval_seconds", 60)
@@ -268,8 +272,14 @@ with st.sidebar:
                 f"ON · Agla snapshot ~{next_in}s · {remaining_run} min baaki"
             )
             if now_value - last_fetch >= interval:
+                # Reserve the interval before requesting a full rerun. The scheduler
+                # is rendered above the snapshot builder, so without this lock the
+                # next full run would still see an overdue timer and rerun forever
+                # before reaching service.build(). The real fetch timestamp replaces
+                # this reservation immediately after a successful snapshot.
+                st.session_state.auto_snapshot_reserved_at = now_value
                 st.session_state.auto_snapshot_due = True
-                st.rerun()
+                st.rerun(scope="app")
 
         auto_snapshot_scheduler()
     clear_instrument_cache = False
@@ -553,6 +563,7 @@ if "snapshot" not in st.session_state or refresh:
                 st.session_state.previous_snapshot = previous_snapshot
             st.session_state.snapshot = new_snapshot
             st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
+            st.session_state.pop("auto_snapshot_reserved_at", None)
     except Exception as exc:
         st.error(f"Snapshot failed safely: {exc}")
         st.stop()
