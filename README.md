@@ -20,6 +20,11 @@ futures price/OI, ATM option flow, Top-7 participation and barrier reaction. A 2
 same-session persistence gate is required before its bounded decision adjustment;
 the app never claims to identify a particular institution.
 
+The alert expander provides a one-time bell/voice notification for confirmed heavy
+activity (75+ and 2/3) plus one manually armed BUY/SELL-labelled NIFTY target. Browser
+audio requires a one-time Enable/Test interaction and is most reliable while the tab
+is open; alerts never place an order or alter the One-Brain decision.
+
 Compact, read-only NIFTY options decision-support app using one canonical strategy brain.
 
 ## Main screen

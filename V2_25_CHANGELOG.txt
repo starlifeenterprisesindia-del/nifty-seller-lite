@@ -25,3 +25,10 @@ v2.25.2 refinement
   plus the exact next confirmation to watch.
 - Short covering/long unwinding receive only half the normal bounded One-Brain
   adjustment because they are weaker evidence of fresh directional commitment.
+
+v2.26.0 alerts
+- Separate compact Heavy Activity + Manual Price Alerts expander below the premium calculator.
+- Ring/voice alert only for READY Very Strong/Extreme activity at score 75+ with 2/3 confirmation.
+- Event latch prevents repeat sound on every 30-second snapshot and rearms after activity cools.
+- One-shot manual BUY/SELL-labelled NIFTY target alert detects crossing from either side.
+- Alerts are screen/session utilities only; they do not place orders or change One-Brain scores.

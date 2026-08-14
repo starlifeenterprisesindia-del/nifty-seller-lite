@@ -55,6 +55,7 @@ from ui.components import (
     render_big_player_activity,
 )
 from ui.premium_calculator import render_spot_premium_calculator
+from ui.alerts import render_market_alerts
 
 
 # Backward-compatible compact-level renderer. Older deployed ui/components.py files
@@ -587,6 +588,9 @@ with st.expander("🐘 Big Player Activity — Buying / Selling Alert", expanded
     render_big_player_activity(view_snapshot)
 render_protected_candidates(view_snapshot)
 render_spot_premium_calculator(view_snapshot)
+
+with st.expander("🔔 Heavy Activity + Manual Price Alerts", expanded=False):
+    render_market_alerts(view_snapshot)
 
 with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):
     render_evidence_matrix(view_snapshot, previous_view_snapshot)
