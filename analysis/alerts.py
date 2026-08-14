@@ -3,6 +3,32 @@ from __future__ import annotations
 from typing import Any
 
 
+def early_activity_alert_qualifies(activity: Any | None) -> bool:
+    """Early heads-up for a directional surge before persistence confirms it."""
+
+    if activity is None or str(getattr(activity, "status", "")) != "READY":
+        return False
+    direction = str(getattr(activity, "direction", ""))
+    score = float(getattr(activity, "score", 0.0) or 0.0)
+    confirmations = int(getattr(activity, "confirmation_count", 0) or 0)
+    volume_ratio = float(getattr(activity, "futures_volume_ratio", 0.0) or 0.0)
+    option_text = str(getattr(activity, "option_confirmation", "")).upper()
+    top7_text = str(getattr(activity, "top7_confirmation", "")).upper()
+    support_count = 0
+    if direction == "BUYING":
+        support_count += int("BULL" in option_text)
+        support_count += int("BULL" in top7_text or "UP" in top7_text)
+    elif direction == "SELLING":
+        support_count += int("BEAR" in option_text)
+        support_count += int("BEAR" in top7_text or "DOWN" in top7_text)
+    return bool(
+        direction in {"BUYING", "SELLING"}
+        and score >= 65.0
+        and confirmations >= 1
+        and (volume_ratio >= 1.8 or support_count >= 1)
+    )
+
+
 def heavy_activity_alert_qualifies(activity: Any | None) -> bool:
     """Ring only for confirmed very-strong/extreme directional activity."""
 

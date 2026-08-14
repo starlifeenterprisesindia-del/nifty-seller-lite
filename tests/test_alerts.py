@@ -1,6 +1,10 @@
 from types import SimpleNamespace as NS
 
-from analysis.alerts import heavy_activity_alert_qualifies, target_crossed
+from analysis.alerts import (
+    early_activity_alert_qualifies,
+    heavy_activity_alert_qualifies,
+    target_crossed,
+)
 
 
 def activity(**updates):
@@ -10,6 +14,9 @@ def activity(**updates):
         "score": 79,
         "confirmation_count": 3,
         "state": "VERY STRONG",
+        "futures_volume_ratio": 2.0,
+        "option_confirmation": "BULLISH",
+        "top7_confirmation": "NARROW BULLISH",
     }
     values.update(updates)
     return NS(**values)
@@ -20,6 +27,24 @@ def test_heavy_alert_requires_75_and_two_confirmations():
     assert not heavy_activity_alert_qualifies(activity(score=74.9))
     assert not heavy_activity_alert_qualifies(activity(confirmation_count=1))
     assert not heavy_activity_alert_qualifies(activity(state="STRONG"))
+
+
+def test_early_alert_catches_one_of_three_directional_surge():
+    assert early_activity_alert_qualifies(
+        activity(score=75, confirmation_count=1, state="STRONG")
+    )
+    assert not early_activity_alert_qualifies(
+        activity(score=64.9, confirmation_count=1, state="STRONG")
+    )
+    assert not early_activity_alert_qualifies(
+        activity(
+            score=70,
+            confirmation_count=1,
+            futures_volume_ratio=1.1,
+            option_confirmation="MIXED",
+            top7_confirmation="MIXED",
+        )
+    )
 
 
 def test_target_crosses_from_below_or_above():

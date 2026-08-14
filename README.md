@@ -20,8 +20,9 @@ futures price/OI, ATM option flow, Top-7 participation and barrier reaction. A 2
 same-session persistence gate is required before its bounded decision adjustment;
 the app never claims to identify a particular institution.
 
-The alert expander provides a one-time bell/voice notification for confirmed heavy
-NIFTY-market activity (75+ and 2/3) plus one manually armed CE/PE strike-premium
+The alert expander provides a two-stage bell/voice notification: an early directional
+heads-up at 65+ with 1/3 persistence and supporting volume/flow evidence, followed by
+a confirmed heavy NIFTY-market alert at 75+ and 2/3. It also provides one manually armed CE/PE strike-premium
 target with a BUY/SELL label. Browser
 audio requires a one-time Enable/Test interaction and is most reliable while the tab
 is open; alerts never place an order or alter the One-Brain decision.

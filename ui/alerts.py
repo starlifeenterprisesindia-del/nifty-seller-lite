@@ -12,6 +12,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from analysis.alerts import (
+    early_activity_alert_qualifies,
     heavy_activity_alert_qualifies,
     heavy_activity_signature,
     target_crossed,
@@ -79,6 +80,20 @@ def _activity_message(snapshot: MarketSnapshot) -> str:
     else:
         meaning = f"Very strong {item.direction.lower()} detected."
     return f"Alert. {meaning} Score {item.score:.0f} out of 100."
+
+
+def _early_activity_message(snapshot: MarketSnapshot) -> str:
+    item = snapshot.big_player_activity
+    if item is None:
+        return "Early market activity warning."
+    direction = "buying" if item.direction == "BUYING" else "selling"
+    level = str(item.level_reaction or "").lower()
+    setup = str(item.futures_setup or "").replace("-", " ").lower()
+    return (
+        f"Early warning. Strong {direction} may be starting. "
+        f"Score {item.score:.0f}. Futures {setup}. {level}. "
+        "Wait for the next confirmation."
+    )
 
 
 def _available_strikes(snapshot: MarketSnapshot, option_side: str) -> list[float]:
@@ -161,8 +176,13 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
                 st.warning(
                     f"HEAVY ALERT READY · {activity.state} {activity.activity_type}"
                 )
+            elif early_activity_alert_qualifies(activity):
+                st.warning(
+                    f"EARLY WARNING READY · {activity.direction} {activity.score:.0f}/100 · "
+                    f"{activity.confirmation_count}/{activity.confirmation_total}"
+                )
             else:
-                st.caption("ARMED · 75+ score aur 2/3 confirmation ka wait")
+                st.caption("ARMED · Early 65+ (1/3), Heavy 75+ (2/3) ka wait")
 
     with manual_col:
         st.markdown("#### 🎯 Manual CE/PE Premium Alert")
@@ -253,10 +273,23 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
                 f"reached at ₹{float(last_manual.get('premium', 0)):,.2f} · {last_manual.get('time')}"
             )
 
-    # Heavy alert is latched by event type and rearms only after activity falls
-    # below the threshold. This prevents a ring on every 30-second snapshot.
+    # Two-stage latches prevent a ring on every 30-second snapshot. An early
+    # heads-up can still escalate to a separate confirmed-heavy ring.
     qualifies = heavy_activity_alert_qualifies(activity)
+    early_qualifies = early_activity_alert_qualifies(activity) and not qualifies
     active_signature = heavy_activity_signature(activity) if qualifies else ""
+    early_signature = heavy_activity_signature(activity) if early_qualifies else ""
+    if not early_qualifies:
+        st.session_state.pop("early_alert_latched_signature", None)
+    elif (
+        sound_enabled
+        and not test_sound
+        and st.session_state.get("early_alert_latched_signature") != early_signature
+    ):
+        st.session_state.early_alert_latched_signature = early_signature
+        message = _early_activity_message(snapshot)
+        st.toast(message, icon="⚠️")
+        _play_alert(message)
     if not qualifies:
         st.session_state.pop("heavy_alert_latched_signature", None)
     elif (

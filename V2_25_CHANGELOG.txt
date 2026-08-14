@@ -39,3 +39,12 @@ v2.26.1 CE/PE premium alert correction
 - Manual alert now selects CE/PE, BUY/SELL label and a live option-chain strike.
 - The trigger is the selected contract's option premium, not the NIFTY spot level.
 - Current premium, armed target and last triggered premium are shown clearly.
+
+v2.27.0 two-stage sudden-activity alerts
+- Adds an EARLY WARNING at score 65+ and 1/3 persistence when futures volume is
+  elevated or options/Top-7 supports the same direction.
+- Keeps the louder confirmed Heavy Alert at score 75+ and 2/3 persistence.
+- Early and confirmed alerts have separate event latches, so an early move can
+  escalate once without ringing on every 30-second snapshot.
+- Voice warning includes fresh build-up/covering/unwinding, nearest-level reaction
+  and asks for the next confirmation instead of presenting an early trade signal.
