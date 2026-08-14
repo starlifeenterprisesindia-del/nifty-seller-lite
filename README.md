@@ -21,7 +21,8 @@ same-session persistence gate is required before its bounded decision adjustment
 the app never claims to identify a particular institution.
 
 The alert expander provides a one-time bell/voice notification for confirmed heavy
-activity (75+ and 2/3) plus one manually armed BUY/SELL-labelled NIFTY target. Browser
+NIFTY-market activity (75+ and 2/3) plus one manually armed CE/PE strike-premium
+target with a BUY/SELL label. Browser
 audio requires a one-time Enable/Test interaction and is most reliable while the tab
 is open; alerts never place an order or alter the One-Brain decision.
 

@@ -81,22 +81,48 @@ def _activity_message(snapshot: MarketSnapshot) -> str:
     return f"Alert. {meaning} Score {item.score:.0f} out of 100."
 
 
-def _current_spot(snapshot: MarketSnapshot) -> float | None:
+def _available_strikes(snapshot: MarketSnapshot, option_side: str) -> list[float]:
+    frame = snapshot.option_chain
+    if frame is None or frame.empty or not {"side", "strike"}.issubset(frame.columns):
+        return []
+    rows = frame[frame["side"].astype(str).str.upper() == option_side]
+    values = sorted(
+        {
+            float(value)
+            for value in rows["strike"].dropna().tolist()
+            if float(value) > 0
+        }
+    )
+    return values
+
+
+def _option_premium(
+    snapshot: MarketSnapshot, option_side: str, strike: float
+) -> float | None:
+    frame = snapshot.option_chain
+    required = {"side", "strike", "last_price"}
+    if frame is None or frame.empty or not required.issubset(frame.columns):
+        return None
+    rows = frame[
+        (frame["side"].astype(str).str.upper() == option_side)
+        & ((frame["strike"].astype(float) - float(strike)).abs() < 0.01)
+    ]
+    if rows.empty:
+        return None
     try:
-        value = float(snapshot.nifty_quote.get("last_price"))
+        value = float(rows.iloc[0]["last_price"])
     except (TypeError, ValueError):
         return None
-    return value if value > 0 else None
+    return value if value >= 0 else None
 
 
 def render_market_alerts(snapshot: MarketSnapshot) -> None:
-    spot = _current_spot(snapshot)
     activity = snapshot.big_player_activity
     sound_enabled = bool(st.session_state.get("market_alert_sound_enabled", False))
 
     st.subheader("🔔 Heavy Activity + Manual Price Alerts")
     st.caption(
-        "Heavy alert automatic hai. Manual alert me BUY/SELL label aur NIFTY target tum khud bharoge; "
+        "Heavy alert poore NIFTY market ki activity hai. Manual alert me CE/PE, BUY/SELL, strike aur option premium tum khud bharoge; "
         "yeh alert-only hai, order place ya One-Brain decision change nahi karta."
     )
 
@@ -120,7 +146,8 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
 
     heavy_col, manual_col = st.columns(2)
     with heavy_col:
-        st.markdown("#### 🐘 Automatic Heavy Alert")
+        st.markdown("#### 🐘 Automatic NIFTY Market Heavy Alert")
+        st.caption("Yeh CE/PE trade nahi—poore NIFTY market ki heavy buying/selling hai.")
         qualifies = heavy_activity_alert_qualifies(activity)
         if activity is None:
             st.info("Big Player activity unavailable")
@@ -138,61 +165,92 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
                 st.caption("ARMED · 75+ score aur 2/3 confirmation ka wait")
 
     with manual_col:
-        st.markdown("#### 🎯 Manual NIFTY Price Alert")
-        side = st.selectbox(
-            "Alert label",
-            ("BUY", "SELL"),
-            key="manual_price_alert_side_input",
+        st.markdown("#### 🎯 Manual CE/PE Premium Alert")
+        option_side = st.selectbox(
+            "Option type",
+            ("CE", "PE"),
+            key="manual_option_alert_side_input",
         )
-        default_target = float(round(spot / 50) * 50) if spot is not None else 0.0
+        position = st.selectbox(
+            "Position",
+            ("BUY", "SELL"),
+            key="manual_option_alert_position_input",
+        )
+        strikes = _available_strikes(snapshot, option_side)
+        strike = st.selectbox(
+            "Strike",
+            strikes,
+            format_func=lambda value: f"{value:,.0f} {option_side}",
+            key="manual_option_alert_strike_input",
+            disabled=not strikes,
+        ) if strikes else None
+        current_premium = (
+            _option_premium(snapshot, option_side, float(strike))
+            if strike is not None
+            else None
+        )
+        if current_premium is not None:
+            st.metric("Current option premium", f"₹{current_premium:,.2f}")
+        else:
+            st.caption("Selected CE/PE premium abhi unavailable")
+        default_target = float(round(current_premium, 2)) if current_premium is not None else 0.0
         target = st.number_input(
-            "Target NIFTY price",
+            "Target option premium ₹",
             min_value=0.0,
             value=default_target,
-            step=1.0,
-            key="manual_price_alert_target_input",
+            step=0.50,
+            key="manual_option_alert_target_input",
         )
         arm_col, cancel_col = st.columns(2)
         arm_clicked = arm_col.button(
             "ARM ALERT",
             type="primary",
             width="stretch",
-            disabled=spot is None or target <= 0,
-            key="arm_manual_price_alert",
+            disabled=current_premium is None or target <= 0 or strike is None,
+            key="arm_manual_option_alert",
         )
         cancel_clicked = cancel_col.button(
             "CANCEL",
             width="stretch",
-            disabled=not st.session_state.get("manual_price_alert_active", False),
-            key="cancel_manual_price_alert",
+            disabled=not st.session_state.get("manual_option_alert_active", False),
+            key="cancel_manual_option_alert",
         )
-        if arm_clicked and spot is not None:
-            st.session_state.manual_price_alert_active = True
-            st.session_state.manual_price_alert_side = side
-            st.session_state.manual_price_alert_target = float(target)
-            st.session_state.manual_price_alert_armed_spot = float(spot)
-            st.session_state.manual_price_alert_armed_at = datetime.now(
+        if arm_clicked and current_premium is not None and strike is not None:
+            st.session_state.manual_option_alert_active = True
+            st.session_state.manual_option_alert_side = option_side
+            st.session_state.manual_option_alert_position = position
+            st.session_state.manual_option_alert_strike = float(strike)
+            st.session_state.manual_option_alert_target = float(target)
+            st.session_state.manual_option_alert_armed_premium = float(current_premium)
+            st.session_state.manual_option_alert_expiry = str(snapshot.expiry or "")
+            st.session_state.manual_option_alert_armed_at = datetime.now(
                 ZoneInfo(IST_TIMEZONE)
             ).isoformat()
             st.success(
-                f"{side} alert ARMED · Target {target:,.2f} · Current {spot:,.2f}"
+                f"{option_side} {position} alert ARMED · Strike {float(strike):,.0f} · "
+                f"Target ₹{target:,.2f} · Current ₹{current_premium:,.2f}"
             )
         if cancel_clicked:
-            st.session_state.manual_price_alert_active = False
-            st.info("Manual price alert cancelled")
+            st.session_state.manual_option_alert_active = False
+            st.info("Manual CE/PE premium alert cancelled")
 
-        if st.session_state.get("manual_price_alert_active", False):
-            active_side = str(st.session_state.get("manual_price_alert_side", "BUY"))
-            active_target = float(st.session_state.get("manual_price_alert_target", 0.0))
-            current_text = f"{spot:,.2f}" if spot is not None else "—"
+        if st.session_state.get("manual_option_alert_active", False):
+            active_side = str(st.session_state.get("manual_option_alert_side", "CE"))
+            active_position = str(st.session_state.get("manual_option_alert_position", "BUY"))
+            active_strike = float(st.session_state.get("manual_option_alert_strike", 0.0))
+            active_target = float(st.session_state.get("manual_option_alert_target", 0.0))
+            live_premium = _option_premium(snapshot, active_side, active_strike)
+            current_text = f"₹{live_premium:,.2f}" if live_premium is not None else "Unavailable"
             st.info(
-                f"ACTIVE · {active_side} target {active_target:,.2f} · Current {current_text}"
+                f"ACTIVE · {active_strike:,.0f} {active_side} {active_position} · "
+                f"Target ₹{active_target:,.2f} · Current {current_text}"
             )
-        last_manual = st.session_state.get("last_manual_price_alert")
+        last_manual = st.session_state.get("last_manual_option_alert")
         if isinstance(last_manual, dict):
             st.caption(
-                f"Last: {last_manual.get('side')} {float(last_manual.get('target', 0)):,.2f} "
-                f"reached at NIFTY {float(last_manual.get('spot', 0)):,.2f} · {last_manual.get('time')}"
+                f"Last: {float(last_manual.get('strike', 0)):,.0f} {last_manual.get('side')} "
+                f"{last_manual.get('position')} · Target ₹{float(last_manual.get('target', 0)):,.2f} "
+                f"reached at ₹{float(last_manual.get('premium', 0)):,.2f} · {last_manual.get('time')}"
             )
 
     # Heavy alert is latched by event type and rearms only after activity falls
@@ -211,30 +269,36 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
         st.toast(message, icon="🚨")
         _play_alert(message)
 
-    # Manual alert is one-shot. Arm-click itself never triggers it immediately.
+    # Manual option-premium alert is one-shot. Arm-click itself never triggers it.
     if (
         not arm_clicked
-        and st.session_state.get("manual_price_alert_active", False)
-        and spot is not None
+        and st.session_state.get("manual_option_alert_active", False)
     ):
-        armed_spot = float(st.session_state.get("manual_price_alert_armed_spot", spot))
-        active_target = float(st.session_state.get("manual_price_alert_target", 0.0))
-        if active_target > 0 and target_crossed(
-            armed_spot=armed_spot,
-            current_spot=spot,
+        active_side = str(st.session_state.get("manual_option_alert_side", "CE"))
+        active_position = str(st.session_state.get("manual_option_alert_position", "BUY"))
+        active_strike = float(st.session_state.get("manual_option_alert_strike", 0.0))
+        active_target = float(st.session_state.get("manual_option_alert_target", 0.0))
+        armed_premium = float(
+            st.session_state.get("manual_option_alert_armed_premium", 0.0)
+        )
+        live_premium = _option_premium(snapshot, active_side, active_strike)
+        if live_premium is not None and active_target > 0 and target_crossed(
+            armed_spot=armed_premium,
+            current_spot=live_premium,
             target=active_target,
         ):
-            active_side = str(st.session_state.get("manual_price_alert_side", "BUY"))
             now = datetime.now(ZoneInfo(IST_TIMEZONE))
             message = (
-                f"{active_side} price reached. Nifty {spot:,.2f}. "
-                f"Target {active_target:,.2f}."
+                f"{active_strike:,.0f} {active_side} {active_position} premium reached. "
+                f"Current premium {live_premium:,.2f} rupees. Target {active_target:,.2f} rupees."
             )
-            st.session_state.manual_price_alert_active = False
-            st.session_state.last_manual_price_alert = {
+            st.session_state.manual_option_alert_active = False
+            st.session_state.last_manual_option_alert = {
                 "side": active_side,
+                "position": active_position,
+                "strike": active_strike,
                 "target": active_target,
-                "spot": float(spot),
+                "premium": float(live_premium),
                 "time": now.strftime("%H:%M:%S"),
             }
             st.toast(message, icon="🔔")
@@ -245,5 +309,5 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
 
     st.caption(
         "Laptop/mobile browser tab open ho to alert best kaam karta hai. Phone screen lock/background me "
-        "browser sound guaranteed nahi. Fresh check ke liye Auto Snapshot ON rakho."
+        "browser sound guaranteed nahi. CE/PE premium fresh check ke liye Auto Snapshot ON rakho."
     )

@@ -32,3 +32,10 @@ v2.26.0 alerts
 - Event latch prevents repeat sound on every 30-second snapshot and rearms after activity cools.
 - One-shot manual BUY/SELL-labelled NIFTY target alert detects crossing from either side.
 - Alerts are screen/session utilities only; they do not place orders or change One-Brain scores.
+
+v2.26.1 CE/PE premium alert correction
+- Automatic Heavy Alert is now explicitly labelled as overall NIFTY-market buying/selling,
+  not a CE/PE trade call.
+- Manual alert now selects CE/PE, BUY/SELL label and a live option-chain strike.
+- The trigger is the selected contract's option premium, not the NIFTY spot level.
+- Current premium, armed target and last triggered premium are shown clearly.
