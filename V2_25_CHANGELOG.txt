@@ -48,3 +48,15 @@ v2.27.0 two-stage sudden-activity alerts
   escalate once without ringing on every 30-second snapshot.
 - Voice warning includes fresh build-up/covering/unwinding, nearest-level reaction
   and asks for the next confirmation instead of presenting an early trade signal.
+
+v2.28.0 stable big-move engine
+- Confirmation is now 2/2 distinct completed-minute observations; repeated 30-second
+  refreshes of the same market bar replace the stored row and cannot inflate persistence.
+- A four-point minimum move/noise gate prevents small opposite ticks from immediately
+  flipping KHARID to BIKRI or vice versa.
+- Only elevated volume plus a meaningful move, an extreme burst, or multi-module
+  agreement is eligible as large activity; ordinary participation stays WATCH/SMALL MOVE.
+- Top-7 influence is reduced and displayed as supporting context because the remaining
+  NIFTY constituents can move the index in the opposite direction.
+- Simple Hinglish display states explain starting, confirmed, fading, small move and
+  old buyers/sellers closing positions.

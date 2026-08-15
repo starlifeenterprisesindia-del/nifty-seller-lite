@@ -10,7 +10,7 @@ from config import CONFIG
 
 
 class ActivityStateStore:
-    """Small same-day journal used only for 2/3 activity persistence."""
+    """Small same-day journal with one row per distinct market observation."""
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path or CONFIG.big_player_state_path)
@@ -25,18 +25,36 @@ class ActivityStateStore:
         rows = payload.get("rows")
         return list(rows) if isinstance(rows, list) else []
 
-    def append(self, captured_at: datetime, *, direction: str, score: float, state: str) -> list[dict[str, Any]]:
+    def append(
+        self,
+        captured_at: datetime,
+        *,
+        direction: str,
+        score: float,
+        state: str,
+        observation_key: str = "",
+        spot: float | None = None,
+    ) -> list[dict[str, Any]]:
         rows = self.load(captured_at)
         current = {
             "captured_at": captured_at.isoformat(),
             "direction": str(direction),
             "score": float(score),
             "state": str(state),
+            "observation_key": str(observation_key),
+            "spot": float(spot) if spot is not None else None,
         }
         if rows:
             try:
                 latest = datetime.fromisoformat(str(rows[-1]["captured_at"]))
-                if (captured_at - latest).total_seconds() < CONFIG.big_player_dedupe_seconds:
+                same_observation = bool(observation_key) and str(
+                    rows[-1].get("observation_key", "")
+                ) == str(observation_key)
+                if same_observation or (
+                    not observation_key
+                    and (captured_at - latest).total_seconds()
+                    < CONFIG.big_player_dedupe_seconds
+                ):
                     rows[-1] = current
                 else:
                     rows.append(current)

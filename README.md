@@ -16,9 +16,15 @@ Optional Auto Snapshot can run for 5/15/30 minutes at 30-second or 1-minute inte
 
 Big Player Activity is a separate responsive evidence screen fed by the same
 authoritative One-Brain snapshot. It combines time-normalized NIFTY-futures volume,
-futures price/OI, ATM option flow, Top-7 participation and barrier reaction. A 2/3
+futures price/OI, ATM option flow, Top-7 participation and barrier reaction. A 2/2 distinct-minute
 same-session persistence gate is required before its bounded decision adjustment;
 the app never claims to identify a particular institution.
+
+Big Player direction now uses two distinct completed-minute observations instead of
+counting repeated 30-second refreshes. A minimum four-point move filter suppresses
+small BUY/SELL flips, and Top-7 is treated as supporting context rather than a required
+market-direction vote. The screen uses simple Hinglish states for starting, confirmed,
+fading and small/noisy moves.
 
 The alert expander provides a two-stage bell/voice notification: an early directional
 heads-up at 65+ with 1/3 persistence and supporting volume/flow evidence, followed by

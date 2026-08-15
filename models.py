@@ -505,6 +505,9 @@ class BigPlayerActivity:
     activity_type: str = "DIRECTIONAL ACTIVITY"
     participant_explanation: str = "Participation mixed hai"
     next_confirmation: str = "Agla snapshot aur level reaction dekho"
+    move_state: str = "ABHI SAAF NAHI"
+    move_points: float | None = None
+    required_move_points: float = 4.0
 
 
 def _unavailable_strategy(name: str) -> StrategyEvaluation:

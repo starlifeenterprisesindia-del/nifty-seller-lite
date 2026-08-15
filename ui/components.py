@@ -994,6 +994,22 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
     else:
         direction_class, icon = "mixed", "🟣"
         display_direction = item.direction
+    simple_state = {
+        "NORMAL": "NORMAL HALCHAL",
+        "WATCH": "DEKHTE RAHO",
+        "STRONG": "BADI HALCHAL",
+        "VERY STRONG": "PAKKI BADI HALCHAL",
+        "EXTREME ACTIVITY": "BAHUT TEZ HALCHAL",
+        "ABSORPTION": "VOLUME BADA, PRICE RUKI",
+        "FADING": "ZOR KAM HO RAHA",
+    }.get(item.state, item.state)
+    simple_direction = {
+        "BUYING": "KHARID",
+        "SELLING": "BIKRI",
+        "MIXED": "ABHI SAAF NAHI",
+        "SHORT COVERING": "PURANE SELLER POSITION BAND KAR RAHE",
+        "LONG UNWINDING": "PURANE BUYER POSITION BAND KAR RAHE",
+    }.get(display_direction, display_direction)
     severity = (
         "extreme" if item.state == "EXTREME ACTIVITY" else
         "danger" if item.state == "VERY STRONG" else
@@ -1032,7 +1048,7 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         '@media(max-width:760px){.bpa-head{display:block}.bpa-score{font-size:1.35rem;margin-top:6px}.bpa-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bpa-title{font-size:1.12rem}}'
         '</style>'
         f'<div class="bpa-hero {direction_class} {severity}">'
-        f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(item.state)} · {escape(display_direction)}</div>'
+        f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(simple_state)} · {escape(simple_direction)}</div>'
         f'<div class="bpa-sub">{escape(confirmation_text)} · Reversal risk {escape(item.reversal_risk)} · {escape(item.time_window)}</div></div>'
         f'<div class="bpa-score">{item.score:.0f}/100</div></div>'
         '<div class="bpa-grid">'
@@ -1048,12 +1064,13 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         st.markdown(html, unsafe_allow_html=True)
 
     cards = [
+        ("Seedha matlab", item.move_state, f"Pichhle candles ka move {item.move_points or 0:.1f} points; kam-se-kam {item.required_move_points:.0f} chahiye", "green" if "PAKKI" in item.move_state else "amber"),
         ("Players kya kar rahe", item.participant_explanation, "Price + futures OI ka seedha matlab", "amber" if closing_flow else "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
-        ("Agli confirmation", item.next_confirmation, "Iske baad move ko fresh/strong maanenge", "amber"),
-        ("Options confirmation", item.option_confirmation, "ATM± strikes ka combined flow", "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
-        ("Top-7 confirmation", item.top7_confirmation, "Heavyweight participation", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
-        ("Level reaction", item.level_reaction, "Support/resistance par price response", "amber"),
-        ("Time activity", item.time_window, "Time direction nahi banata; sensitivity adjust karta hai", "amber"),
+        ("Ab kya dekhna hai", item.next_confirmation, "Iske baad badi halchal ko pakka maanenge", "amber"),
+        ("Options ka saath", item.option_confirmation, "Options kis taraf zor dikha rahe", "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
+        ("Top-7 ka saath", item.top7_confirmation, "Sirf madadgar hai; final direction akela nahi banata", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
+        ("Level par kya hua", item.level_reaction, "Support/resistance ke paas reaction", "amber"),
+        ("Din ka samay", item.time_window, "Samay sirf sensitivity badalta hai", "amber"),
     ]
     st.html(_responsive_cards_html(cards)) if hasattr(st, "html") else st.markdown(_responsive_cards_html(cards), unsafe_allow_html=True)
     if item.reasons:
@@ -1062,7 +1079,7 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         st.caption("Caution: " + " | ".join(item.cautions))
     st.caption(
         "Exact institution ki pehchan nahi hoti. Yeh same One-Brain snapshot ka bounded activity evidence hai; "
-        "2/3 confirmation ke bina direct trade signal nahi."
+        "2 alag observations ke bina badi halchal pakki nahi."
     )
 
 

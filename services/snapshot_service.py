@@ -888,6 +888,23 @@ class SnapshotService:
         )
 
         activity_history = self.activity_state_store.load(current)
+        activity_candles = future_candles_1m
+        if not activity_candles.empty and "is_complete" in activity_candles.columns:
+            activity_candles = activity_candles[
+                activity_candles["is_complete"].fillna(False).astype(bool)
+            ]
+        activity_observation_key = (
+            str(activity_candles.iloc[-1]["timestamp"])
+            if not activity_candles.empty
+            else current.replace(second=0, microsecond=0).isoformat()
+        )
+        activity_spot = (
+            float(activity_candles.iloc[-1]["close"])
+            if not activity_candles.empty
+            else float(current_price)
+            if current_price is not None
+            else None
+        )
         big_player_activity = calculate_big_player_activity(
             as_of=current,
             market_session=market_session,
@@ -898,6 +915,7 @@ class SnapshotService:
             barrier_map=barrier_map,
             core=core_evidence,
             history=activity_history,
+            observation_key=activity_observation_key,
         )
         if market_session.is_live:
             self.activity_state_store.append(
@@ -905,6 +923,8 @@ class SnapshotService:
                 direction=big_player_activity.direction,
                 score=big_player_activity.score,
                 state=big_player_activity.state,
+                observation_key=activity_observation_key,
+                spot=activity_spot,
             )
 
         discipline_error: str | None = None

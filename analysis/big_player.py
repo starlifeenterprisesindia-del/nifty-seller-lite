@@ -94,6 +94,7 @@ def calculate_big_player_activity(
     barrier_map: BarrierMap,
     core: CoreMarketEvidence,
     history: list[dict[str, Any]] | None = None,
+    observation_key: str = "",
 ) -> BigPlayerActivity:
     """Combine participation evidence without claiming trader identity.
 
@@ -101,7 +102,17 @@ def calculate_big_player_activity(
     is calculated from the last three authoritative app snapshots.
     """
 
-    history = list(history or [])
+    history = [
+        item
+        for item in list(history or [])
+        if (
+            not observation_key
+            or (
+                bool(str(item.get("observation_key", "")))
+                and str(item.get("observation_key", "")) != str(observation_key)
+            )
+        )
+    ]
     three = volume.three_minute
     ratio = three.relative_volume if three.status == "READY" else None
     intensity = _volume_intensity(ratio)
@@ -145,15 +156,16 @@ def calculate_big_player_activity(
     price_direction = str(getattr(three, "price_direction", "NEUTRAL") or "NEUTRAL").upper()
     candle_direction = "BUY" if price_direction == "UP" else "SELL" if price_direction == "DOWN" else "NEUTRAL"
 
-    buy = intensity * 0.22
-    sell = intensity * 0.22
+    buy = intensity * 0.20
+    sell = intensity * 0.20
     reasons: list[str] = []
     cautions: list[str] = []
     for direction, weight, strength, reason in (
-        (candle_direction, 0.20, intensity, f"3m futures volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
-        (futures_direction, 0.25, 82.0 if oi_change is not None else 25.0, f"Futures {futures_setup}"),
-        (option_direction, 0.20, option_strength, f"ATM option flow {options.market_bias}"),
-        (top7_direction, 0.13, top7_strength, f"Top-7 {heavyweights.state}"),
+        (candle_direction, 0.25, intensity, f"3m futures volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
+        (futures_direction, 0.27, 82.0 if oi_change is not None else 25.0, f"Futures {futures_setup}"),
+        (option_direction, 0.21, option_strength, f"ATM option flow {options.market_bias}"),
+        # Top-7 is useful context, but it cannot represent the remaining NIFTY stocks.
+        (top7_direction, 0.07, top7_strength, f"Top-7 {heavyweights.state}"),
     ):
         if direction == "BUY":
             buy += strength * weight
@@ -172,6 +184,55 @@ def calculate_big_player_activity(
     direction = "BUYING" if buy - sell >= 7 else "SELLING" if sell - buy >= 7 else "MIXED"
     score = max(buy, sell) if direction != "MIXED" else (buy + sell) / 2.0
 
+    completed = future_candles_1m.copy() if future_candles_1m is not None else pd.DataFrame()
+    if not completed.empty and "is_complete" in completed.columns:
+        completed = completed[completed["is_complete"].fillna(False).astype(bool)]
+    completed = completed.dropna(subset=["close"]).tail(4) if not completed.empty else completed
+    current_spot = float(completed.iloc[-1]["close"]) if not completed.empty else None
+    move_points = (
+        abs(float(completed.iloc[-1]["close"]) - float(completed.iloc[0]["close"]))
+        if len(completed) >= 2
+        else 0.0
+    )
+    required_move = 4.0
+    directional_support = sum(
+        (
+            futures_direction == ("BUY" if direction == "BUYING" else "SELL"),
+            option_direction == ("BUY" if direction == "BUYING" else "SELL"),
+            top7_direction == ("BUY" if direction == "BUYING" else "SELL"),
+        )
+    ) if direction in {"BUYING", "SELLING"} else 0
+    large_activity = bool(
+        direction in {"BUYING", "SELLING"}
+        and (
+            (ratio is not None and ratio >= 2.0)
+            or (ratio is not None and ratio >= 1.5 and move_points >= required_move)
+            or (move_points >= required_move and directional_support >= 2)
+        )
+    )
+
+    previous_direction = ""
+    previous_spot = None
+    for item in reversed(history):
+        if str(item.get("direction", "")) in {"BUYING", "SELLING"}:
+            previous_direction = str(item.get("direction"))
+            try:
+                previous_spot = float(item.get("spot"))
+            except (TypeError, ValueError):
+                previous_spot = None
+            break
+    direction_change_blocked = bool(
+        previous_direction
+        and direction in {"BUYING", "SELLING"}
+        and direction != previous_direction
+        and previous_spot is not None
+        and current_spot is not None
+        and abs(current_spot - previous_spot) < required_move
+    )
+    if direction_change_blocked:
+        direction = previous_direction
+        large_activity = False
+
     near_resistance = barrier_map.nearest_resistance
     near_support = barrier_map.nearest_support
     level_reaction = "NO NEAR LEVEL REACTION"
@@ -185,21 +246,25 @@ def calculate_big_player_activity(
         level_reaction = "SELLING TESTING SUPPORT"
 
     matching = 0
-    recent_history = history[-2:]
-    total = min(3, len(recent_history) + 1)
-    if direction in {"BUYING", "SELLING"} and score >= 40:
+    recent_history = history[-1:]
+    total = min(2, len(recent_history) + 1)
+    if direction in {"BUYING", "SELLING"} and score >= 40 and large_activity:
         recent = [
             str(item.get("direction", ""))
             if float(item.get("score", 0.0) or 0.0) >= 40
             else "NORMAL"
             for item in recent_history
         ] + [direction]
-        matching = sum(item == direction for item in recent[-3:])
+        matching = sum(item == direction for item in recent[-2:])
         persistence = "CONFIRMED" if matching >= 2 else "WARMING UP"
     else:
-        persistence = "NORMAL" if score < 40 else "MIXED"
+        persistence = "NORMAL" if score < 40 else "SMALL MOVE"
 
-    if absorption and score >= 55:
+    if direction_change_blocked:
+        state = "FADING"
+    elif not large_activity and score >= 40:
+        state = "WATCH"
+    elif absorption and score >= 55:
         state = "ABSORPTION"
     elif score >= 90 and matching >= 2:
         state = "EXTREME ACTIVITY"
@@ -222,6 +287,17 @@ def calculate_big_player_activity(
         reversal_risk = "WATCH"
     else:
         reversal_risk = "NORMAL"
+
+    if direction_change_blocked:
+        move_state = "CHHOTA ULTA MOVE — PURANI DIRECTION ABHI KAYAM"
+    elif not large_activity and score >= 40:
+        move_state = "CHHOTA MOVE — BADI HALCHAL NAHI"
+    elif matching >= 2:
+        move_state = "BADI HALCHAL PAKKI 2/2"
+    elif matching == 1:
+        move_state = "BADI HALCHAL SHURU 1/2"
+    else:
+        move_state = "ABHI SAAF NAHI"
 
     if not market_session.is_live:
         cautions.append("Market live nahi; result last available data ka hai")
@@ -265,4 +341,7 @@ def calculate_big_player_activity(
         activity_type=activity_type,
         participant_explanation=participant_explanation,
         next_confirmation=next_confirmation,
+        move_state=move_state,
+        move_points=round(float(move_points), 1),
+        required_move_points=required_move,
     )

@@ -51,7 +51,7 @@ def test_confirmed_large_selling_flags_reversal_danger():
         ],
     )
     assert result.direction == "SELLING"
-    assert result.confirmation_count == 3
+    assert result.confirmation_count == 2
     assert result.score >= 75
     assert result.reversal_risk in {"HIGH", "DANGER"}
 
@@ -71,6 +71,41 @@ def test_single_snapshot_stays_warming_up():
     result = calculate_big_player_activity(**_inputs("DOWN"), history=[])
     assert result.confirmation_count == 1
     assert result.persistence == "WARMING UP"
+
+
+def test_same_completed_minute_is_not_counted_twice():
+    result = calculate_big_player_activity(
+        **_inputs("UP"),
+        observation_key="bar-1",
+        history=[
+            {
+                "direction": "BUYING",
+                "score": 80,
+                "observation_key": "bar-1",
+                "spot": 24350,
+            }
+        ],
+    )
+    assert result.confirmation_count == 1
+    assert result.confirmation_total == 1
+
+
+def test_small_opposite_move_does_not_flip_direction_immediately():
+    result = calculate_big_player_activity(
+        **_inputs("DOWN"),
+        history=[
+            {
+                "direction": "BUYING",
+                "score": 78,
+                "observation_key": "older-bar",
+                "spot": 24340,
+            }
+        ],
+        observation_key="new-bar",
+    )
+    assert result.direction == "BUYING"
+    assert result.state == "FADING"
+    assert "CHHOTA ULTA MOVE" in result.move_state
 
 
 def test_normal_activity_never_shows_confirmed_persistence():
