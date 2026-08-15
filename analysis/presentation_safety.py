@@ -192,7 +192,7 @@ def safe_brain_hinglish_line(snapshot: Any, previous_snapshot: Any | None = None
     prior_heavy = getattr(previous_snapshot, "heavyweights", None)
     prior_move = getattr(prior_heavy, "weighted_move_pct", None)
     if weighted_move is not None:
-        top7_text = f"Top-7 weighted move {float(weighted_move):+.2f}% hai"
+        top7_text = f"Top-9 weighted move {float(weighted_move):+.2f}% hai"
         if prior_move is not None:
             top7_text += f" aur last snapshot se {float(weighted_move) - float(prior_move):+.2f}% badla"
         evidence.append(top7_text)

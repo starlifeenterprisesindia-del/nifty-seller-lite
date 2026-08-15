@@ -287,6 +287,9 @@ class HeavyweightBundle:
     state: str
     confidence: float
     status: str
+    remaining_weight_pct: float = 0.0
+    estimated_remaining_move_pct: float | None = None
+    market_disagreement: str = "UNAVAILABLE"
 
 
 @dataclass(frozen=True)

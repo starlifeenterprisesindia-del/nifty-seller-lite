@@ -126,19 +126,19 @@ def calculate_big_player_activity(
     participant_explanation, next_confirmation = {
         "LONG BUILD-UP": (
             "Naye buyers futures me long positions bana rahe hain",
-            "Options + Top-7 bullish aur resistance ke upar close se fresh buying confirm hogi",
+            "Options + Top-9 bullish aur resistance ke upar close se fresh buying confirm hogi",
         ),
         "SHORT BUILD-UP": (
             "Naye sellers futures me short positions bana rahe hain",
-            "Options + Top-7 bearish aur support ke neeche close se fresh selling confirm hogi",
+            "Options + Top-9 bearish aur support ke neeche close se fresh selling confirm hogi",
         ),
         "SHORT COVERING": (
             "Purane sellers apni short positions band kar rahe hain; isliye price upar hai",
-            "OI dobara badhe, Options + Top-7 bullish hon aur resistance break ho to fresh long buying maanenge",
+            "OI dobara badhe, Options + Top-9 bullish hon aur resistance break ho to fresh long buying maanenge",
         ),
         "LONG UNWINDING": (
             "Purane buyers apni long positions band kar rahe hain; isliye price neeche hai",
-            "OI badhe, Options + Top-7 bearish hon aur support break ho to fresh short selling maanenge",
+            "OI badhe, Options + Top-9 bearish hon aur support break ho to fresh short selling maanenge",
         ),
     }.get(
         activity_type,
@@ -164,8 +164,8 @@ def calculate_big_player_activity(
         (candle_direction, 0.25, intensity, f"3m futures volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
         (futures_direction, 0.27, 82.0 if oi_change is not None else 25.0, f"Futures {futures_setup}"),
         (option_direction, 0.21, option_strength, f"ATM option flow {options.market_bias}"),
-        # Top-7 is useful context, but it cannot represent the remaining NIFTY stocks.
-        (top7_direction, 0.07, top7_strength, f"Top-7 {heavyweights.state}"),
+        # Top-9 is useful context, but it cannot represent the remaining NIFTY stocks.
+        (top7_direction, 0.07, top7_strength, f"Top-9 {heavyweights.state}"),
     ):
         if direction == "BUY":
             buy += strength * weight
@@ -312,11 +312,11 @@ def calculate_big_player_activity(
     if activity_type == "SHORT COVERING":
         cautions.append("Price up hai, lekin fresh long buying confirm nahi")
         if option_direction != "BUY" or top7_direction != "BUY":
-            cautions.append("Options/Top-7 fresh buying ko confirm nahi kar rahe")
+            cautions.append("Options/Top-9 fresh buying ko confirm nahi kar rahe")
     elif activity_type == "LONG UNWINDING":
         cautions.append("Price down hai, lekin fresh short selling confirm nahi")
         if option_direction != "SELL" or top7_direction != "SELL":
-            cautions.append("Options/Top-7 fresh selling ko confirm nahi kar rahe")
+            cautions.append("Options/Top-9 fresh selling ko confirm nahi kar rahe")
 
     return BigPlayerActivity(
         direction=direction,

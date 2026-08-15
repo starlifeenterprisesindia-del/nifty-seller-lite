@@ -171,16 +171,26 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
             )
         return name, note
 
-    def level_text(level: Any | None, fallback: str) -> tuple[str, str]:
+    def level_text(level: Any | None, fallback: str, *, side: str) -> tuple[str, str]:
         if level is None:
-            return "Unresolved", fallback
+            spot_value = getattr(item, "current_price", None)
+            remaining = getattr(item, "vix_expected_remaining_move_points", None)
+            if spot_value is None:
+                return "— · Data kam", "Fresh snapshot ka wait"
+            step = max(25.0, float(remaining or 100.0) * 0.25)
+            raw = float(spot_value) + step if side == "RESISTANCE" else float(spot_value) - step
+            estimated = round(raw / 50.0) * 50.0
+            return (
+                f"Estimated zone {estimated:,.0f}",
+                f"Agla pakka barrier nahi mila — Bharosa kam. {fallback}",
+            )
         return (
             f"{level.lower:,.0f}–{level.upper:,.0f}",
             f"Bachne ki taakat {level.strength:.0f} · Tootne ka pressure {level.break_pressure:.0f} ({_pressure_label(float(level.break_pressure))}) · {_barrier_verdict(level)}",
         )
 
-    resistance, resistance_note = level_text(item.nearest_resistance, "Resistance unavailable")
-    support, support_note = level_text(item.nearest_support, "Support unavailable")
+    resistance, resistance_note = level_text(item.nearest_resistance, "Resistance unavailable", side="RESISTANCE")
+    support, support_note = level_text(item.nearest_support, "Support unavailable", side="SUPPORT")
     overlap_text = None
     if item.nearest_resistance is not None and item.nearest_support is not None:
         overlap_lower = max(item.nearest_resistance.lower, item.nearest_support.lower)
@@ -289,7 +299,7 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
     item = snapshot.barrier_map
     st.subheader("🧭 Live Barrier + Range Map")
     st.caption(
-        "Yeh top live road-map Support/Resistance, OI flow, price structure, volume, Top-7, "
+        "Yeh top live road-map Support/Resistance, OI flow, price structure, volume, Top-9, "
         "market speed aur India VIX ko ek hi view me dikhata hai. Strength aur Break Pressure "
         "evidence scores hain — guaranteed probability nahi."
     )
@@ -546,7 +556,7 @@ def render_evidence_matrix(
             previous_value = previous.get(key)
             if current_value is not None and previous_value is not None:
                 deltas.append(f"{short}{float(current_value) - float(previous_value):+.0f}")
-        if str(row["Module"]) == "NIFTY Top-7":
+        if str(row["Module"]) == "NIFTY Top-9":
             current_move = snapshot.heavyweights.weighted_move_pct
             previous_move = previous_snapshot.heavyweights.weighted_move_pct
             if current_move is not None and previous_move is not None:
@@ -928,7 +938,7 @@ def render_main_ai_market_view(
         else:
             news_text = "ZERO LIVE WEIGHT"
         st.caption(
-            f"W/M: {wm_text} • Candle: {candle_text} • Top-7: {top7_move} • "
+            f"W/M: {wm_text} • Candle: {candle_text} • Top-9: {top7_move} • "
             f"FII/DII: {inst_text} • News: {news_text}"
         )
         activity = getattr(snapshot, "big_player_activity", None)
@@ -949,9 +959,9 @@ def render_main_ai_market_view(
             )
             if closing_flow and activity.score >= 60:
                 st.warning(activity_line)
-            elif activity.score >= 75 and activity.direction == "SELLING":
+            elif activity.confirmation_count >= 2 and activity.score >= 75 and activity.direction == "SELLING":
                 st.error(activity_line)
-            elif activity.score >= 75 and activity.direction == "BUYING":
+            elif activity.confirmation_count >= 2 and activity.score >= 75 and activity.direction == "BUYING":
                 st.success(activity_line)
             elif activity.score >= 60:
                 st.warning(activity_line)
@@ -1003,6 +1013,8 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         "ABSORPTION": "VOLUME BADA, PRICE RUKI",
         "FADING": "ZOR KAM HO RAHA",
     }.get(item.state, item.state)
+    if item.confirmation_count < 2 and item.state not in {"NORMAL", "FADING"}:
+        simple_state = "HALCHAL SHURU — PAKKI NAHI"
     simple_direction = {
         "BUYING": "KHARID",
         "SELLING": "BIKRI",
@@ -1017,6 +1029,8 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         "watch" if item.state in {"WATCH", "ABSORPTION"} else
         "normal"
     )
+    if item.confirmation_count < 2:
+        severity = "watch"
     volume_text = f"{item.futures_volume_ratio:.2f}x" if item.futures_volume_ratio is not None else "—"
     oi_text = f"{item.futures_oi_change_pct:+.2f}%" if item.futures_oi_change_pct is not None else "—"
     confirmation_text = (
@@ -1068,7 +1082,7 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         ("Players kya kar rahe", item.participant_explanation, "Price + futures OI ka seedha matlab", "amber" if closing_flow else "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
         ("Ab kya dekhna hai", item.next_confirmation, "Iske baad badi halchal ko pakka maanenge", "amber"),
         ("Options ka saath", item.option_confirmation, "Options kis taraf zor dikha rahe", "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
-        ("Top-7 ka saath", item.top7_confirmation, "Sirf madadgar hai; final direction akela nahi banata", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
+        ("Top-9 ka saath", item.top7_confirmation, "Sirf madadgar hai; final direction akela nahi banata", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
         ("Level par kya hua", item.level_reaction, "Support/resistance ke paas reaction", "amber"),
         ("Din ka samay", item.time_window, "Samay sirf sensitivity badalta hai", "amber"),
     ]
@@ -1789,6 +1803,28 @@ def render_feed_status(snapshot: MarketSnapshot) -> None:
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
+def render_data_health(snapshot: MarketSnapshot) -> None:
+    """Compact display-only trust label; it never changes One-Brain scores."""
+    statuses = snapshot.feed_status or {}
+    critical = [statuses.get(key) for key in ("quotes", "candles", "option_chain", "future_volume", "vix")]
+    critical = [item for item in critical if item is not None]
+    unavailable = [item for item in critical if not item.ok or item.use_state == "UNAVAILABLE"]
+    delayed = [item for item in critical if item.use_state in {"STALE", "CAUTION", "DELAYED"}]
+    if not snapshot.market_session.is_live:
+        label, detail, kind = "LAST DATA", "Market live nahi — sirf reference", "warning"
+    elif unavailable:
+        label, detail, kind = "DATA KAM", ", ".join(item.name for item in unavailable), "error"
+    elif delayed:
+        label, detail, kind = "DELAYED", ", ".join(item.name for item in delayed), "warning"
+    elif critical:
+        ages = [item.age_seconds for item in critical if item.age_seconds is not None]
+        age_text = f" · max age {max(ages):.0f}s" if ages else ""
+        label, detail, kind = "FRESH", "Critical feeds ready" + age_text, "success"
+    else:
+        label, detail, kind = "BROKER SE MATCH CHECK", "Freshness details available nahi", "warning"
+    getattr(st, kind)(f"📡 **Data Health: {label}** — {detail}")
+
+
 def render_core_evidence(snapshot: MarketSnapshot) -> None:
     item = snapshot.core_evidence
     st.dataframe(
@@ -1974,7 +2010,7 @@ def render_option_chain(snapshot: MarketSnapshot) -> None:
 
 def render_heavyweights(snapshot: MarketSnapshot) -> None:
     if not snapshot.heavyweight_quotes:
-        st.info("Top-7 quotes are unavailable in this snapshot.")
+        st.info("Top-9 quotes are unavailable in this snapshot.")
         return
     rows: list[dict[str, Any]] = []
     for item in snapshot.heavyweight_quotes:
@@ -2119,9 +2155,20 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
 
 def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
     item = snapshot.heavyweights
+    remaining_move = (
+        f"{item.estimated_remaining_move_pct:+.3f}%"
+        if item.estimated_remaining_move_pct is not None
+        else "— · Data kam"
+    )
     st.info(
-        f"**Top-7:** {item.state} • Move {item.weighted_move_pct or 0:+.3f}% • "
+        f"**Top-9:** {item.state} • Move {item.weighted_move_pct or 0:+.3f}% • "
         f"{item.advancing}↑/{item.declining}↓/{item.unchanged}→ • Data coverage {item.confidence:.0f}%"
+    )
+    if "DISAGREEMENT" in item.market_disagreement and "NO CLEAR" not in item.market_disagreement:
+        st.warning(f"⚠️ **Market disagreement:** {item.market_disagreement} — confidence kam rakho")
+    st.caption(
+        f"Remaining Market ({item.remaining_weight_pct:.2f}% weight) estimated move: {remaining_move} · "
+        "NIFTY actual move minus Top-9 contribution se nikla; extra 41 quote calls nahi."
     )
     rows = [asdict(row) for row in item.rows]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)

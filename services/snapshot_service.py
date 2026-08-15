@@ -501,7 +501,7 @@ class SnapshotService:
             ok=len(analysis_heavyweight_quotes) == len(CONFIG.top7),
             fetched_at=current,
             message=(
-                f"Usable Top-7 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top7)}"
+                f"Usable Top-9 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top7)}"
             ),
             source="Grouped Dhan market quote",
             use_state=(
@@ -690,7 +690,7 @@ class SnapshotService:
             future_volume_live=statuses["future_volume"].use_state == "LIVE",
         )
         heavyweights = calculate_heavyweight_bundle(
-            analysis_heavyweight_quotes, current
+            analysis_heavyweight_quotes, current, nifty_quote=nifty_quote
         )
         vix_for_analysis = (
             vix_quote

@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.28.0_STABLE_BIG_MOVE_ENGINE"
+    version: str = "2.29.0_SAFE_DATA_HEALTH_TOP9"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -45,19 +45,21 @@ class AppConfig:
         symbol="INDIA VIX",
     )
 
-    # Official NIFTY 50 top-seven weights as at 30-Jun-2026. Security IDs are
+    # Official NIFTY 50 top-nine weights as at 31-Jul-2026. Security IDs are
     # Dhan/NSE instrument identifiers used by the already grouped quote request.
-    top7_weight_date: str = "2026-06-30"
+    top7_weight_date: str = "2026-07-31"
     top7: tuple[InstrumentRef, ...] = (
-        InstrumentRef("HDFC Bank", "1333", "NSE_EQ", "EQUITY", "HDFCBANK", 11.18),
-        InstrumentRef("ICICI Bank", "4963", "NSE_EQ", "EQUITY", "ICICIBANK", 9.01),
+        InstrumentRef("HDFC Bank", "1333", "NSE_EQ", "EQUITY", "HDFCBANK", 10.27),
+        InstrumentRef("ICICI Bank", "4963", "NSE_EQ", "EQUITY", "ICICIBANK", 9.22),
         InstrumentRef(
-            "Reliance Industries", "2885", "NSE_EQ", "EQUITY", "RELIANCE", 8.00
+            "Reliance Industries", "2885", "NSE_EQ", "EQUITY", "RELIANCE", 7.92
         ),
-        InstrumentRef("Bharti Airtel", "10604", "NSE_EQ", "EQUITY", "BHARTIARTL", 5.15),
-        InstrumentRef("Larsen & Toubro", "11483", "NSE_EQ", "EQUITY", "LT", 4.44),
-        InstrumentRef("State Bank of India", "3045", "NSE_EQ", "EQUITY", "SBIN", 3.88),
-        InstrumentRef("Axis Bank", "5900", "NSE_EQ", "EQUITY", "AXISBANK", 3.54),
+        InstrumentRef("Bharti Airtel", "10604", "NSE_EQ", "EQUITY", "BHARTIARTL", 5.37),
+        InstrumentRef("Larsen & Toubro", "11483", "NSE_EQ", "EQUITY", "LT", 4.13),
+        InstrumentRef("State Bank of India", "3045", "NSE_EQ", "EQUITY", "SBIN", 3.81),
+        InstrumentRef("Infosys", "1594", "NSE_EQ", "EQUITY", "INFY", 3.55),
+        InstrumentRef("Axis Bank", "5900", "NSE_EQ", "EQUITY", "AXISBANK", 3.16),
+        InstrumentRef("Bajaj Finance", "317", "NSE_EQ", "EQUITY", "BAJFINANCE", 2.74),
     )
     option_strikes_each_side: int = 7
     candle_lookback_days: int = 7

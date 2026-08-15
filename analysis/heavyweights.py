@@ -18,6 +18,7 @@ def _change_pct(quote: dict[str, Any]) -> float | None:
 def calculate_heavyweight_bundle(
     quotes: list[dict[str, Any]],
     captured_at: datetime,
+    nifty_quote: dict[str, Any] | None = None,
 ) -> HeavyweightBundle:
     by_symbol = {str(item.get("symbol")): item for item in quotes}
     rows: list[HeavyweightContribution] = []
@@ -83,6 +84,20 @@ def calculate_heavyweight_bundle(
         confidence = min(95.0, 55.0 + completeness * 40.0)
         status = "READY" if completeness >= 0.99 else "CAUTION"
 
+    remaining_weight = max(0.0, 100.0 - covered_weight)
+    nifty_change = _change_pct(nifty_quote or {})
+    remaining_move = None
+    disagreement = "UNAVAILABLE"
+    if nifty_change is not None and remaining_weight > 0 and usable_weight > 0:
+        remaining_contribution = nifty_change - contribution_sum
+        remaining_move = remaining_contribution / remaining_weight * 100.0
+        if weighted_move is not None and weighted_move >= 0.05 and remaining_move <= -0.05:
+            disagreement = "TOP-9 UP / REMAINING MARKET DOWN"
+        elif weighted_move is not None and weighted_move <= -0.05 and remaining_move >= 0.05:
+            disagreement = "TOP-9 DOWN / REMAINING MARKET UP"
+        else:
+            disagreement = "ALIGNED / NO CLEAR DISAGREEMENT"
+
     return HeavyweightBundle(
         as_of=captured_at,
         rows=tuple(rows),
@@ -99,4 +114,7 @@ def calculate_heavyweight_bundle(
         state=state,
         confidence=round(confidence, 1),
         status=status,
+        remaining_weight_pct=round(remaining_weight, 2),
+        estimated_remaining_move_pct=round(remaining_move, 4) if remaining_move is not None else None,
+        market_disagreement=disagreement,
     )

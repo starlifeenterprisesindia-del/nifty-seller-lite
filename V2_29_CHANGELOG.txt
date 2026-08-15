@@ -1,0 +1,24 @@
+NIFTY SELLER LITE V2.29.0 — SAFE DATA HEALTH + TOP-9
+
+Implemented
+- Main screen Data Health: FRESH / DELAYED / DATA KAM / LAST DATA / BROKER MATCH CHECK.
+- Data Health is display-only; it does not change One-Brain scores.
+- Unconfirmed Big Player 1/2 no longer receives confirmed/strong visual treatment.
+- Top-7 upgraded to official Top-9 weights dated 31-Jul-2026.
+- Added Infosys and Bajaj Finance to the existing grouped quote request.
+- Remaining Market is estimated from actual NIFTY move minus Top-9 contribution;
+  no extra 41 stock quote calls are added.
+- Top-9 versus Remaining Market disagreement is shown as a caution.
+- Missing support/resistance now displays a low-confidence estimated round-number
+  zone instead of a fake zero or bare unresolved value.
+
+Intentionally unchanged
+- Final One-Brain BUY/SELL/WAIT calculation and thresholds.
+- Premium calculator.
+- Big Player score formula and 4-point movement threshold.
+- Barrier strength/break-pressure calculation.
+
+Live-market verification pending
+- Confirm Data Health ages against broker timestamps.
+- Confirm the two distinct completed 1-minute Big Player observations.
+- Collect real barrier break/retest samples before enabling role reversal.

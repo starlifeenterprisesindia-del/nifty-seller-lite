@@ -239,7 +239,7 @@ def build_module_impact_audit(
             "OI & Options Flow": 22.0,
             "EMA / MACD / RSI": 14.0,
             "Levels & Volume": 8.0,
-            "NIFTY Top-7": 16.0,
+            "NIFTY Top-9": 16.0,
             "FII/DII (15 Sessions)": 10.0,
             "VIX / Data Integrity": 12.0,
         }
@@ -249,7 +249,7 @@ def build_module_impact_audit(
             "OI & Options Flow": 35.0,
             "EMA / MACD / RSI": 12.2,
             "Levels & Volume": 7.0,
-            "NIFTY Top-7": 15.0,
+            "NIFTY Top-9": 15.0,
             "FII/DII (15 Sessions)": 6.0,
             "VIX / Data Integrity": 9.0,
         }
@@ -731,7 +731,7 @@ def build_compact_evidence_matrix(
             levels_result,
         ),
         _row(
-            "NIFTY Top-7",
+            "NIFTY Top-9",
             heavy_bull,
             heavy_bear,
             heavy_neutral,

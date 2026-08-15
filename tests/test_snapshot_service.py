@@ -107,13 +107,13 @@ class StubClient:
         }
 
 
-def test_weekend_snapshot_is_reference_and_top7_are_present():
+def test_weekend_snapshot_is_reference_and_top9_are_present():
     service = SnapshotService(StubClient(), StubMaster())
     snapshot = service.build(datetime(2026, 7, 19, 13, 37, tzinfo=IST))
     assert snapshot.market_session.code == "CLOSED_WEEKEND"
     assert snapshot.feed_status["quotes"].use_state == "REFERENCE"
     assert snapshot.feed_status["option_chain"].use_state == "REFERENCE"
-    assert len(snapshot.heavyweight_quotes) == 7
+    assert len(snapshot.heavyweight_quotes) == 9
     assert snapshot.feed_status["instruments"].use_state == "READY"
     assert snapshot.indicators.three_minute.status == "READY"
     assert snapshot.indicators.fifteen_minute.status == "READY"

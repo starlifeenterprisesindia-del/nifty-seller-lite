@@ -60,7 +60,7 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
         if "BULL" in option_bias:
             reasons.append("Options/OI flow upar ki taraf support kar raha hai")
         if "BULL" in heavy or snapshot.heavyweights.advancing > snapshot.heavyweights.declining:
-            reasons.append("Top-7 heavy stocks positive hain")
+            reasons.append("Top-9 heavy stocks positive hain")
         if "SUPPORT" in inst or "FII BUYING" in inst or "FUTURES LONG" in inst:
             reasons.append("FII/DII background support de raha hai")
         base = (
@@ -80,7 +80,7 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
         if "BEAR" in option_bias:
             reasons.append("Options/OI flow neeche ki taraf pressure dikha raha hai")
         if "BEAR" in heavy or snapshot.heavyweights.declining > snapshot.heavyweights.advancing:
-            reasons.append("Top-7 heavy stocks weak hain")
+            reasons.append("Top-9 heavy stocks weak hain")
         if "PRESSURE" in inst or "FII SELLING" in inst or "FUTURES SHORT" in inst:
             short_pct = snapshot.institutional_context.latest_fii_futures_short_pct
             if short_pct is not None and short_pct >= 55:

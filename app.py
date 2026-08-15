@@ -43,6 +43,7 @@ from ui.components import (
     render_market_session,
     render_news_context,
     render_main_ai_market_view,
+    render_data_health,
     render_option_chain,
     render_option_flow_matrix,
     render_option_intelligence,
@@ -582,6 +583,7 @@ previous_view_snapshot = (
 )
 
 render_market_session(view_snapshot)
+render_data_health(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
 render_compact_barrier_map(view_snapshot)
 with st.expander("🐘 Big Player Activity — Buying / Selling Alert", expanded=False):
@@ -626,7 +628,7 @@ with st.expander("Advanced Options Evidence", expanded=False):
             "Premium + OI + Volume Flow",
             "1m / 3m / 5m Movement",
             "OI Walls, Clusters & PCR",
-            "Top-7 Weighted Contribution",
+            "Top-9 Weighted Contribution",
             "VIX Context",
             "FII/DII & Event Risk",
             "Live Market News",
@@ -704,7 +706,7 @@ if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":
             [
                 "Candles & Futures Volume",
                 "Option Chain",
-                "Top-7 Quotes",
+                "Top-9 Quotes",
                 "VIX & Future",
                 "Snapshot JSON",
             ]

@@ -92,7 +92,7 @@ def test_compact_matrix_has_eight_rows_and_normalized_directional_scores():
         "OI & Options Flow",
         "EMA / MACD / RSI",
         "Levels & Volume",
-        "NIFTY Top-7",
+        "NIFTY Top-9",
         "FII/DII (15 Sessions)",
         "VIX / Data Integrity",
         "News / Event Risk",
