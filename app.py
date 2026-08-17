@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -60,6 +61,17 @@ from ui.components import (
 )
 from ui.premium_calculator import render_spot_premium_calculator
 from ui.alerts import render_market_alerts
+
+
+@contextmanager
+def persistent_panel(label: str, key: str):
+    """A rerun-safe replacement for expanders used in the auto-refreshing view."""
+    is_open = st.toggle(label, value=False, key=key)
+    if is_open:
+        with st.container(border=True):
+            yield True
+    else:
+        yield False
 
 
 # Backward-compatible compact-level renderer. Older deployed ui/components.py files
@@ -640,68 +652,89 @@ render_market_session(view_snapshot)
 render_data_health(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
-with st.expander("🐘 Big Player Activity — Buying / Selling Alert", expanded=False):
-    render_big_player_activity(view_snapshot)
+with persistent_panel(
+    "🐘 Big Player Activity — Buying / Selling Alert",
+    "panel_big_player_open",
+) as panel_open:
+    if panel_open:
+        render_big_player_activity(view_snapshot)
 render_protected_candidates(view_snapshot)
 render_spot_premium_calculator(view_snapshot)
 
-with st.expander("🔔 Heavy Activity + Manual Price Alerts", expanded=False):
-    render_market_alerts(view_snapshot)
+with persistent_panel(
+    "🔔 Heavy Activity + Manual Price Alerts",
+    "panel_market_alerts_open",
+) as panel_open:
+    if panel_open:
+        render_market_alerts(view_snapshot)
 
-with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):
-    render_evidence_matrix(view_snapshot, previous_view_snapshot)
-    render_market_outlook(view_snapshot)
+with persistent_panel(
+    "Compact Evidence + Next 5–15 Min Outlook",
+    "panel_compact_evidence_open",
+) as panel_open:
+    if panel_open:
+        render_evidence_matrix(view_snapshot, previous_view_snapshot)
+        render_market_outlook(view_snapshot)
 
-with st.expander("Strategy Audit", expanded=False):
-    render_decision(view_snapshot, audit_only=True)
+with persistent_panel("Strategy Audit", "panel_strategy_audit_open") as panel_open:
+    if panel_open:
+        render_decision(view_snapshot, audit_only=True)
 
-with st.expander("Market Decision Ka Reason", expanded=False):
-    render_core_evidence(view_snapshot)
+with persistent_panel(
+    "Market Decision Ka Reason",
+    "panel_decision_reason_open",
+) as panel_open:
+    if panel_open:
+        render_core_evidence(view_snapshot)
 
-    core_tabs = st.tabs(
-        [
-            "Price Action",
-            "Support & Resistance",
-            "Volume",
-            "EMA / MACD / RSI",
-        ]
-    )
-    with core_tabs[0]:
-        render_price_action(view_snapshot)
-    with core_tabs[1]:
-        render_levels(view_snapshot)
-    with core_tabs[2]:
-        render_volume(view_snapshot)
-    with core_tabs[3]:
-        render_indicators(view_snapshot)
+        core_tabs = st.tabs(
+            [
+                "Price Action",
+                "Support & Resistance",
+                "Volume",
+                "EMA / MACD / RSI",
+            ]
+        )
+        with core_tabs[0]:
+            render_price_action(view_snapshot)
+        with core_tabs[1]:
+            render_levels(view_snapshot)
+        with core_tabs[2]:
+            render_volume(view_snapshot)
+        with core_tabs[3]:
+            render_indicators(view_snapshot)
 
-with st.expander("Advanced Options Evidence", expanded=False):
-    render_option_intelligence(view_snapshot)
-    option_tabs = st.tabs(
-        [
-            "Premium + OI + Volume Flow",
-            "1m / 3m / 5m Movement",
-            "OI Walls, Clusters & PCR",
-            "Top-9 Weighted Contribution",
-            "VIX Context",
-            "FII/DII & Event Risk",
-            "Live Market News",
-        ]
-    )
-    with option_tabs[0]:
-        render_option_flow_matrix(view_snapshot)
-    with option_tabs[1]:
-        render_option_windows(view_snapshot)
-    with option_tabs[2]:
-        render_walls_and_pcr(view_snapshot)
-    with option_tabs[3]:
-        render_heavyweight_intelligence(view_snapshot)
-    with option_tabs[4]:
-        render_vix_context(view_snapshot)
-    with option_tabs[5]:
-        render_market_context(view_snapshot)
-    with option_tabs[6]:
-        render_news_context(view_snapshot)
+with persistent_panel(
+    "Advanced Options Evidence",
+    "panel_advanced_options_open",
+) as panel_open:
+    if panel_open:
+        render_option_intelligence(view_snapshot)
+        option_tabs = st.tabs(
+            [
+                "Premium + OI + Volume Flow",
+                "1m / 3m / 5m Movement",
+                "OI Walls, Clusters & PCR",
+                "Top-9 Weighted Contribution",
+                "VIX Context",
+                "FII/DII & Event Risk",
+                "Live Market News",
+            ]
+        )
+        with option_tabs[0]:
+            render_option_flow_matrix(view_snapshot)
+        with option_tabs[1]:
+            render_option_windows(view_snapshot)
+        with option_tabs[2]:
+            render_walls_and_pcr(view_snapshot)
+        with option_tabs[3]:
+            render_heavyweight_intelligence(view_snapshot)
+        with option_tabs[4]:
+            render_vix_context(view_snapshot)
+        with option_tabs[5]:
+            render_market_context(view_snapshot)
+        with option_tabs[6]:
+            render_news_context(view_snapshot)
 
 with st.expander("Download Reports", expanded=False):
 

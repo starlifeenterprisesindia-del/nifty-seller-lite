@@ -1,4 +1,11 @@
-# Nifty Seller Lite 2.31.0
+# Nifty Seller Lite 2.31.1
+
+## Stable View
+
+- Main auto-refreshing detail sections now use session-backed open/closed controls.
+- A 15-second full snapshot refresh no longer closes an open Big Player, Alerts, Compact Evidence, Strategy Audit, Decision Reason, or Advanced Options section.
+- The 5-second Fast Live Monitor remains an isolated fragment and does not rerun the full page.
+- This is presentation-only state; market calculations and the One-Brain decision are unchanged.
 
 ## Hybrid Lite live monitor
 
