@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.30.1_SUPPORT_BUNDLE_REPORTS"
+    version: str = "2.30.2_CAS_ENTRY_GUARD"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12
@@ -29,7 +29,9 @@ class AppConfig:
     candle_max_age_minutes: int = 5
     pre_open_start: time = time(9, 0)
     market_open: time = time(9, 15)
+    cas_start: time = time(15, 15)
     market_close: time = time(15, 30)
+    derivatives_close: time = time(15, 40)
     nifty: InstrumentRef = InstrumentRef(
         name="NIFTY 50",
         security_id="13",

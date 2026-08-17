@@ -940,6 +940,8 @@ class SnapshotService:
                         frozen,
                         status="REFERENCE ONLY",
                         cautions=tuple(dict.fromkeys((*frozen.cautions, "Market band hai; last live activity freeze ki gayi")))[:3],
+                        price_shock_state=big_player_activity.price_shock_state,
+                        price_shock_points=big_player_activity.price_shock_points,
                         frozen_after_close=True,
                     )
                 except (TypeError, ValueError):

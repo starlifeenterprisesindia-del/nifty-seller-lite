@@ -42,6 +42,16 @@ def classify_market_session(
             is_live=False,
             message="Official pre-open window chal rahi hai; regular cash market 09:15 IST par open hota hai. Last completed-session values reference-only hain.",
         )
+    if CONFIG.cas_start <= current_time <= CONFIG.market_close:
+        return MarketSession(
+            code="CLOSING_AUCTION",
+            label="CLOSING AUCTION (CAS) - REFERENCE ONLY",
+            is_live=False,
+            message=(
+                "Cash-market closing auction chal rahi hai. Indicative/final close move ko "
+                "normal intraday direction ya fresh entry signal nahi maana jayega."
+            ),
+        )
     if current_time > CONFIG.market_close:
         return MarketSession(
             code="CLOSED_AFTER_HOURS",

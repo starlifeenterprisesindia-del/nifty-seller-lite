@@ -350,7 +350,8 @@ def _activity_report_rows(snapshot: MarketSnapshot) -> tuple[list[list[Any]], li
     callouts: list[tuple[str, colors.Color]] = []
     if item.price_shock_state != "NONE":
         points = f"{abs(float(item.price_shock_points)):.1f} points" if item.price_shock_points is not None else "points unavailable"
-        callouts.append((f"PRICE SHOCK {item.price_shock_state}: completed spot move {points}. Participation confirmation remains separate.", _RED))
+        shock_label = item.price_shock_state if str(item.price_shock_state).startswith("PRICE SHOCK") else f"PRICE SHOCK {item.price_shock_state}"
+        callouts.append((f"{shock_label}: completed spot move {points}. Participation confirmation remains separate.", _RED))
     if item.frozen_after_close:
         callouts.append(("LAST LIVE ACTIVITY - REFERENCE ONLY: post-close quote changes did not recalculate participation.", _WARN))
     return rows, callouts
