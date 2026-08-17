@@ -1,5 +1,0 @@
-After V2.8.1 is deployed successfully, no application file needs deletion.
-
-Optional documentation cleanup only: delete older V2.7 release documents if they still
-exist. Do not delete application folders, requirements, data/.gitkeep, .streamlit or
-runtime state files.
