@@ -95,6 +95,7 @@ def calculate_big_player_activity(
     core: CoreMarketEvidence,
     history: list[dict[str, Any]] | None = None,
     observation_key: str = "",
+    spot_candles_1m: pd.DataFrame | None = None,
 ) -> BigPlayerActivity:
     """Combine participation evidence without claiming trader identity.
 
@@ -195,6 +196,25 @@ def calculate_big_player_activity(
         else 0.0
     )
     required_move = 4.0
+
+    spot_completed = spot_candles_1m.copy() if spot_candles_1m is not None else pd.DataFrame()
+    if not spot_completed.empty and "is_complete" in spot_completed.columns:
+        spot_completed = spot_completed[spot_completed["is_complete"].fillna(False).astype(bool)]
+    spot_completed = spot_completed.dropna(subset=["close"]).tail(16) if not spot_completed.empty else spot_completed
+    shock_3m = (
+        float(spot_completed.iloc[-1]["close"]) - float(spot_completed.iloc[-4]["close"])
+        if len(spot_completed) >= 4 else 0.0
+    )
+    shock_15m = (
+        float(spot_completed.iloc[-1]["close"]) - float(spot_completed.iloc[0]["close"])
+        if len(spot_completed) >= 16 else 0.0
+    )
+    shock_points = shock_15m if abs(shock_15m) >= abs(shock_3m) else shock_3m
+    price_shock_state = (
+        "PRICE SHOCK UP" if shock_points >= 30.0 or shock_3m >= 15.0
+        else "PRICE SHOCK DOWN" if shock_points <= -30.0 or shock_3m <= -15.0
+        else "NONE"
+    )
     directional_support = sum(
         (
             futures_direction == ("BUY" if direction == "BUYING" else "SELL"),
@@ -344,4 +364,6 @@ def calculate_big_player_activity(
         move_state=move_state,
         move_points=round(float(move_points), 1),
         required_move_points=required_move,
+        price_shock_state=price_shock_state,
+        price_shock_points=round(abs(float(shock_points)), 1) if price_shock_state != "NONE" else None,
     )

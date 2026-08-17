@@ -129,8 +129,60 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
     )
 
 
-def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
+def render_compact_barrier_map(
+    snapshot: MarketSnapshot,
+    previous_snapshot: MarketSnapshot | None = None,
+) -> None:
     item = snapshot.barrier_map
+
+    def role_reversal_message() -> tuple[str, bool] | None:
+        if previous_snapshot is None:
+            return None
+        previous = previous_snapshot.barrier_map
+        candidates = tuple(
+            (old, new, old_side, new_side)
+            for old_side, old_levels, new_side, new_levels in (
+                ("SUPPORT", (previous.nearest_support, previous.next_support), "RESISTANCE", (item.nearest_resistance, item.next_resistance)),
+                ("RESISTANCE", (previous.nearest_resistance, previous.next_resistance), "SUPPORT", (item.nearest_support, item.next_support)),
+            )
+            for old in old_levels
+            for new in new_levels
+        )
+        completed = snapshot.candles_1m.copy()
+        if not completed.empty and "is_complete" in completed.columns:
+            completed = completed[completed["is_complete"].fillna(False).astype(bool)]
+        completed = completed.dropna(subset=["high", "low", "close"]).tail(12) if not completed.empty else completed
+        for old, new, old_side, new_side in candidates:
+            if old is None or new is None:
+                continue
+            lower = max(float(old.lower), float(new.lower))
+            upper = min(float(old.upper), float(new.upper))
+            if lower > upper:
+                continue
+            confirmed = False
+            if new_side == "RESISTANCE":
+                below_seen = False
+                for _, candle in completed.iterrows():
+                    close = float(candle["close"])
+                    if close < lower:
+                        if below_seen and float(candle["high"]) >= lower:
+                            confirmed = True
+                            break
+                        below_seen = True
+            else:
+                above_seen = False
+                for _, candle in completed.iterrows():
+                    close = float(candle["close"])
+                    if close > upper:
+                        if above_seen and float(candle["low"]) <= upper:
+                            confirmed = True
+                            break
+                        above_seen = True
+            zone = f"{lower:,.0f}–{upper:,.0f}"
+            if confirmed:
+                return f"Confirmed Role Reversal: Broken {old_side.title()} → {new_side.title()} {zone}", True
+            return f"Possible Role Reversal — Retest Pending: Broken {old_side.title()} → {new_side.title()} {zone}", False
+        return None
 
     def pattern_level_text(
         signal: Any | None, fallback: str, *, show_possible_effect: bool = False
@@ -275,6 +327,13 @@ def render_compact_barrier_map(snapshot: MarketSnapshot) -> None:
             f"Decision / Compression Zone: {overlap_text}. Is overlap ke andar support aur resistance alag signal nahi; "
             "clear 3-minute close ke baad hi break maana jayega."
         )
+    reversal = role_reversal_message()
+    if reversal is not None:
+        message, confirmed = reversal
+        if confirmed:
+            st.success("🔄 **" + message + "**")
+        else:
+            st.warning("🔄 **" + message + "** · Retest ke bina confirmed barrier nahi.")
     st.caption(
         f"Probable range {range_text} · Confidence {range_item.confidence:.0f}/100 · "
         f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100. Full map detailed section me hai."
@@ -990,6 +1049,18 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
     if item is None:
         return
 
+    if item.price_shock_state != "NONE":
+        shock_note = (
+            "Badi price move mili, lekin heavy participation alag se confirm hona zaroori hai."
+            if item.confirmation_count < 2
+            else "Badi price move aur activity evidence dono mile."
+        )
+        st.warning(
+            f"⚡ **{item.price_shock_state} — {item.price_shock_points or 0:.1f} points** · {shock_note}"
+        )
+    if item.frozen_after_close:
+        st.info("🔒 **LAST LIVE ACTIVITY — REFERENCE ONLY** · Market close/CAS ke baad score freeze hai.")
+
     activity_type = str(getattr(item, "activity_type", "DIRECTIONAL ACTIVITY"))
     closing_flow = activity_type in {"SHORT COVERING", "LONG UNWINDING"}
     if closing_flow:
@@ -1038,6 +1109,8 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         if item.state == "NORMAL"
         else f"{item.persistence} {item.confirmation_count}/{item.confirmation_total}"
     )
+    if item.frozen_after_close:
+        confirmation_text = "LAST LIVE · REFERENCE ONLY · " + confirmation_text
     html = (
         '<style>'
         '.bpa-hero{border:2px solid rgba(127,127,127,.28);border-radius:16px;padding:14px;margin:5px 0 12px;background:rgba(127,127,127,.05)}'

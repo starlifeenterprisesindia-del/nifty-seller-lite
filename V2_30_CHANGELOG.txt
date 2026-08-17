@@ -1,0 +1,24 @@
+NIFTY SELLER LITE V2.30.0 — CAS, PRICE SHOCK, ROLE REVERSAL
+
+Implemented
+- Post-market/CAS Big Player freeze: last valid live activity payload is stored and
+  reused after normal market close instead of recalculating a changing new alert.
+- Frozen activity is clearly labelled LAST LIVE ACTIVITY — REFERENCE ONLY.
+- Price Shock evidence uses completed NIFTY 1-minute candles and reports a sharp
+  3-minute/15-minute move separately from institutional/heavy participation.
+- Price Shock never changes the canonical One-Brain BUY/SELL/WAIT scores.
+- Broken support becoming resistance, or resistance becoming support, is shown as
+  Possible Role Reversal — Retest Pending.
+- Role reversal becomes confirmed only after a separate completed candle first
+  moves beyond the broken zone and a later completed candle retests and holds/rejects.
+
+Intentionally unchanged
+- One-Brain strategy formulas and thresholds.
+- Big Player score formula and two-observation confirmation.
+- Premium calculator and protected candidate calculations.
+- Existing barrier strength and break-pressure calculations.
+
+Verification
+- Big Player targeted tests pass, including same-candle dedupe and Price Shock.
+- Activity payload persistence smoke test passes.
+- Python compile and AST checks pass.

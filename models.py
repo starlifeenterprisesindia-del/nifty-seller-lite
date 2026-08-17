@@ -511,6 +511,9 @@ class BigPlayerActivity:
     move_state: str = "ABHI SAAF NAHI"
     move_points: float | None = None
     required_move_points: float = 4.0
+    price_shock_state: str = "NONE"
+    price_shock_points: float | None = None
+    frozen_after_close: bool = False
 
 
 def _unavailable_strategy(name: str) -> StrategyEvaluation:

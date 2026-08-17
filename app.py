@@ -65,7 +65,7 @@ from ui.alerts import render_market_alerts
 try:
     from ui.components import render_compact_barrier_map
 except ImportError:
-    def render_compact_barrier_map(snapshot) -> None:
+    def render_compact_barrier_map(snapshot, previous_snapshot=None) -> None:
         item = getattr(snapshot, "barrier_map", None)
         if item is None:
             return
@@ -585,7 +585,7 @@ previous_view_snapshot = (
 render_market_session(view_snapshot)
 render_data_health(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
-render_compact_barrier_map(view_snapshot)
+render_compact_barrier_map(view_snapshot, previous_view_snapshot)
 with st.expander("🐘 Big Player Activity — Buying / Selling Alert", expanded=False):
     render_big_player_activity(view_snapshot)
 render_protected_candidates(view_snapshot)

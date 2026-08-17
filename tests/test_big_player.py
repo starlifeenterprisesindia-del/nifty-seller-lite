@@ -142,3 +142,26 @@ def test_short_covering_is_not_labelled_as_fresh_long_build_up():
     assert "fresh long buying confirm nahi" in " | ".join(result.cautions)
     assert "Purane sellers" in result.participant_explanation
     assert "fresh long buying" in result.next_confirmation
+
+
+def test_price_shock_is_reported_without_forcing_large_player_confirmation():
+    inputs = _inputs("DOWN")
+    inputs["volume"].three_minute.relative_volume = 0.7
+    inputs["options"].bullish_score = 40
+    inputs["options"].bearish_score = 40
+    inputs["heavyweights"].state = "MIXED / FLAT"
+    inputs["spot_candles_1m"] = pd.DataFrame(
+        [
+            {
+                "timestamp": f"2026-08-17 15:{index:02d}",
+                "high": 24342.0 - index * 3.4,
+                "low": 24338.0 - index * 3.4,
+                "close": 24340.0 - index * 3.4,
+                "is_complete": True,
+            }
+            for index in range(16)
+        ]
+    )
+    result = calculate_big_player_activity(**inputs, history=[])
+    assert result.price_shock_state == "PRICE SHOCK DOWN"
+    assert result.price_shock_points is not None and result.price_shock_points >= 30

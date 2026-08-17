@@ -34,6 +34,7 @@ class ActivityStateStore:
         state: str,
         observation_key: str = "",
         spot: float | None = None,
+        activity_payload: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         rows = self.load(captured_at)
         current = {
@@ -43,6 +44,7 @@ class ActivityStateStore:
             "state": str(state),
             "observation_key": str(observation_key),
             "spot": float(spot) if spot is not None else None,
+            "activity_payload": activity_payload,
         }
         if rows:
             try:

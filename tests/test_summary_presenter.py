@@ -24,7 +24,7 @@ def test_pdf_uses_same_presentation_summary_and_not_a_duplicate_explanation_engi
 def test_main_ai_is_top_screen_and_developer_raw_is_hidden_by_default():
     root = Path(__file__).resolve().parents[1]
     app = (root / "app.py").read_text(encoding="utf-8")
-    assert app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)") < app.index("render_compact_barrier_map(view_snapshot)")
+    assert app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)") < app.index("render_compact_barrier_map(view_snapshot, previous_view_snapshot)")
     assert 'if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":' in app
     assert "Delete selected date" not in app
 
@@ -33,7 +33,7 @@ def test_simple_view_prioritizes_final_brain_levels_and_one_compact_setup():
     root = Path(__file__).resolve().parents[1]
     app = (root / "app.py").read_text(encoding="utf-8")
     main = app.index("render_main_ai_market_view(view_snapshot, previous_view_snapshot)")
-    levels = app.index("render_compact_barrier_map(view_snapshot)")
+    levels = app.index("render_compact_barrier_map(view_snapshot, previous_view_snapshot)")
     calculator = app.index("render_spot_premium_calculator(view_snapshot)")
     assert main < levels < calculator
     assert 'with st.expander("Risk & one-trade discipline", expanded=False):' not in app

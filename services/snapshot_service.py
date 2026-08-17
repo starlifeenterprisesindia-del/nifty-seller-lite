@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict, fields, replace
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,7 +34,7 @@ from analysis.pre_touch_barriers import calculate_pre_touch_barriers
 from analysis.trade_plan import calculate_trade_plan
 from analysis.volume import calculate_volume_bundle
 from config import CONFIG, IST_TIMEZONE
-from models import DisciplineState, FeedStatus, MarketSnapshot, NewsContext, RiskProfile
+from models import BigPlayerActivity, DisciplineState, FeedStatus, MarketSnapshot, NewsContext, RiskProfile
 from services.dhan_client import DhanClient
 from services.discipline_store import DisciplineStore
 from services.errors import SnapshotBuildError
@@ -916,6 +917,7 @@ class SnapshotService:
             core=core_evidence,
             history=activity_history,
             observation_key=activity_observation_key,
+            spot_candles_1m=candles_1m,
         )
         if market_session.is_live:
             self.activity_state_store.append(
@@ -925,7 +927,23 @@ class SnapshotService:
                 state=big_player_activity.state,
                 observation_key=activity_observation_key,
                 spot=activity_spot,
+                activity_payload=asdict(big_player_activity),
             )
+        elif activity_history:
+            frozen_payload = activity_history[-1].get("activity_payload")
+            if isinstance(frozen_payload, dict):
+                allowed = {item.name for item in fields(BigPlayerActivity)}
+                safe_payload = {key: value for key, value in frozen_payload.items() if key in allowed}
+                try:
+                    frozen = BigPlayerActivity(**safe_payload)
+                    big_player_activity = replace(
+                        frozen,
+                        status="REFERENCE ONLY",
+                        cautions=tuple(dict.fromkeys((*frozen.cautions, "Market band hai; last live activity freeze ki gayi")))[:3],
+                        frozen_after_close=True,
+                    )
+                except (TypeError, ValueError):
+                    pass
 
         discipline_error: str | None = None
         signal_appended = False
