@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.30.0_CAS_SHOCK_ROLE_REVERSAL"
+    version: str = "2.30.1_SUPPORT_BUNDLE_REPORTS"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     quote_max_age_seconds: int = 12

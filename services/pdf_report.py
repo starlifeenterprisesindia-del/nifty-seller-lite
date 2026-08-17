@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 from io import BytesIO
+import json
 from typing import Any, Iterable, Sequence
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 from reportlab.lib import colors
@@ -273,6 +275,87 @@ def _completed_audit_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.loc[frame["is_complete"].fillna(False).eq(True)].copy()
 
 
+def _market_data_health(snapshot: MarketSnapshot) -> str:
+    feed_ok, _ = required_live_feed_state(snapshot)
+    if snapshot.market_session.is_live and feed_ok:
+        return "MARKET DATA FRESH"
+    if snapshot.market_session.is_live:
+        return "MARKET DATA DELAYED / INCOMPLETE"
+    return "LAST MARKET DATA - REFERENCE ONLY"
+
+
+def _role_reversal_status(
+    snapshot: MarketSnapshot,
+    previous_snapshot: MarketSnapshot | None,
+) -> tuple[str, bool] | None:
+    if previous_snapshot is None:
+        return None
+    current = snapshot.barrier_map
+    previous = previous_snapshot.barrier_map
+    candidates = tuple(
+        (old, new, old_side, new_side)
+        for old_side, old_levels, new_side, new_levels in (
+            ("SUPPORT", (previous.nearest_support, previous.next_support), "RESISTANCE", (current.nearest_resistance, current.next_resistance)),
+            ("RESISTANCE", (previous.nearest_resistance, previous.next_resistance), "SUPPORT", (current.nearest_support, current.next_support)),
+        )
+        for old in old_levels
+        for new in new_levels
+    )
+    completed = _completed_audit_frame(snapshot.candles_1m)
+    required = {"high", "low", "close"}
+    if completed is None or completed.empty or not required.issubset(completed.columns):
+        completed = pd.DataFrame(columns=sorted(required))
+    else:
+        completed = completed.dropna(subset=sorted(required)).tail(12)
+    for old, new, old_side, new_side in candidates:
+        if old is None or new is None:
+            continue
+        lower = max(float(old.lower), float(new.lower))
+        upper = min(float(old.upper), float(new.upper))
+        if lower > upper:
+            continue
+        confirmed = False
+        break_seen = False
+        for _, candle in completed.iterrows():
+            close = float(candle["close"])
+            if new_side == "RESISTANCE" and close < lower:
+                if break_seen and float(candle["high"]) >= lower:
+                    confirmed = True
+                    break
+                break_seen = True
+            elif new_side == "SUPPORT" and close > upper:
+                if break_seen and float(candle["low"]) <= upper:
+                    confirmed = True
+                    break
+                break_seen = True
+        zone = f"{lower:,.0f}-{upper:,.0f}"
+        label = "CONFIRMED ROLE REVERSAL" if confirmed else "POSSIBLE ROLE REVERSAL - RETEST PENDING"
+        return f"{label}: Broken {old_side.title()} -> {new_side.title()} {zone}", confirmed
+    return None
+
+
+def _activity_report_rows(snapshot: MarketSnapshot) -> tuple[list[list[Any]], list[tuple[str, colors.Color]]]:
+    item = snapshot.big_player_activity
+    if item is None:
+        return [["Unavailable", "-", "-", "-", "-", "No activity payload"]], []
+    use_status = "LAST LIVE ACTIVITY - REFERENCE ONLY" if item.frozen_after_close else item.status
+    rows = [[
+        item.direction,
+        f"{item.score:.1f}/100",
+        f"{item.confirmation_count}/{item.confirmation_total}",
+        f"{item.futures_volume_ratio:.2f}x" if item.futures_volume_ratio is not None else "-",
+        f"{item.futures_oi_change_pct:+.2f}% | {item.futures_setup}" if item.futures_oi_change_pct is not None else item.futures_setup,
+        use_status,
+    ]]
+    callouts: list[tuple[str, colors.Color]] = []
+    if item.price_shock_state != "NONE":
+        points = f"{abs(float(item.price_shock_points)):.1f} points" if item.price_shock_points is not None else "points unavailable"
+        callouts.append((f"PRICE SHOCK {item.price_shock_state}: completed spot move {points}. Participation confirmation remains separate.", _RED))
+    if item.frozen_after_close:
+        callouts.append(("LAST LIVE ACTIVITY - REFERENCE ONLY: post-close quote changes did not recalculate participation.", _WARN))
+    return rows, callouts
+
+
 def _page_decor(canvas: Any, document: Any, snapshot: MarketSnapshot) -> None:
     canvas.saveState()
     width, height = _PAGE_SIZE
@@ -395,7 +478,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
                 snapshot.decision.final_action,
                 f"{snapshot.decision.decision_confidence:.1f}/100",
                 f"{speed.state} {speed.score:.1f}/100",
-                "LIVE" if feed_ok else "REFERENCE ONLY",
+                _market_data_health(snapshot),
             ]],
             widths=[31 * mm, 30 * mm, 34 * mm, 34 * mm, 38 * mm, 50 * mm, 40 * mm],
             compact=True,
@@ -408,6 +491,19 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             _BLUE,
         )
     )
+
+    activity_rows, activity_callouts = _activity_report_rows(snapshot)
+    story.append(_sub_title("Big Player Activity, Price Shock and Freeze Status"))
+    story.append(
+        _table(
+            ["Activity", "Score", "Confirm", "Futures volume", "OI / setup", "Use status"],
+            activity_rows,
+            widths=[34 * mm, 26 * mm, 27 * mm, 34 * mm, 72 * mm, 60 * mm],
+            compact=True,
+        )
+    )
+    for message, color in activity_callouts:
+        story.append(_callout(message, color))
 
     roadmap = snapshot.barrier_map
     r1 = roadmap.nearest_resistance
@@ -556,6 +652,11 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
         )
     )
     story.append(Paragraph(roadmap.summary, styles["Body"]))
+
+    reversal = _role_reversal_status(snapshot, previous_snapshot)
+    if reversal is not None:
+        reversal_text, confirmed = reversal
+        story.append(_callout(reversal_text, _GREEN if confirmed else _WARN))
 
     decision = snapshot.decision
     story.append(_section_title("4. Detailed Final One-Brain Decision"))
@@ -1153,7 +1254,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
 
     # Market support and risk.
     story.append(PageBreak())
-    story.append(_section_title("8. Top-7, VIX, FII/DII, News and Event Risk"))
+    story.append(_section_title("8. Top-9, VIX, FII/DII, News and Event Risk"))
     heavy = snapshot.heavyweights
     story.append(
         _table(
@@ -1192,6 +1293,19 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
                 25 * mm,
                 22 * mm,
             ],
+            compact=True,
+        )
+    )
+    story.append(
+        _table(
+            ["Top-9 covered weight", "Remaining market weight", "Estimated remaining move", "Top-9 vs remaining market"],
+            [[
+                _pct(heavy.covered_weight_pct),
+                _pct(heavy.remaining_weight_pct),
+                _pct(heavy.estimated_remaining_move_pct),
+                heavy.market_disagreement,
+            ]],
+            widths=[58 * mm, 58 * mm, 58 * mm, 83 * mm],
             compact=True,
         )
     )
@@ -1896,6 +2010,19 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
         )
     )
 
+    activity_rows, activity_callouts = _activity_report_rows(snapshot)
+    story.append(_sub_title("Activity / Shock Status"))
+    story.append(
+        _table(
+            ["Activity", "Score", "Confirm", "Futures volume", "OI / setup", "Use status"],
+            activity_rows,
+            widths=[34 * mm, 26 * mm, 27 * mm, 34 * mm, 72 * mm, 60 * mm],
+            compact=True,
+        )
+    )
+    for message, color in activity_callouts:
+        story.append(_callout(message, color))
+
     candidate_name, candidate_score, candidate_plan, candidate_selected = best_existing_candidate(snapshot)
     story.append(_sub_title("Abhi ka Plan"))
     if candidate_plan is not None and candidate_plan.available:
@@ -1947,6 +2074,11 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
                 compact=True,
             )
         )
+
+    reversal = _role_reversal_status(snapshot, previous_snapshot)
+    if reversal is not None:
+        reversal_text, confirmed = reversal
+        story.append(_callout(reversal_text, _GREEN if confirmed else _WARN))
 
     r = snapshot.barrier_map.trading_range
     inst = snapshot.institutional_context
@@ -2012,11 +2144,13 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
 
     ready_windows = sum(window.status == "READY" for window in snapshot.option_intelligence.windows)
     safety_rows = [
-        ["Data feeds", "LIVE" if feed_ok else "LAST AVAILABLE"],
+        ["Market data health", _market_data_health(snapshot)],
         ["Option flow reliability", f"{snapshot.option_intelligence.confidence:.1f}% | windows {ready_windows}/{CONFIG.execution_required_flow_windows}"],
         ["3m / 15m", snapshot.price_action.relationship],
         ["News freshness", f"{news.status} | newest {news.newest_age_minutes:.0f}m" if news.newest_age_minutes is not None else news.status],
         ["FII/DII journal", f"{inst.observations}/15 sessions"],
+        ["App / snapshot", f"{CONFIG.version} | {snapshot.snapshot_id}"],
+        ["Top-9 coverage", f"{snapshot.heavyweights.covered_weight_pct:.1f}% covered | {snapshot.heavyweights.remaining_weight_pct:.1f}% remaining | {snapshot.heavyweights.market_disagreement}"],
     ]
     story.append(_sub_title("Data Check"))
     story.append(_table(["Check", "Current"], safety_rows, widths=[80 * mm, 170 * mm], compact=True))
@@ -2038,3 +2172,59 @@ def audit_pdf_filename(snapshot: MarketSnapshot) -> str:
     timestamp = snapshot.created_at.strftime("%Y%m%d_%H%M%S")
     short_id = snapshot.snapshot_id[-8:].replace("-", "")
     return f"nifty_seller_lite_audit_{timestamp}_{short_id}.pdf"
+
+
+def build_support_bundle(
+    snapshot: MarketSnapshot,
+    previous_snapshot: MarketSnapshot | None = None,
+) -> bytes:
+    """Create one credential-free handover ZIP for remote diagnosis and updates."""
+
+    output = BytesIO()
+    full_pdf = build_full_audit_pdf(snapshot, previous_snapshot)
+    manifest = {
+        "bundle_schema": "NSL_SUPPORT_BUNDLE_V1",
+        "app_version": CONFIG.version,
+        "snapshot_id": snapshot.snapshot_id,
+        "previous_snapshot_id": previous_snapshot.snapshot_id if previous_snapshot else None,
+        "created_at": snapshot.created_at.isoformat(),
+        "market_session": snapshot.market_session.label,
+        "market_data_health": _market_data_health(snapshot),
+        "contains_credentials": False,
+        "broker_screenshots_requested": [
+            "NIFTY 15-minute chart",
+            "NIFTY 3-minute chart",
+            "NIFTY option-chain OI/Volume/Greeks near ATM",
+        ],
+        "notes": [
+            "All CSV candles are the snapshot frames available to the app.",
+            "The PDF and JSON are read-only views of the same canonical snapshot.",
+            "No Dhan access token, client id, password or Streamlit secret is included.",
+        ],
+    }
+    frames = {
+        "spot_candles_1m.csv": snapshot.candles_1m,
+        "spot_candles_3m.csv": snapshot.candles_3m,
+        "spot_candles_15m.csv": snapshot.candles_15m,
+        "future_candles_1m.csv": snapshot.future_candles_1m,
+        "future_candles_3m.csv": snapshot.future_candles_3m,
+        "future_candles_15m.csv": snapshot.future_candles_15m,
+        "option_chain.csv": snapshot.option_chain,
+    }
+    with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
+        archive.writestr("README.txt", "Nifty Seller Lite Support Bundle\n\nSend this single ZIP with the requested brokerage screenshots. It contains no credentials.\n")
+        archive.writestr("support_manifest.json", json.dumps(manifest, indent=2, ensure_ascii=True))
+        archive.writestr("current_snapshot.json", json.dumps(snapshot.public_summary(), indent=2, ensure_ascii=True))
+        if previous_snapshot is not None:
+            archive.writestr("previous_snapshot.json", json.dumps(previous_snapshot.public_summary(), indent=2, ensure_ascii=True))
+        archive.writestr("complete_diagnostic_report.pdf", full_pdf)
+        for name, frame in frames.items():
+            safe_frame = frame if frame is not None else pd.DataFrame()
+            archive.writestr(name, safe_frame.to_csv(index=False))
+    return output.getvalue()
+
+
+def support_bundle_filename(snapshot: MarketSnapshot) -> str:
+    timestamp = snapshot.created_at.strftime("%Y%m%d_%H%M%S")
+    short_id = snapshot.snapshot_id[-8:].replace("-", "")
+    return f"nifty_seller_lite_support_bundle_{timestamp}_{short_id}.zip"

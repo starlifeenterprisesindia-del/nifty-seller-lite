@@ -44,7 +44,7 @@ Compact, read-only NIFTY options decision-support app using one canonical strate
 - Optional manual upper/lower targets
 - Compact 5-15 minute outlook and all-five strategy audit
 - Collapsed market and options evidence
-- Quick and Full Audit PDF downloads
+- Quick PDF, Complete Diagnostic PDF and one-click credential-free Support Bundle ZIP
 
 ## One-Brain boundary
 

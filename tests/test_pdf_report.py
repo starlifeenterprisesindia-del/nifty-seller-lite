@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from services.pdf_report import (audit_pdf_filename, build_full_audit_pdf, build_quick_market_pdf, quick_pdf_filename)
+from services.pdf_report import (
+    audit_pdf_filename,
+    build_full_audit_pdf,
+    build_quick_market_pdf,
+    build_support_bundle,
+    quick_pdf_filename,
+    support_bundle_filename,
+)
 from services.snapshot_service import SnapshotService
 
 
@@ -120,3 +127,29 @@ def test_quick_pdf_filename_is_snapshot_specific():
     name = quick_pdf_filename(snapshot)
     assert name.startswith("nifty_seller_lite_quick_20260719_133700_")
     assert name.endswith(".pdf")
+
+
+def test_support_bundle_is_single_credential_free_handover_zip():
+    from io import BytesIO
+    import json
+    from zipfile import ZipFile
+
+    snapshot = _snapshot_fixture()
+    payload = build_support_bundle(snapshot)
+    assert payload.startswith(b"PK")
+    with ZipFile(BytesIO(payload)) as archive:
+        names = set(archive.namelist())
+        assert "complete_diagnostic_report.pdf" in names
+        assert "current_snapshot.json" in names
+        assert "support_manifest.json" in names
+        assert "option_chain.csv" in names
+        assert "spot_candles_3m.csv" in names
+        manifest = json.loads(archive.read("support_manifest.json"))
+        assert manifest["contains_credentials"] is False
+        combined_names = " ".join(names).lower()
+        assert "token" not in combined_names
+        assert "secret" not in combined_names
+
+    name = support_bundle_filename(snapshot)
+    assert name.startswith("nifty_seller_lite_support_bundle_20260719_133700_")
+    assert name.endswith(".zip")

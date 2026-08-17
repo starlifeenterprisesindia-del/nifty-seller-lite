@@ -26,7 +26,9 @@ from services.pdf_report import (
     audit_pdf_filename,
     build_full_audit_pdf,
     build_quick_market_pdf,
+    build_support_bundle,
     quick_pdf_filename,
+    support_bundle_filename,
 )
 from services.snapshot_service import SnapshotService
 from ui.components import (
@@ -655,9 +657,10 @@ with st.expander("Download Reports", expanded=False):
     if pdf_snapshot_key != snapshot.snapshot_id:
         st.session_state.pop("audit_pdf_bytes", None)
         st.session_state.pop("quick_pdf_bytes", None)
+        st.session_state.pop("support_bundle_bytes", None)
         st.session_state.audit_pdf_snapshot_id = snapshot.snapshot_id
 
-    quick_col, full_col = st.columns(2)
+    quick_col, full_col, support_col = st.columns(3)
     with quick_col:
         generate_quick_pdf = st.button(
             "Generate Quick Market Report", type="primary", width="stretch"
@@ -681,22 +684,42 @@ with st.expander("Download Reports", expanded=False):
             )
 
     with full_col:
-        generate_pdf = st.button("Generate Full Audit PDF", width="stretch")
+        generate_pdf = st.button("Generate Complete Diagnostic PDF", width="stretch")
         if generate_pdf:
             try:
                 with st.spinner("Building full audit PDF from the current snapshot only..."):
                     st.session_state.audit_pdf_bytes = build_full_audit_pdf(
                         view_snapshot, previous_view_snapshot
                     )
-                st.success("Full Audit PDF ready")
+                st.success("Complete Diagnostic PDF ready")
             except Exception as exc:
-                st.error(f"Full Audit PDF not generated: {exc}")
+                st.error(f"Complete Diagnostic PDF not generated: {exc}")
         if st.session_state.get("audit_pdf_bytes"):
             st.download_button(
-                "Download Full Audit PDF",
+                "Download Complete Diagnostic PDF",
                 data=st.session_state.audit_pdf_bytes,
                 file_name=audit_pdf_filename(snapshot),
                 mime="application/pdf",
+                width="stretch",
+            )
+
+    with support_col:
+        generate_bundle = st.button("Generate Support Bundle", width="stretch")
+        if generate_bundle:
+            try:
+                with st.spinner("Building one credential-free support ZIP..."):
+                    st.session_state.support_bundle_bytes = build_support_bundle(
+                        view_snapshot, previous_view_snapshot
+                    )
+                st.success("Support Bundle ready - update/diagnosis ke liye isi ZIP ko bhejein")
+            except Exception as exc:
+                st.error(f"Support Bundle not generated: {exc}")
+        if st.session_state.get("support_bundle_bytes"):
+            st.download_button(
+                "Download Support Bundle ZIP",
+                data=st.session_state.support_bundle_bytes,
+                file_name=support_bundle_filename(snapshot),
+                mime="application/zip",
                 width="stretch",
             )
 
