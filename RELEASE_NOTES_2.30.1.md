@@ -1,4 +1,14 @@
-# Nifty Seller Lite 2.30.2
+# Nifty Seller Lite 2.31.0
+
+## Hybrid Lite live monitor
+
+- Adds a lightweight 5-second live monitor for NIFTY and the current ATM CE/PE pair.
+- Changes the default full One-Brain snapshot interval to 15 seconds.
+- Keeps live quote display separate from the authoritative One-Brain decision, so fast price movement cannot create noisy BUY/SELL flips.
+- Uses one batched quote request per fast-monitor cycle; it does not rebuild candles, option chain, news, reports, or the full strategy brain every 5 seconds.
+- Pauses both automatic paths when the market session is not live.
+- Falls back safely to the last complete snapshot if the lightweight quote request fails.
+- Requires no separate server while the Streamlit browser tab remains open.
 
 ## Support Bundle and report update
 

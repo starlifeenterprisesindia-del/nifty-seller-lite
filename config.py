@@ -21,9 +21,11 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.30.2_CAS_ENTRY_GUARD"
+    version: str = "2.31.0_HYBRID_LITE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
+    fast_monitor_interval_seconds: int = 5
+    full_snapshot_default_seconds: int = 15
     quote_max_age_seconds: int = 12
     context_quote_max_age_seconds: int = 60
     candle_max_age_minutes: int = 5

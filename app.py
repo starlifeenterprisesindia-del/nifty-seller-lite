@@ -31,6 +31,7 @@ from services.pdf_report import (
     support_bundle_filename,
 )
 from services.snapshot_service import SnapshotService
+from services.live_monitor import fetch_fast_quotes, monitor_timestamp
 from ui.components import (
     render_candles,
     render_decision,
@@ -224,11 +225,22 @@ with st.sidebar:
         )
         interval_seconds = st.selectbox(
             "Har kitni der snapshot",
-            (60, 30),
+            (15, 30, 60),
             index=0,
-            format_func=lambda value: "1 minute" if value == 60 else "30 second",
+            format_func=lambda value: (
+                "1 minute" if value == 60 else f"{value} second"
+            ),
             key="auto_snapshot_interval_seconds",
             disabled=not auto_enabled,
+        )
+        fast_monitor_enabled = st.toggle(
+            "5-second Fast Live Monitor",
+            value=True,
+            key="fast_monitor_enabled",
+            disabled=not auto_enabled,
+        )
+        st.caption(
+            "Fast Monitor sirf NIFTY + ATM CE/PE quote leta hai; One-Brain selected interval par hi rebuild hota hai."
         )
         if auto_enabled and "auto_snapshot_started_at" not in st.session_state:
             st.session_state.auto_snapshot_started_at = time.time()
@@ -270,7 +282,10 @@ with st.sidebar:
                 float(st.session_state.get("auto_snapshot_reserved_at", 0.0)),
             )
             interval = int(
-                st.session_state.get("auto_snapshot_interval_seconds", 60)
+                st.session_state.get(
+                    "auto_snapshot_interval_seconds",
+                    CONFIG.full_snapshot_default_seconds,
+                )
             )
             next_in = max(0, round(interval - (now_value - last_fetch)))
             st.caption(
@@ -583,6 +598,43 @@ previous_view_snapshot = (
     if previous_snapshot is not None
     else None
 )
+
+
+@st.fragment(
+    run_every=(
+        CONFIG.fast_monitor_interval_seconds
+        if st.session_state.get("auto_snapshot_enabled", False)
+        and st.session_state.get("fast_monitor_enabled", True)
+        else None
+    )
+)
+def render_fast_live_monitor() -> None:
+    if not st.session_state.get("auto_snapshot_enabled", False):
+        return
+    if not st.session_state.get("fast_monitor_enabled", True):
+        return
+    current = st.session_state.get("snapshot")
+    if current is None or not getattr(current.market_session, "is_live", False):
+        st.caption("⚡ Fast Monitor PAUSED — market live nahi")
+        return
+    try:
+        credentials = Credentials(client_id=client_id, access_token=access_token)
+        rows = fetch_fast_quotes(DhanClient(credentials), current)
+        if not rows:
+            st.caption("⚡ Fast Monitor — quote unavailable; full snapshot safe hai")
+            return
+        with st.container(border=True):
+            st.caption(f"⚡ FAST LIVE MONITOR · {monitor_timestamp()} · One-Brain unchanged")
+            cols = st.columns(len(rows))
+            for col, item in zip(cols, rows):
+                value = f"{item.last_price:,.2f}" if item.last_price is not None else "—"
+                delta = f"{item.change:+.2f}" if item.change is not None else None
+                col.metric(item.label, value, delta)
+    except Exception as exc:
+        st.caption(f"⚡ Fast Monitor fallback — full snapshot safe hai ({exc})")
+
+
+render_fast_live_monitor()
 
 render_market_session(view_snapshot)
 render_data_health(view_snapshot)
