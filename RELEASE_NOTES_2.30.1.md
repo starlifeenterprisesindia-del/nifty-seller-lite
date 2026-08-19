@@ -1,4 +1,25 @@
-# Nifty Seller Lite 2.31.1
+# Nifty Seller Lite 2.32.1
+
+## Iron Condor theta edge
+
+- Hedge selection now rewards structures where the SELL option has stronger absolute theta decay than its BUY hedge.
+- Existing liquidity, bid/ask spread, delta, distance, credit-efficiency and hedge-cost gates remain active, so theta cannot pull a risky short strike too close or make the hedge useless.
+- The strategy table shows the available SELL-versus-hedge Decay Edge for both Iron Condor wings.
+- Missing broker theta data safely falls back to the existing strike-selection rules.
+
+## Strategy value table
+
+- Replaces the old LOW/BALANCED/HIGH max-profit/max-loss table with one ranked comparison of CE BUY, CE SELL, PE BUY, PE SELL and IRON CONDOR.
+- Shows One-Brain fit, exact protected strike structure, debit/credit, premium-value grade, setup quality and safe status.
+- Removes max-profit and max-loss columns completely.
+- Premium Value is a display-only grade based on the existing liquidity, delta, premium and hedge-quality filters; it never promises profit or overrides the One-Brain decision.
+- WAIT, mandatory hedge and no-auto-order protections remain unchanged.
+
+## Candle pattern ka seedha matlab
+
+- The nearest-level candle card now explains each named pattern in simple Hinglish.
+- Morning Star, Evening Star, Engulfing, Hammer, Shooting Star and Doji explicitly state whether they suggest an upward move, downward move, or no clear direction.
+- The existing confidence, nearest-level and 3-minute/15-minute confirmation guards remain unchanged.
 
 ## Stable View
 

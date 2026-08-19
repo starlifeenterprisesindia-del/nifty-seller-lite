@@ -539,6 +539,14 @@ def _select_hedge_leg(
 
     oi_series = rows.get("oi", pd.Series(dtype=float))
     volume_series = rows.get("volume", pd.Series(dtype=float))
+    short_match = rows[rows["strike"].eq(float(short.strike))]
+    short_theta = (
+        abs(float(short_match.iloc[0]["theta"]))
+        if not short_match.empty
+        and "theta" in short_match.columns
+        and pd.notna(short_match.iloc[0].get("theta"))
+        else None
+    )
     scored: list[tuple[float, pd.Series, float | None, float]] = []
     target_steps = max(
         CONFIG.trade_hedge_steps,
@@ -563,7 +571,21 @@ def _select_hedge_leg(
         efficiency_score = clamp(credit_ratio * 500.0, 15.0, 100.0)
         hedge_cost_ratio = hedge_price / short_price
         cost_score = clamp(100.0 - abs(hedge_cost_ratio - 0.35) * 140.0, 20.0, 100.0)
-        total = liquidity * 0.45 + width_score * 0.20 + efficiency_score * 0.20 + cost_score * 0.15
+        hedge_theta = _number(row.get("theta"))
+        if short_theta is not None and hedge_theta is not None and short_theta > 0:
+            # We want the short option's absolute time decay to exceed the hedge's,
+            # while the existing distance/liquidity/cost gates keep the hedge useful.
+            theta_ratio = abs(hedge_theta) / short_theta
+            theta_edge_score = clamp((1.0 - theta_ratio) * 140.0 + 45.0, 15.0, 100.0)
+        else:
+            theta_edge_score = 55.0
+        total = (
+            liquidity * 0.35
+            + width_score * 0.15
+            + efficiency_score * 0.15
+            + cost_score * 0.15
+            + theta_edge_score * 0.20
+        )
         scored.append((total, row, spread_pct, liquidity))
 
     if not scored:
@@ -638,6 +660,24 @@ def _vertical_plan(
     upper_be = short.strike + credit if side == "CE" else None
     liquidity_floor = min(short.liquidity_score, hedge.liquidity_score)
     quality = round(clamp(quality * 0.75 + liquidity_floor * 0.25, 0.0, 100.0), 1)
+    short_row = frame[
+        frame["side"].astype(str).str.upper().eq(side)
+        & pd.to_numeric(frame["strike"], errors="coerce").eq(short.strike)
+    ]
+    hedge_row = frame[
+        frame["side"].astype(str).str.upper().eq(side)
+        & pd.to_numeric(frame["strike"], errors="coerce").eq(hedge.strike)
+    ]
+    short_theta = _number(short_row.iloc[0].get("theta")) if not short_row.empty else None
+    hedge_theta = _number(hedge_row.iloc[0].get("theta")) if not hedge_row.empty else None
+    if short_theta is not None and hedge_theta is not None:
+        decay_edge = abs(short_theta) - abs(hedge_theta)
+        theta_reason = (
+            f"Theta edge {decay_edge:+.2f}: SELL decay "
+            f"{abs(short_theta):.2f} vs hedge {abs(hedge_theta):.2f}"
+        )
+    else:
+        theta_reason = "Theta edge unavailable; liquidity/delta/hedge gates used"
     status = "READY" if quality >= CONFIG.trade_min_plan_quality else "CAUTION"
     blocker = (
         "None"
@@ -655,7 +695,7 @@ def _vertical_plan(
         upper_breakeven=round(upper_be, 2) if upper_be is not None else None,
         quality_score=quality,
         status=status,
-        reasons=reasons,
+        reasons=(*reasons, theta_reason),
         blocker=blocker,
     )
 
@@ -691,6 +731,7 @@ def _condor_plan(ce: SetupPlan, pe: SetupPlan) -> SetupPlan:
             "Protected wings exist on both sides",
             f"Short-strike range {pe_short.strike:,.0f}–{ce_short.strike:,.0f}",
             f"Combined estimated credit {credit:.2f} points",
+            *(reason for reason in (*pe.reasons, *ce.reasons) if reason.startswith("Theta edge")),
         ),
         blocker="None" if status == "READY" else "One or both wings have weak quality",
     )

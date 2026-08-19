@@ -210,6 +210,15 @@ def render_compact_barrier_map(
             f"{stage} · {level_text}"
         )
         if show_possible_effect:
+            pattern_meaning = {
+                "MORNING STAR": "Girawat ke baad upar palatne/bounce ka signal",
+                "EVENING STAR": "Tezi ke baad neeche palatne ka signal",
+                "BULL ENGULF": "Buyers ka zor; upar jaane ka signal",
+                "BEAR ENGULF": "Sellers ka zor; neeche jaane ka signal",
+                "HAMMER": "Neeche se recovery; upar bounce ka signal",
+                "SHOOTING STAR": "Upar rejection; neeche pressure ka signal",
+                "DOJI": "Buyer-seller barabar; direction clear nahi",
+            }.get(name.upper())
             effect = (
                 "Upar bounce/continuation"
                 if direction.upper() == "BULLISH"
@@ -217,6 +226,8 @@ def render_compact_barrier_map(
                 if direction.upper() == "BEARISH"
                 else "Indecision—level break ka wait"
             )
+            if pattern_meaning:
+                note += f" · Seedha matlab: {pattern_meaning}"
             note += (
                 f" · Mumkin asar: {effect} · "
                 f"Chance (signal bharosa) {confidence:.0f}%"
@@ -794,85 +805,96 @@ def _plan_structure_text(plan: Any | None) -> str:
 
 
 def render_protected_candidates(snapshot: MarketSnapshot) -> None:
-    """Three compact risk profiles for the existing CE/PE One-Brain action."""
+    """Rank all One-Brain strategies with strike and premium-value context."""
 
+    evaluations = _decision_evaluations(snapshot)
     bundle = snapshot.trade_plan
-    candidates = tuple(getattr(bundle, "protected_candidates", ()) or ())
-    if not candidates:
-        return
-    action = str(getattr(bundle, "candidate_setup", "") or "CE/PE")
+    plan_map = {
+        "CE BUY": bundle.ce_buy,
+        "PE BUY": bundle.pe_buy,
+        "CE SELL": bundle.ce_sell,
+        "PE SELL": bundle.pe_sell,
+        "IRON CONDOR": bundle.iron_condor,
+    }
     selected = snapshot.decision.final_action.replace(" WITH HEDGE", "")
-    reference = selected != action
+    leader = max(evaluations, key=lambda name: evaluations[name].score)
 
-    st.subheader("🛡️ Best CE/PE Protected Candidates")
+    st.subheader("🛡️ Best Strategy + Strike Value Table")
     st.caption(
-        f"{action}{' reference' if reference else ''} • Har row same-expiry equal-quantity hedge hai. "
-        "Balanced default hai; yeh One-Brain action ko change nahi karta."
+        "CE BUY, CE SELL, PE BUY, PE SELL aur IRON CONDOR ka same One-Brain comparison. "
+        "Fit suitability hai, guaranteed profit nahi. Har directional setup protected/hedged hai."
     )
-    lot_size = max(1, int(snapshot.risk_profile.lot_size))
-    rows: list[dict[str, Any]] = []
-    for candidate in candidates:
-        plan = candidate.plan
-        if not plan.available:
-            rows.append(
-                {
-                    "Mode": candidate.profile,
-                    "Main + Hedge": "Unavailable",
-                    "Net": "—",
-                    "Max loss/lot": "—",
-                    "Max profit/lot": "—",
-                    "Quality": "—",
-                    "_rank": candidate.risk_rank,
-                }
-            )
-            continue
+
+    def _premium_value(plan: Any | None) -> tuple[str, str]:
+        if plan is None or not plan.available:
+            return "—", "UNAVAILABLE"
         if plan.is_buy:
-            main = plan.long_legs[0]
-            hedge = plan.short_legs[0] if plan.short_legs else None
-            structure = (
-                f"BUY {main.strike:,.0f} {main.side} / SELL {hedge.strike:,.0f} {hedge.side}"
-                if hedge is not None
-                else f"BUY {main.strike:,.0f} {main.side}"
-            )
-            net_points = float(plan.estimated_debit_points or 0.0)
-            net = f"Debit {net_points:.2f}"
-            max_profit_points = max(0.0, float(plan.width_points or 0.0) - net_points)
+            points = float(plan.estimated_debit_points or 0.0)
+            premium = f"Debit {points:.2f} pts"
         else:
-            main = plan.short_legs[0]
-            hedge = plan.hedge_legs[0]
-            structure = (
-                f"SELL {main.strike:,.0f} {main.side} / BUY {hedge.strike:,.0f} {hedge.side}"
-            )
-            net_points = float(plan.estimated_credit_points or 0.0)
-            net = f"Credit {net_points:.2f}"
-            max_profit_points = net_points
-        max_loss_points = max(0.0, float(plan.max_risk_points or 0.0))
+            points = float(plan.estimated_credit_points or 0.0)
+            premium = f"Credit {points:.2f} pts"
+
+        # Display-only value grade. The trade planner already selects strikes by
+        # delta, liquidity, distance, spread and hedge efficiency; this grade does
+        # not create a second strategy brain or promise a profit.
+        quality = float(plan.quality_score or 0.0)
+        if quality >= 75 and points >= 5:
+            grade = "ACCHI VALUE"
+        elif quality >= 58 and points >= 2:
+            grade = "THEEK VALUE"
+        else:
+            grade = "KAMZOR VALUE"
+        return premium, grade
+
+    rows: list[dict[str, Any]] = []
+    ranked = sorted(evaluations, key=lambda name: evaluations[name].score, reverse=True)
+    for rank, name in enumerate(ranked, start=1):
+        strategy = evaluations[name]
+        plan = plan_map[name]
+        premium, value_grade = _premium_value(plan)
+        if snapshot.decision.final_action != "WAIT" and name == selected:
+            status = "BEST • ENTRY READY" if plan.available else "BEST • STRIKE BLOCKED"
+        elif snapshot.decision.final_action == "WAIT" and name == leader:
+            status = "BEST AVAILABLE • WAIT"
+        elif not plan.available:
+            status = "BLOCKED"
+        else:
+            status = "ALTERNATIVE"
+        decay_reasons = [reason for reason in plan.reasons if reason.startswith("Theta edge")]
+        decay_edge = " | ".join(decay_reasons) if decay_reasons else "Theta check —"
         rows.append(
             {
-                "Mode": candidate.profile,
-                "Main + Hedge": structure,
-                "Net": net,
-                "Max loss/lot": f"₹{max_loss_points * lot_size:,.0f}",
-                "Max profit/lot": f"₹{max_profit_points * lot_size:,.0f}",
-                "Quality": f"{plan.quality_score:.0f}/100",
-                "_rank": candidate.risk_rank,
+                "Rank": rank,
+                "Strategy": name,
+                "Fit / Confidence": f"{strategy.score:.0f}%",
+                "Strike + Hedge": _plan_structure_text(plan),
+                "Premium": premium,
+                "Decay Edge": decay_edge,
+                "Value Quality": f"{value_grade} • {plan.quality_score:.0f}/100" if plan.available else value_grade,
+                "Status": status,
             }
         )
     frame = pd.DataFrame(rows)
 
-    def _candidate_style(row: pd.Series) -> list[str]:
-        if row["Mode"] == "BALANCED":
+    def _strategy_style(row: pd.Series) -> list[str]:
+        if str(row["Status"]).startswith("BEST"):
             return ["background-color: rgba(59,130,246,.18);font-weight:700"] * len(row)
-        if row["Mode"] == "HIGH RISK":
-            return ["background-color: rgba(239,68,68,.09)"] * len(row)
+        if row["Value Quality"].startswith("KAMZOR") or row["Status"] == "BLOCKED":
+            return ["background-color: rgba(239,68,68,.08)"] * len(row)
         return [""] * len(row)
 
-    styled = frame.style.apply(_candidate_style, axis=1).hide(
-        axis="columns", subset=["_rank"]
-    )
+    styled = frame.style.apply(_strategy_style, axis=1)
     st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
     if snapshot.decision.final_action == "WAIT":
-        st.info("Final Action WAIT hai—yeh candidates sirf comparison/reference hain, entry signal nahi.")
+        st.info(
+            f"Final Action WAIT hai—{leader} abhi best available hai, par confirmation ke bina entry nahi."
+        )
+    st.caption(
+        "Decay Edge me SELL ka absolute theta hedge se zyada hona better hai. "
+        "Value Quality liquidity + delta + premium + hedge quality par based hai. "
+        "KAMZOR VALUE setup ko sirf reference samjho; order app kabhi khud place nahi karti."
+    )
 
 
 def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
