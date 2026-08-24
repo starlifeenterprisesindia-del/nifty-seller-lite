@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
 
 import pandas as pd
@@ -74,6 +74,16 @@ def aggregate_candles(frame: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return (
         pd.concat(output).reset_index().sort_values("timestamp").reset_index(drop=True)
     )
+
+
+def exclude_session_from_time(frame: pd.DataFrame, cutoff: time) -> pd.DataFrame:
+    """Keep auction/post-market index rows out of intraday signal calculations."""
+
+    if frame is None or frame.empty or "timestamp" not in frame.columns:
+        return frame.copy() if frame is not None else pd.DataFrame()
+    timestamps = pd.to_datetime(frame["timestamp"], errors="coerce")
+    mask = timestamps.notna() & timestamps.dt.time.lt(cutoff)
+    return frame.loc[mask].copy().reset_index(drop=True)
 
 
 def mark_completed_candles(

@@ -161,6 +161,8 @@ def _volume_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
 
 
 def _heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
+    if snapshot.heavyweights.status not in {"READY", "CAUTION"}:
+        return 0.0, 0.0, 100.0
     state = snapshot.heavyweights.state.upper()
     if "BROAD BULLISH" in state:
         return 80.0, 8.0, 12.0
@@ -170,8 +172,6 @@ def _heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
         return 8.0, 80.0, 12.0
     if "NARROW BEARISH" in state:
         return 18.0, 60.0, 22.0
-    if snapshot.heavyweights.status == "UNAVAILABLE":
-        return 0.0, 0.0, 100.0
     return 25.0, 25.0, 50.0
 
 

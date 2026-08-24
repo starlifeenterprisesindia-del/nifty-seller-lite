@@ -14,6 +14,7 @@ from analysis.big_player import calculate_big_player_activity
 from analysis.candles import (
     aggregate_candles,
     candles_from_dhan,
+    exclude_session_from_time,
     mark_completed_candles,
 )
 from analysis.core_market import calculate_core_market_evidence
@@ -425,6 +426,11 @@ class SnapshotService:
             from_date=from_date,
             current=current,
         )
+        # Closing-auction indicative/final-close rows remain broker reference data,
+        # but must not manufacture EMA/MACD/RSI or swing evidence.
+        candles_1m = exclude_session_from_time(candles_1m, CONFIG.cas_start)
+        candles_3m = exclude_session_from_time(candles_3m, CONFIG.cas_start)
+        candles_15m = exclude_session_from_time(candles_15m, CONFIG.cas_start)
 
         future_candles_1m = pd.DataFrame()
         future_candles_3m = pd.DataFrame()
@@ -691,7 +697,10 @@ class SnapshotService:
             future_volume_live=statuses["future_volume"].use_state == "LIVE",
         )
         heavyweights = calculate_heavyweight_bundle(
-            analysis_heavyweight_quotes, current, nifty_quote=nifty_quote
+            analysis_heavyweight_quotes,
+            current,
+            nifty_quote=nifty_quote,
+            reference_only=not market_session.is_live,
         )
         vix_for_analysis = (
             vix_quote

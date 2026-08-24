@@ -19,6 +19,8 @@ def calculate_heavyweight_bundle(
     quotes: list[dict[str, Any]],
     captured_at: datetime,
     nifty_quote: dict[str, Any] | None = None,
+    *,
+    reference_only: bool = False,
 ) -> HeavyweightBundle:
     by_symbol = {str(item.get("symbol")): item for item in quotes}
     rows: list[HeavyweightContribution] = []
@@ -68,6 +70,10 @@ def calculate_heavyweight_bundle(
         state = "UNAVAILABLE"
         confidence = 0.0
         status = "UNAVAILABLE"
+    elif reference_only:
+        state = "REFERENCE ONLY"
+        confidence = 0.0
+        status = "REFERENCE ONLY"
     else:
         breadth = advancing - declining
         if weighted_move > 0.20 and breadth >= 3:

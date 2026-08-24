@@ -26,9 +26,37 @@ def _flatten_side(
     row: dict[str, Any] = {"strike": strike, "side": side.upper()}
     for field in OPTION_FIELDS:
         row[field] = data.get(field)
+    # Keep DhanHQ as the single Greeks source. Different brokers can legitimately
+    # disagree because their IV model and snapshot timing differ; never invent a
+    # local value merely to force a match. Invalid zero/signed values are safer as
+    # unavailable than as strike-selection inputs.
     greeks = data.get("greeks") or {}
-    for greek in ("delta", "gamma", "theta", "vega"):
-        row[greek] = greeks.get(greek)
+    try:
+        valid_iv = float(data.get("implied_volatility")) > 0
+    except (TypeError, ValueError):
+        valid_iv = False
+
+    def _valid(value: Any, *, lower: float | None = None, upper: float | None = None):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if lower is not None and number < lower:
+            return None
+        if upper is not None and number > upper:
+            return None
+        return number
+
+    delta = _valid(greeks.get("delta"), lower=-1.0, upper=1.0)
+    if not valid_iv and delta == 0.0:
+        delta = None
+    gamma = _valid(greeks.get("gamma"), lower=0.0) if valid_iv else None
+    theta = _valid(greeks.get("theta"), upper=0.0) if valid_iv else None
+    vega = _valid(greeks.get("vega"), lower=0.0) if valid_iv else None
+    row["delta"] = delta
+    row["gamma"] = gamma if gamma is not None and gamma > 0 else None
+    row["theta"] = theta if theta is not None and theta < 0 else None
+    row["vega"] = vega if vega is not None and vega > 0 else None
     return row
 
 

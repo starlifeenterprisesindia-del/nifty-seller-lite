@@ -38,6 +38,8 @@ _DIRECTION_FROM_ACTION = {
 
 
 def _heavyweight_scores(bundle: HeavyweightBundle) -> tuple[float, float, float]:
+    if bundle.status not in {"READY", "CAUTION"}:
+        return 45.0, 45.0, 58.0
     state = bundle.state.upper()
     if "BROAD BULLISH" in state:
         return 88.0, 12.0, 20.0
@@ -47,8 +49,6 @@ def _heavyweight_scores(bundle: HeavyweightBundle) -> tuple[float, float, float]
         return 12.0, 88.0, 20.0
     if "NARROW BEARISH" in state:
         return 25.0, 68.0, 42.0
-    if bundle.status == "UNAVAILABLE":
-        return 45.0, 45.0, 58.0
     return 42.0, 42.0, 70.0
 
 
