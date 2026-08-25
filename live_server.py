@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException, Query
 
+from services.telegram_alerts import LiveAlertEngine
+
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -89,6 +91,15 @@ class LiveFeedState:
                 self._history.append(
                     {"captured_ts": captured, "ltp": ltp}
                 )
+        if security_id == "13":
+            ALERTS.observe(
+                changes={
+                    seconds: self._change(list(self._history), captured, seconds)
+                    for seconds in (5, 15, 30, 60)
+                },
+                ltp=ltp,
+                now_ts=captured,
+            )
 
     def start(self) -> None:
         client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
@@ -174,6 +185,10 @@ class LiveFeedState:
 
 
 STATE = LiveFeedState()
+ALERTS = LiveAlertEngine(
+    confirmations=int(os.getenv("TELEGRAM_ALERT_CONFIRMATIONS", "2") or 2),
+    cooldown_seconds=int(os.getenv("TELEGRAM_ALERT_COOLDOWN_SECONDS", "180") or 180),
+)
 
 
 @asynccontextmanager
@@ -193,7 +208,9 @@ def root() -> dict[str, str]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return STATE.health()
+    payload = STATE.health()
+    payload["telegram"] = ALERTS.status()
+    return payload
 
 
 @app.get("/live")
@@ -204,4 +221,23 @@ def live(
     expected = os.getenv("LIVE_API_KEY", "").strip()
     if expected and key != expected and x_live_key != expected:
         raise HTTPException(status_code=401, detail="Invalid live API key")
-    return STATE.public_state()
+    payload = STATE.public_state()
+    payload["telegram"] = ALERTS.status()
+    return payload
+
+
+@app.post("/telegram/test")
+def telegram_test(
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    expected = os.getenv("LIVE_API_KEY", "").strip()
+    if expected and key != expected and x_live_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid live API key")
+    if not ALERTS.configured:
+        raise HTTPException(status_code=503, detail="Telegram alerts not configured")
+    try:
+        ALERTS.send_test()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:200]) from exc
+    return {"ok": True, "telegram": ALERTS.status()}
