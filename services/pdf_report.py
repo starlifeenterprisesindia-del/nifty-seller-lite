@@ -584,16 +584,24 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             _pct(row["Bearish %"]),
             _pct(row["Neutral %"]),
             _pct(row["Confidence %"]),
-            impact_by_module.get(str(row["Module"]), "-"),
-            row["Result"],
         ]
         for row in matrix
     ]
     story.append(
         _table(
-            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "One-Brain impact", "Current result"],
+            ["Module", "Bullish", "Bearish", "Neutral", "Confidence"],
             matrix_rows,
-            widths=[32 * mm, 18 * mm, 18 * mm, 18 * mm, 21 * mm, 52 * mm, 98 * mm],
+            widths=[82 * mm, 40 * mm, 40 * mm, 40 * mm, 45 * mm],
+            compact=True,
+        )
+    )
+    story.append(_sub_title("One-Brain Weight / Gate Audit"))
+    story.append(
+        _table(
+            ["Module", "Canonical weight / bounded effect"],
+            [[row["Module"], impact_by_module.get(str(row["Module"]), "-")] for row in matrix],
+            widths=[65 * mm, 182 * mm],
+            compact=True,
         )
     )
     story.append(
@@ -2113,14 +2121,21 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
             _pct(row.get("Bearish %")),
             _pct(row.get("Neutral %")),
             _pct(row.get("Confidence %")),
-            impact_by_module.get(str(row["Module"]), "-"),
-            row["Result"],
         ])
     story.append(
         _table(
-            ["Module", "Bullish", "Bearish", "Neutral", "Confidence", "One-Brain impact", "Current result"],
+            ["Module", "Bullish", "Bearish", "Neutral", "Confidence"],
             matrix_rows,
-            widths=[38 * mm, 23 * mm, 23 * mm, 23 * mm, 27 * mm, 54 * mm, 82 * mm],
+            widths=[82 * mm, 40 * mm, 40 * mm, 40 * mm, 45 * mm],
+            compact=True,
+        )
+    )
+    story.append(_sub_title("One-Brain Weight / Gate Audit"))
+    story.append(
+        _table(
+            ["Module", "Canonical weight / bounded effect"],
+            [[row["Module"], impact_by_module.get(str(row["Module"]), "-")] for row in matrix],
+            widths=[65 * mm, 182 * mm],
             compact=True,
         )
     )
@@ -2178,6 +2193,7 @@ def audit_pdf_filename(snapshot: MarketSnapshot) -> str:
 def build_support_bundle(
     snapshot: MarketSnapshot,
     previous_snapshot: MarketSnapshot | None = None,
+    shadow_entries: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Create one credential-free handover ZIP for remote diagnosis and updates."""
 
@@ -2201,6 +2217,7 @@ def build_support_bundle(
             "All CSV candles are the snapshot frames available to the app.",
             "The PDF and JSON are read-only views of the same canonical snapshot.",
             "No Dhan access token, client id, password or Streamlit secret is included.",
+            "Auto Shadow Journal is included when available; it contains paper trades only.",
         ],
     }
     frames = {
@@ -2218,6 +2235,16 @@ def build_support_bundle(
         archive.writestr("current_snapshot.json", json.dumps(snapshot.public_summary(), indent=2, ensure_ascii=True))
         if previous_snapshot is not None:
             archive.writestr("previous_snapshot.json", json.dumps(previous_snapshot.public_summary(), indent=2, ensure_ascii=True))
+        if shadow_entries is not None:
+            safe_shadow = [item for item in shadow_entries if isinstance(item, dict)]
+            archive.writestr(
+                "auto_shadow_journal.json",
+                json.dumps({"schema_version": 1, "entries": safe_shadow}, indent=2, ensure_ascii=True),
+            )
+            archive.writestr(
+                "auto_shadow_journal.csv",
+                pd.DataFrame(safe_shadow).to_csv(index=False),
+            )
         archive.writestr("complete_diagnostic_report.pdf", full_pdf)
         for name, frame in frames.items():
             safe_frame = frame if frame is not None else pd.DataFrame()

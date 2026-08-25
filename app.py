@@ -823,7 +823,7 @@ with st.expander("Download Reports", expanded=False):
             try:
                 with st.spinner("Building one credential-free support ZIP..."):
                     st.session_state.support_bundle_bytes = build_support_bundle(
-                        view_snapshot, previous_view_snapshot
+                        view_snapshot, previous_view_snapshot, shadow_entries
                     )
                 st.success("Support Bundle ready - update/diagnosis ke liye isi ZIP ko bhejein")
             except Exception as exc:

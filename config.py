@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.33.1_ADAPTIVE_CONFIRMATION"
+    version: str = "2.33.4_ONE_BRAIN_NO_DOUBLING"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -188,7 +188,7 @@ class AppConfig:
     trade_min_option_premium: float = 3.0
     trade_min_hedge_premium: float = 0.5
     trade_min_credit_points: float = 1.0
-    trade_min_plan_quality: float = 55.0
+    trade_min_plan_quality: float = 60.0
     trade_level_clearance_points: float = 10.0
 
     # Directional option-buy planner. The same Final One-Brain must first select
@@ -199,7 +199,7 @@ class AppConfig:
     buy_target_distance_pct: float = 0.15
     buy_distance_tolerance_pct: float = 0.45
     buy_min_option_premium: float = 4.0
-    buy_min_plan_quality: float = 58.0
+    buy_min_plan_quality: float = 60.0
     buy_min_directional_room_points: float = 12.0
 
     # Read-only execution guard and one-trade discipline. The guard consumes the
@@ -233,8 +233,8 @@ class AppConfig:
     # Automatic read-only forward journal. It never sends broker orders.
     shadow_journal_path: str = "data/shadow_journal.json"
     shadow_journal_max_trades_per_day: int = 5
-    shadow_journal_min_confidence: float = 75.0
-    shadow_journal_min_strategy_score: float = 75.0
+    shadow_journal_min_confidence: float = 60.0
+    shadow_journal_min_strategy_score: float = 60.0
     shadow_journal_cooldown_minutes: int = 20
     shadow_journal_estimated_charges_per_trade: float = 40.0
 

@@ -502,9 +502,9 @@ def render_evidence_matrix(
 ) -> None:
     st.subheader("All Features — Compact Evidence")
     st.caption(
-        "10 compact rows same One-Brain ki evidence dikhati hain. W/M aur Special Candle "
-        "bounded confirmation ke roop mein Final One-Brain mein shamil hain; koi row "
-        "alag BUY/SELL/WAIT action nahi deti."
+        "11 compact rows same One-Brain ki Bull/Bear/Neutral evidence dikhati hain. "
+        "Barrier existing Levels/OI/Volume ka synthesis hai—extra weight 0. Big Player "
+        "ka wahi existing bounded impact dikhaya gaya hai; koi second brain nahi."
     )
     rows = build_compact_evidence_matrix(snapshot, previous_snapshot)
     previous_rows = (
@@ -637,6 +637,7 @@ def render_evidence_matrix(
         return "Koi badlav nahi" if row.get("Result") == previous.get("Result") else "Result badla"
 
     body = []
+    detail_rows: list[dict[str, str]] = []
     for row in rows:
         mix = " · ".join(
             (
@@ -655,52 +656,48 @@ def render_evidence_matrix(
         impact = impact_with_last(
             module, impact_by_module.get(module, "—")
         )
+        detail_rows.append(
+            {
+                "Module": module,
+                "One-Brain weight/asar": impact,
+                "Result": str(row.get("Result") or "—"),
+                "Badlav": change,
+            }
+        )
         body.append(
             '<tr>'
             f'<td class="evt-module">{escape(str(row["Module"]))}</td>'
-            f'<td class="evt-bull">{score_cell(row.get("Bullish %"), "green")}</td>'
-            f'<td class="evt-bear">{score_cell(row.get("Bearish %"), "red")}</td>'
-            f'<td class="evt-neutral">{score_cell(row.get("Neutral %"), "gray")}</td>'
+            f'<td class="evt-bull">{score_text(row.get("Bullish %"), "")}</td>'
+            f'<td class="evt-bear">{score_text(row.get("Bearish %"), "")}</td>'
+            f'<td class="evt-neutral">{score_text(row.get("Neutral %"), "")}</td>'
             f'<td class="evt-conf">{confidence}</td>'
-            f'<td class="evt-mix">{escape(mix)}</td>'
-            f'<td class="evt-impact">{escape(impact)}</td>'
-            f'<td class="evt-result"><b>{escape(str(row.get("Result") or "—"))}</b><span>{escape(change)}</span><em>{escape(impact)}</em></td>'
             '</tr>'
         )
     table_html = (
         '<style>'
         '.evt-wrap{overflow:hidden;border:1px solid rgba(127,127,127,.24);border-radius:10px}'
-        '.evt{width:100%;border-collapse:collapse;table-layout:fixed;font-size:.78rem}'
+        '.evt{width:100%;border-collapse:collapse;table-layout:fixed;font-size:.82rem}'
         '.evt th,.evt td{padding:8px;border-bottom:1px solid rgba(127,127,127,.20);text-align:left;vertical-align:middle;overflow-wrap:anywhere}'
         '.evt th{background:rgba(127,127,127,.09);font-weight:800}'
         '.evt tr:last-child td{border-bottom:0}'
-        '.evt-module{width:13%;font-weight:800}.evt-bull,.evt-bear,.evt-neutral{width:7%}.evt-conf{width:7%}.evt-impact{width:18%;font-size:.70rem}.evt-result{width:41%}'
+        '.evt-module{width:40%;font-weight:800}.evt-bull,.evt-bear,.evt-neutral{width:13%;text-align:center}.evt-conf{width:21%;text-align:center}'
         '.evt-bull{color:#22c55e}.evt-bear{color:#ef4444}.evt-neutral{color:#a3a3a3}'
-        '.evt-score{position:relative;height:16px;border-radius:99px;background:rgba(127,127,127,.14);overflow:hidden;min-width:54px}'
-        '.evt-score i{position:absolute;inset:0 auto 0 0;background:#6b7280}.evt-score.green i{background:#22c55e}.evt-score.red i{background:#ef4444}'
-        '.evt-score span{position:absolute;inset:0 4px 0 auto;line-height:16px;font-size:.66rem;font-weight:800;color:var(--text-color,white)}'
-        '.evt-result span{display:block;margin-top:2px;font-size:.70rem;color:#60a5fa}'
-        '.evt-result em{display:none;margin-top:2px;font-size:.61rem;color:#f59e0b;font-style:normal}'
-        '.evt-mix{display:none}'
         '@media(max-width:760px){'
-        '.evt{font-size:.68rem}.evt th,.evt td{padding:6px 4px}'
-        '.evt-bull,.evt-bear,.evt-neutral,.evt-impact{display:none}'
-        '.evt-mix{display:table-cell;width:29%;white-space:normal;line-height:1.45}'
-        '.evt-module{width:20%}.evt-conf{width:12%;text-align:center}.evt-result{width:39%}'
-        '.evt-result b{font-size:.68rem}.evt-result span,.evt-result em{display:block;font-size:.61rem}'
+        '.evt{font-size:.68rem}.evt th,.evt td{padding:7px 3px}'
+        '.evt-module{width:38%}.evt-bull,.evt-bear,.evt-neutral{width:14%}.evt-conf{width:20%}'
         '}'
         '</style><div class="evt-wrap"><table class="evt"><thead><tr>'
-        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th>'
-        '<th class="evt-mix">Bull / Bear / Neutral</th><th>Bharosa</th><th class="evt-impact">One-Brain mein Asar</th><th>Abhi ka result / Badlav</th>'
+        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th><th>Bharosa</th>'
         '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
     )
     st.html(table_html) if hasattr(st, "html") else st.markdown(
         table_html, unsafe_allow_html=True
     )
-    st.caption(
-        f"One-Brain mein Asar current {reference_name} selected/reference architecture ke canonical weights ka audit hai. "
-        "Yeh market move ki guarantee nahi aur koi second BUY/SELL calculation nahi karta."
-    )
+    with st.expander("Weights, result aur last snapshot ka badlav", expanded=False):
+        st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
+        st.caption(
+            f"Current reference: {reference_name}. Barrier extra weight 0; Big Player max 10 bounded points."
+        )
 
 
 
@@ -985,6 +982,9 @@ def render_main_ai_market_view(
         if "BEAR" in text or "SELLING" in text:
             return "BEARISH"
         return "RANGE"
+
+    # MIXED / RANGE / RANGE-MIXED are the same neutral direction for agreement.
+    final_direction = _evidence_direction(final_direction)
 
     agreement_sources = (
         _evidence_direction(snapshot.core_evidence.market_state),

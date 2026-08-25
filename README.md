@@ -17,6 +17,17 @@ option flow and aligned 3-minute/15-minute RSI risk. Auto Shadow Journal can rec
 to five confirmed paper trades per session with reasons, legs, MFE/MAE, exit outcome
 and estimated net P&L. It is read-only and never places broker orders.
 
+Testing release 2.33.3 uses a 60% minimum strategy/entry threshold and 60% protected
+strike-plan quality. OI-flow maturity, adaptive timing, Big Player alignment, barrier
+risk and every defined-risk hedge rule remain active.
+
+Release 2.33.4 keeps one canonical strategy brain and removes evidence-display
+doubling: Barrier/Levels/Volume share one compact row, Barrier adds zero new decision
+weight, and Big Player shows only its existing bounded maximum 10-point effect. The
+mobile table and both PDFs use five evidence columns; the support bundle also includes
+the paper Shadow Journal when available. Direction Agreement treats MIXED and RANGE as
+the same neutral state, and Fast Monitor timestamps are displayed in IST.
+
 Directional CE/PE candidates now appear in three compact protected profiles:
 LOW RISK, BALANCED and HIGH RISK. Every BUY or SELL candidate uses a same-expiry,
 equal-quantity hedge; no naked directional candidate is produced. The One-Brain

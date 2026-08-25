@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from config import CONFIG
+from config import CONFIG, IST_TIMEZONE
 
 if TYPE_CHECKING:
     from services.dhan_client import DhanClient
@@ -96,4 +97,4 @@ def fetch_fast_quotes(client: "DhanClient", snapshot: Any) -> list[FastQuote]:
 
 
 def monitor_timestamp() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now(ZoneInfo(IST_TIMEZONE)).strftime("%H:%M:%S IST")

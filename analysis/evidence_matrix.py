@@ -187,6 +187,38 @@ def _institutional_scores(snapshot: MarketSnapshot) -> tuple[float, float, float
     return 25.0, 25.0, 50.0
 
 
+def _barrier_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
+    """Summarise the existing Barrier Map for display; never add decision weight."""
+    barrier = getattr(snapshot, "barrier_map", None)
+    if barrier is None or str(getattr(barrier, "status", "")).upper() not in {
+        "READY",
+        "PARTIAL",
+    }:
+        return 0.0, 0.0, 100.0
+    resistance = getattr(barrier, "nearest_resistance", None)
+    support = getattr(barrier, "nearest_support", None)
+    range_item = getattr(barrier, "trading_range", None)
+    bullish = bearish = 0.0
+    if resistance is not None:
+        bullish += float(getattr(resistance, "break_pressure", 0.0) or 0.0)
+        bearish += float(getattr(resistance, "strength", 0.0) or 0.0)
+    if support is not None:
+        bullish += float(getattr(support, "strength", 0.0) or 0.0)
+        bearish += float(getattr(support, "break_pressure", 0.0) or 0.0)
+    neutral = float(getattr(range_item, "confidence", 0.0) or 0.0) * 1.4
+    return _normalise(bullish, bearish, neutral)
+
+
+def _big_player_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
+    activity = getattr(snapshot, "big_player_activity", None)
+    if activity is None or str(getattr(activity, "status", "")).upper() != "READY":
+        return 0.0, 0.0, 100.0
+    buy = max(0.0, float(getattr(activity, "buy_score", 0.0) or 0.0))
+    sell = max(0.0, float(getattr(activity, "sell_score", 0.0) or 0.0))
+    neutral = max(0.0, 100.0 - max(buy, sell))
+    return _normalise(buy, sell, neutral)
+
+
 def _feed_confidence(snapshot: MarketSnapshot) -> float:
     statuses = list(snapshot.feed_status.values())
     if not statuses:
@@ -235,21 +267,21 @@ def build_module_impact_audit(
     buyer = reference in {"CE BUY", "PE BUY"}
     weights = (
         {
-            "Price Action": 18.0,
-            "OI & Options Flow": 22.0,
-            "EMA / MACD / RSI": 14.0,
-            "Levels & Volume": 8.0,
-            "NIFTY Top-9": 16.0,
-            "FII/DII (15 Sessions)": 10.0,
+            "Price Action": 13.5,
+            "OI & Options Flow": 30.0,
+            "EMA / MACD / RSI": 10.5,
+            "Barrier / Levels / Volume": 6.0,
+            "NIFTY Top-9": 10.0,
+            "FII/DII (15 Sessions)": 8.0,
             "VIX / Data Integrity": 12.0,
         }
         if buyer
         else {
-            "Price Action": 15.8,
-            "OI & Options Flow": 35.0,
-            "EMA / MACD / RSI": 12.2,
-            "Levels & Volume": 7.0,
-            "NIFTY Top-9": 15.0,
+            "Price Action": 11.25,
+            "OI & Options Flow": 40.0,
+            "EMA / MACD / RSI": 8.75,
+            "Barrier / Levels / Volume": 5.0,
+            "NIFTY Top-9": 10.0,
             "FII/DII (15 Sessions)": 6.0,
             "VIX / Data Integrity": 9.0,
         }
@@ -257,6 +289,23 @@ def build_module_impact_audit(
     audit: dict[str, str] = {}
     for row in rows:
         module = str(row["Module"])
+        if module == "Barrier / Levels / Volume":
+            base = weights[module]
+            audit[module] = (
+                f"Base Volume {base:g}% + existing structural gate; "
+                "Barrier extra weight 0 (no doubling)"
+            )
+            continue
+        if module == "Big Player Activity":
+            activity = getattr(snapshot, "big_player_activity", None)
+            direction = str(getattr(activity, "direction", "UNAVAILABLE"))
+            score = float(getattr(activity, "score", 0.0) or 0.0)
+            confirmations = int(getattr(activity, "confirmation_count", 0) or 0)
+            audit[module] = (
+                f"{direction} {score:.0f}/100 · confirm {confirmations} · "
+                "existing bounded max 10 pts"
+            )
+            continue
         if module == "3M W/M Pattern":
             maximum, max_text = 8.0, "Max 8 pts"
         elif module == "Special Candle":
@@ -506,7 +555,7 @@ def build_compact_evidence_matrix(
     snapshot: MarketSnapshot,
     previous_snapshot: MarketSnapshot | None = None,
 ) -> list[dict[str, Any]]:
-    """Build eight compact rows from the same authoritative snapshot."""
+    """Build compact rows from the same authoritative snapshot."""
 
     pa3 = snapshot.price_action.three_minute
     pa15 = snapshot.price_action.fifteen_minute
@@ -581,19 +630,30 @@ def build_compact_evidence_matrix(
 
     level_scores = _level_scores(snapshot)
     volume_scores = _volume_scores(snapshot)
+    barrier_scores = _barrier_scores(snapshot)
     levels_bull, levels_bear, levels_neutral = _weighted_scores(
-        [(*level_scores, 0.45), (*volume_scores, 0.55)]
+        [(*level_scores, 0.35), (*volume_scores, 0.20), (*barrier_scores, 0.45)]
     )
+    barrier_item = getattr(snapshot, "barrier_map", None)
+    barrier_ready = str(getattr(barrier_item, "status", "")).upper() in {
+        "READY",
+        "PARTIAL",
+    }
     levels_confidence = (
-        70.0 if snapshot.levels.status == "READY" else 0.0
-    ) * 0.45 + snapshot.volume.confidence * 0.55
+        (70.0 if snapshot.levels.status == "READY" else 0.0) * 0.35
+        + snapshot.volume.confidence * 0.20
+        + (float(getattr(getattr(barrier_item, "trading_range", None), "confidence", 0.0) or 0.0) if barrier_ready else 0.0) * 0.45
+    )
     up_room = snapshot.levels.upside_room
     down_room = snapshot.levels.downside_room
     up_text = f"{up_room:.0f}" if up_room is not None else "—"
     down_text = f"{down_room:.0f}" if down_room is not None else "—"
+    barrier = getattr(snapshot, "barrier_map", None)
+    range_item = getattr(barrier, "trading_range", None)
+    break_bias = str(getattr(range_item, "breakout_bias", "UNRESOLVED"))
     levels_result = (
         f"{_short_position(snapshot.levels.current_position)} · "
-        f"{_short_volume(snapshot.volume.overall_view)} · "
+        f"{_short_volume(snapshot.volume.overall_view)} · {break_bias} · "
         f"UP {up_text} / DN {down_text}"
     )
 
@@ -630,6 +690,20 @@ def build_compact_evidence_matrix(
         if inst_available
         else "FII/DII DATA MISSING (ZERO WEIGHT)"
     )
+
+    big_bull, big_bear, big_neutral = _big_player_scores(snapshot)
+    activity = getattr(snapshot, "big_player_activity", None)
+    if activity is None:
+        big_result = "BIG PLAYER DATA UNAVAILABLE"
+        big_confidence = 0.0
+    else:
+        big_result = (
+            f"{getattr(activity, 'direction', 'MIXED')} · "
+            f"{float(getattr(activity, 'score', 0.0) or 0.0):.0f}/100 · "
+            f"{int(getattr(activity, 'confirmation_count', 0) or 0)}/"
+            f"{int(getattr(activity, 'confirmation_total', 0) or 0)}"
+        )
+        big_confidence = float(getattr(activity, "score", 0.0) or 0.0)
 
     vix = snapshot.vix_context
     news = getattr(snapshot, "news_context", None)
@@ -723,12 +797,20 @@ def build_compact_evidence_matrix(
             indicator_result,
         ),
         _row(
-            "Levels & Volume",
+            "Barrier / Levels / Volume",
             levels_bull,
             levels_bear,
             levels_neutral,
             levels_confidence,
             levels_result,
+        ),
+        _row(
+            "Big Player Activity",
+            big_bull,
+            big_bear,
+            big_neutral,
+            big_confidence,
+            big_result,
         ),
         _row(
             "NIFTY Top-9",

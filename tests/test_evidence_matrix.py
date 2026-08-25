@@ -16,7 +16,7 @@ def _indicator(ema: str, macd: str, rsi: str):
     )
 
 
-def test_compact_matrix_has_eight_rows_and_normalized_directional_scores():
+def test_compact_matrix_has_eleven_rows_and_normalized_directional_scores():
     snapshot = SimpleNamespace(
         price_action=SimpleNamespace(
             three_minute=SimpleNamespace(
@@ -91,14 +91,15 @@ def test_compact_matrix_has_eight_rows_and_normalized_directional_scores():
         "Special Candle",
         "OI & Options Flow",
         "EMA / MACD / RSI",
-        "Levels & Volume",
+        "Barrier / Levels / Volume",
+        "Big Player Activity",
         "NIFTY Top-9",
         "FII/DII (15 Sessions)",
         "VIX / Data Integrity",
         "News / Event Risk",
     ]
-    assert len(rows) == 10
-    for row in rows[:8]:
+    assert len(rows) == 11
+    for row in rows[:9]:
         total = row["Bullish %"] + row["Bearish %"] + row["Neutral %"]
         assert round(total, 1) == 100.0
     assert rows[-1]["Bullish %"] is None
