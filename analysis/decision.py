@@ -122,6 +122,27 @@ def _buyer_environment_score(vix: VixContext) -> float:
     return 55.0
 
 
+def _futures_activity_scores(
+    activity: BigPlayerActivity | None,
+) -> tuple[float, float, float]:
+    """Return the *raw futures setup* vote without reusing composite BP score.
+
+    BigPlayer score also contains options and Top-9.  Using that composite here
+    would double-count those modules, so only its futures price/OI classification
+    is allowed into the canonical base score.
+    """
+    setup = str(getattr(activity, "futures_setup", "") or "").upper()
+    if setup == "LONG BUILD-UP":
+        return 85.0, 10.0, 20.0
+    if setup == "SHORT BUILD-UP":
+        return 10.0, 85.0, 20.0
+    if setup == "SHORT COVERING":
+        return 65.0, 15.0, 45.0
+    if setup == "LONG UNWINDING":
+        return 15.0, 65.0, 45.0
+    return 35.0, 35.0, 70.0
+
+
 def _buy_level_adjustments(levels: LevelBundle) -> tuple[float, float, list[str], list[str]]:
     ce_adjust = pe_adjust = 0.0
     ce_cautions: list[str] = []
@@ -923,38 +944,49 @@ def calculate_final_decision(
     seller_score = _seller_environment_score(vix)
     buyer_score = _buyer_environment_score(vix)
 
-    # Seller setups retain the frozen seller architecture. Directional buys are
-    # evaluated by the same brain with more weight on momentum/room and less on decay.
+    futures_bull, futures_bear, futures_range = _futures_activity_scores(big_player)
+
+    # Every strategy starts from the same 100-point architecture:
+    # core 30 + options 30 + raw futures activity 15 + Top-9 8 + FII/DII 5
+    # + VIX environment 12.  This makes BUY/SELL/CONDOR fits comparable.
     ce = (
-        core.bearish_score * 0.25
-        + options.bearish_score * 0.40
-        + heavy_bear * 0.10
-        + (seller_score * 0.60 + inst_bear * 0.40) * 0.15
+        core.bearish_score * 0.30
+        + options.bearish_score * 0.30
+        + futures_bear * 0.15
+        + heavy_bear * 0.08
+        + inst_bear * 0.05
+        + seller_score * 0.12
     )
     pe = (
-        core.bullish_score * 0.25
-        + options.bullish_score * 0.40
-        + heavy_bull * 0.10
-        + (seller_score * 0.60 + inst_bull * 0.40) * 0.15
+        core.bullish_score * 0.30
+        + options.bullish_score * 0.30
+        + futures_bull * 0.15
+        + heavy_bull * 0.08
+        + inst_bull * 0.05
+        + seller_score * 0.12
     )
     condor = (
-        core.range_score * 0.25
-        + options.range_score * 0.40
-        + heavy_range * 0.10
-        + (seller_score * 0.65 + inst_range * 0.35) * 0.15
+        core.range_score * 0.30
+        + options.range_score * 0.30
+        + futures_range * 0.15
+        + heavy_range * 0.08
+        + inst_range * 0.05
+        + seller_score * 0.12
     )
     ce_buy = (
         core.bullish_score * 0.30
         + options.bullish_score * 0.30
-        + heavy_bull * 0.10
-        + inst_bull * 0.08
+        + futures_bull * 0.15
+        + heavy_bull * 0.08
+        + inst_bull * 0.05
         + buyer_score * 0.12
     )
     pe_buy = (
         core.bearish_score * 0.30
         + options.bearish_score * 0.30
-        + heavy_bear * 0.10
-        + inst_bear * 0.08
+        + futures_bear * 0.15
+        + heavy_bear * 0.08
+        + inst_bear * 0.05
         + buyer_score * 0.12
     )
 
@@ -1006,8 +1038,8 @@ def calculate_final_decision(
     ce_buy += pattern_pe
     pe_buy += pattern_ce
 
-    # Big-player activity is one bounded confirmation inside this same function.
-    # It cannot independently choose an action and contributes at most ten points.
+    # Composite Big Player is confirmation-only.  Its raw futures classification
+    # is already represented once above; no composite +points are allowed.
     big_player_note: str | None = None
     if (
         big_player is not None
@@ -1015,27 +1047,10 @@ def calculate_final_decision(
         and big_player.confirmation_count >= 2
         and big_player.score >= 60
     ):
-        activity_adjust = min(10.0, max(0.0, (big_player.score - 55.0) * 0.22))
-        if big_player.activity_type in {"SHORT COVERING", "LONG UNWINDING"}:
-            # Position closing can move price sharply, but it is weaker evidence of
-            # fresh directional commitment than new long/short build-up.
-            activity_adjust *= 0.5
-        if big_player.direction == "BUYING":
-            pe += activity_adjust
-            ce_buy += activity_adjust
-            ce -= activity_adjust * 0.5
-            pe_buy -= activity_adjust * 0.5
-        elif big_player.direction == "SELLING":
-            ce += activity_adjust
-            pe_buy += activity_adjust
-            pe -= activity_adjust * 0.5
-            ce_buy -= activity_adjust * 0.5
-        if big_player.direction in {"BUYING", "SELLING"}:
-            condor -= activity_adjust * 0.6
-            big_player_note = (
-                f"Big Player {big_player.direction} {big_player.score:.0f}/100 "
-                f"confirmed {big_player.confirmation_count}/{big_player.confirmation_total}"
-            )
+        big_player_note = (
+            f"Big Player {big_player.direction} {big_player.score:.0f}/100 "
+            f"confirmed {big_player.confirmation_count}/{big_player.confirmation_total}"
+        )
 
     if core.move_stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
         ce -= 6
@@ -1295,6 +1310,34 @@ def calculate_final_decision(
         else ("RANGE", 0.0, 0.0)
     )
     score_gap = max(0.0, leader_score - runner_up)
+
+    # Big Player is a contradiction/absorption gate, never a duplicate vote.
+    leader_direction = _direction_from_action(leader)
+    if (
+        market_session.is_live
+        and big_player is not None
+        and big_player.status == "READY"
+    ):
+        if big_player.state == "ABSORPTION":
+            wait += 18.0
+            blockers.append("Heavy activity is being absorbed near the current level")
+        if (
+            big_player.score >= CONFIG.big_player_min_score
+            and big_player.confirmation_count >= CONFIG.big_player_min_confirmations
+            and leader_direction in {"BULLISH", "BEARISH"}
+        ):
+            bp_direction = (
+                "BULLISH" if big_player.direction == "BUYING"
+                else "BEARISH" if big_player.direction == "SELLING"
+                else "RANGE"
+            )
+            if bp_direction not in {leader_direction, "RANGE"}:
+                wait += 35.0
+                blockers.append("Confirmed Big Player activity opposes the strategy")
+        elif big_player.direction in {"BUYING", "SELLING"} and big_player.score >= 40:
+            wait += 6.0
+            blockers.append("Big Player activity is warming up; confirmation pending")
+    wait = round(clamp(wait, 0, 100), 1)
 
     if wait >= CONFIG.decision_wait_block_threshold:
         instant_action = "WAIT"

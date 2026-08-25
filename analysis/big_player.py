@@ -30,6 +30,26 @@ def _time_window(as_of: datetime) -> str:
     return "FINAL HOUR / HIGH ACTIVITY"
 
 
+def _classify_future_window(
+    source: pd.DataFrame, oi_column: str
+) -> tuple[str, float | None, str, float]:
+    first, last = source.iloc[0], source.iloc[-1]
+    old_oi, new_oi = float(first[oi_column]), float(last[oi_column])
+    oi_change = ((new_oi - old_oi) / abs(old_oi) * 100.0) if old_oi else None
+    price_change = float(last["close"]) - float(first["close"])
+    oi_rising = oi_change is not None and oi_change > 0.05
+    oi_falling = oi_change is not None and oi_change < -0.05
+    if price_change > 0 and oi_rising:
+        return "LONG BUILD-UP", oi_change, "BUY", price_change
+    if price_change < 0 and oi_rising:
+        return "SHORT BUILD-UP", oi_change, "SELL", price_change
+    if price_change > 0 and oi_falling:
+        return "SHORT COVERING", oi_change, "BUY", price_change
+    if price_change < 0 and oi_falling:
+        return "LONG UNWINDING", oi_change, "SELL", price_change
+    return "OI / PRICE MIXED", oi_change, "NEUTRAL", price_change
+
+
 def _future_setup(frame: pd.DataFrame) -> tuple[str, float | None, str]:
     if frame is None or frame.empty:
         return "OI UNAVAILABLE", None, "NEUTRAL"
@@ -45,26 +65,38 @@ def _future_setup(frame: pd.DataFrame) -> tuple[str, float | None, str]:
         return "OI UNAVAILABLE", None, "NEUTRAL"
     if "is_complete" in source.columns:
         source = source[source["is_complete"].fillna(False).astype(bool)]
-    source = source.dropna(subset=["close", oi_column]).tail(4)
+    source = source.dropna(subset=["close", oi_column])
     if len(source) < 2:
         return "OI WARMING UP", None, "NEUTRAL"
-    first = source.iloc[0]
-    last = source.iloc[-1]
-    old_oi = float(first[oi_column])
-    new_oi = float(last[oi_column])
-    oi_change = ((new_oi - old_oi) / abs(old_oi) * 100.0) if old_oi else None
-    price_change = float(last["close"]) - float(first["close"])
-    oi_rising = oi_change is not None and oi_change > 0.05
-    oi_falling = oi_change is not None and oi_change < -0.05
-    if price_change > 0 and oi_rising:
-        return "LONG BUILD-UP", oi_change, "BUY"
-    if price_change < 0 and oi_rising:
-        return "SHORT BUILD-UP", oi_change, "SELL"
-    if price_change > 0 and oi_falling:
-        return "SHORT COVERING", oi_change, "BUY"
-    if price_change < 0 and oi_falling:
-        return "LONG UNWINDING", oi_change, "SELL"
-    return "OI / PRICE MIXED", oi_change, "NEUTRAL"
+    candidates: list[tuple[float, str, float | None, str]] = []
+    for bars in (3, 4, 6, 11, 16):
+        window = source.tail(bars)
+        if len(window) < min(3, bars):
+            continue
+        setup, oi_change, direction, price_change = _classify_future_window(
+            window, oi_column
+        )
+        significance = abs(price_change) / max(1.0, len(window) ** 0.5)
+        if direction == "NEUTRAL":
+            significance *= 0.55
+        candidates.append((significance, setup, oi_change, direction))
+    if not candidates:
+        return "OI WARMING UP", None, "NEUTRAL"
+    _, setup, oi_change, direction = max(candidates, key=lambda item: item[0])
+    return setup, oi_change, direction
+
+
+def _recent_volume_ratio(frame: pd.DataFrame) -> float | None:
+    if frame is None or frame.empty or "volume" not in frame.columns:
+        return None
+    source = frame.copy()
+    if "is_complete" in source.columns:
+        source = source[source["is_complete"].fillna(False).astype(bool)]
+    values = pd.to_numeric(source["volume"], errors="coerce").dropna().tail(16)
+    if len(values) < 6:
+        return None
+    baseline = float(values.iloc[:-1].tail(10).median())
+    return float(values.iloc[-1]) / baseline if baseline > 0 else None
 
 
 def _volume_intensity(ratio: float | None) -> float:
@@ -114,8 +146,19 @@ def calculate_big_player_activity(
             )
         )
     ]
-    three = volume.three_minute
-    ratio = three.relative_volume if three.status == "READY" else None
+    volume_windows = (
+        volume.three_minute,
+        getattr(volume, "fifteen_minute", volume.three_minute),
+    )
+    ratios = [
+        float(item.relative_volume)
+        for item in volume_windows
+        if item.status == "READY" and item.relative_volume is not None
+    ]
+    one_minute_ratio = _recent_volume_ratio(future_candles_1m)
+    if one_minute_ratio is not None:
+        ratios.append(one_minute_ratio)
+    ratio = max(ratios) if ratios else None
     intensity = _volume_intensity(ratio)
     futures_setup, oi_change, futures_direction = _future_setup(future_candles_1m)
     activity_type = (
@@ -154,7 +197,13 @@ def calculate_big_player_activity(
     option_strength = min(100.0, abs(option_gap) * 1.8 + float(options.confidence) * 0.35)
     top7_direction = _direction_label(heavyweights.state)
     top7_strength = min(100.0, abs(float(heavyweights.weighted_move_pct or 0.0)) * 85.0 + 30.0)
-    price_direction = str(getattr(three, "price_direction", "NEUTRAL") or "NEUTRAL").upper()
+    strongest_volume = max(
+        volume_windows,
+        key=lambda item: float(item.relative_volume or 0.0),
+    )
+    price_direction = str(
+        getattr(strongest_volume, "price_direction", "NEUTRAL") or "NEUTRAL"
+    ).upper()
     candle_direction = "BUY" if price_direction == "UP" else "SELL" if price_direction == "DOWN" else "NEUTRAL"
 
     buy = intensity * 0.20
@@ -162,8 +211,8 @@ def calculate_big_player_activity(
     reasons: list[str] = []
     cautions: list[str] = []
     for direction, weight, strength, reason in (
-        (candle_direction, 0.25, intensity, f"3m futures volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
-        (futures_direction, 0.27, 82.0 if oi_change is not None else 25.0, f"Futures {futures_setup}"),
+        (candle_direction, 0.25, intensity, f"Strongest recent volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
+        (futures_direction, 0.28, 82.0 if oi_change is not None else 25.0, f"Futures {futures_setup}"),
         (option_direction, 0.21, option_strength, f"ATM option flow {options.market_bias}"),
         # Top-9 is useful context, but it cannot represent the remaining NIFTY stocks.
         (top7_direction, 0.07, top7_strength, f"Top-9 {heavyweights.state}"),
@@ -188,7 +237,7 @@ def calculate_big_player_activity(
     completed = future_candles_1m.copy() if future_candles_1m is not None else pd.DataFrame()
     if not completed.empty and "is_complete" in completed.columns:
         completed = completed[completed["is_complete"].fillna(False).astype(bool)]
-    completed = completed.dropna(subset=["close"]).tail(4) if not completed.empty else completed
+    completed = completed.dropna(subset=["close"]).tail(16) if not completed.empty else completed
     current_spot = float(completed.iloc[-1]["close"]) if not completed.empty else None
     move_points = (
         abs(float(completed.iloc[-1]["close"]) - float(completed.iloc[0]["close"]))
@@ -215,6 +264,17 @@ def calculate_big_player_activity(
         else "PRICE SHOCK DOWN" if shock_points <= -30.0 or shock_3m <= -15.0
         else "NONE"
     )
+    if price_shock_state == "NONE":
+        for prior in reversed(history[-8:]):
+            payload = prior.get("activity_payload") or {}
+            prior_state = str(payload.get("price_shock_state") or "")
+            if "PRICE SHOCK UP" in prior_state or "PRICE SHOCK DOWN" in prior_state:
+                price_shock_state = f"RECENT {prior_state.replace('RECENT ', '')}"
+                try:
+                    shock_points = float(payload.get("price_shock_points") or 0.0)
+                except (TypeError, ValueError):
+                    shock_points = 0.0
+                break
     directional_support = sum(
         (
             futures_direction == ("BUY" if direction == "BUYING" else "SELL"),

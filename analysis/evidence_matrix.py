@@ -264,28 +264,15 @@ def build_module_impact_audit(
             evaluations,
             key=lambda name: float(getattr(evaluations[name], "score", 0.0)),
         )
-    buyer = reference in {"CE BUY", "PE BUY"}
-    weights = (
-        {
-            "Price Action": 13.5,
-            "OI & Options Flow": 30.0,
-            "EMA / MACD / RSI": 10.5,
-            "Barrier / Levels / Volume": 6.0,
-            "NIFTY Top-9": 10.0,
-            "FII/DII (15 Sessions)": 8.0,
-            "VIX / Data Integrity": 12.0,
-        }
-        if buyer
-        else {
-            "Price Action": 11.25,
-            "OI & Options Flow": 40.0,
-            "EMA / MACD / RSI": 8.75,
-            "Barrier / Levels / Volume": 5.0,
-            "NIFTY Top-9": 10.0,
-            "FII/DII (15 Sessions)": 6.0,
-            "VIX / Data Integrity": 9.0,
-        }
-    )
+    weights = {
+        "Price Action": 13.5,
+        "OI & Options Flow": 30.0,
+        "EMA / MACD / RSI": 10.5,
+        "Barrier / Levels / Volume": 6.0,
+        "NIFTY Top-9": 8.0,
+        "FII/DII (15 Sessions)": 5.0,
+        "VIX / Data Integrity": 12.0,
+    }
     audit: dict[str, str] = {}
     for row in rows:
         module = str(row["Module"])
@@ -303,7 +290,7 @@ def build_module_impact_audit(
             confirmations = int(getattr(activity, "confirmation_count", 0) or 0)
             audit[module] = (
                 f"{direction} {score:.0f}/100 · confirm {confirmations} · "
-                "existing bounded max 10 pts"
+                "raw Futures activity 15% · composite confirmation/gate extra 0"
             )
             continue
         if module == "3M W/M Pattern":

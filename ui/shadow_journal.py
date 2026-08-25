@@ -11,7 +11,8 @@ from config import CONFIG
 def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str) -> None:
     st.subheader("🧪 Auto Shadow Journal — Paper Trades Only")
     st.caption(
-        "One-Brain ke confirmed ENTRY READY setups automatically paper-record hote hain. "
+        f"One-Brain ke {CONFIG.shadow_journal_min_confidence:.0f}%+ qualified setups "
+        "paper-test hote hain; ENTRY READY aur TEST CANDIDATE alag label hote hain. "
         "Koi broker order ya real paisa use nahi hota."
     )
     today = [item for item in entries if str(item.get("session_date")) == session_date]
@@ -28,7 +29,10 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str)
     c5.metric("Est. Net P&L", f"₹{net:,.0f}")
 
     if not today:
-        st.info("Aaj abhi koi 75%+ confirmed ENTRY READY shadow trade record nahi hua.")
+        st.info(
+            f"Aaj abhi koi {CONFIG.shadow_journal_min_confidence:.0f}%+ qualified "
+            "paper candidate record nahi hua. Real entry ke safety gates alag hain."
+        )
         return
 
     rows = []
@@ -40,6 +44,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str)
                 "Strategy": item.get("setup"),
                 "Confidence": item.get("decision_confidence"),
                 "Strategy score": item.get("strategy_score"),
+                "Qualification": item.get("qualification") or "LEGACY",
                 "OI bias": item.get("oi_bias"),
                 "Big Player": f"{item.get('big_player_direction')} {float(item.get('big_player_score') or 0):.0f}",
                 "Status": item.get("status"),

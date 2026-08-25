@@ -504,7 +504,7 @@ def render_evidence_matrix(
     st.caption(
         "11 compact rows same One-Brain ki Bull/Bear/Neutral evidence dikhati hain. "
         "Barrier existing Levels/OI/Volume ka synthesis hai—extra weight 0. Big Player "
-        "ka wahi existing bounded impact dikhaya gaya hai; koi second brain nahi."
+        "confirmation/gate hai—extra direction weight 0; koi second brain nahi."
     )
     rows = build_compact_evidence_matrix(snapshot, previous_snapshot)
     previous_rows = (
@@ -850,7 +850,9 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         strategy = evaluations[name]
         plan = plan_map[name]
         premium, value_grade = _premium_value(plan)
-        if snapshot.decision.final_action != "WAIT" and name == selected:
+        if not snapshot.market_session.is_live:
+            status = "REFERENCE ONLY"
+        elif snapshot.decision.final_action != "WAIT" and name == selected:
             status = "BEST • ENTRY READY" if plan.available else "BEST • STRIKE BLOCKED"
         elif snapshot.decision.final_action == "WAIT" and name == leader:
             status = "BEST AVAILABLE • WAIT"
@@ -883,7 +885,9 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
 
     styled = frame.style.apply(_strategy_style, axis=1)
     st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
-    if snapshot.decision.final_action == "WAIT":
+    if not snapshot.market_session.is_live:
+        st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
+    elif snapshot.decision.final_action == "WAIT":
         st.info(
             f"Final Action WAIT hai—{leader} abhi best available hai, par confirmation ke bina entry nahi."
         )
@@ -900,8 +904,12 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     if decision.final_action == "WAIT":
         css_class = "wait"
         title = "WAIT"
-        subtitle = f"Best available: {name} · Fit {score:.1f}%"
-        structure = _plan_structure_text(plan)
+        if not snapshot.market_session.is_live:
+            subtitle = "REFERENCE ONLY — fresh strategy ranking band"
+            structure = snapshot.market_session.message
+        else:
+            subtitle = f"Best available: {name} · Fit {score:.1f}%"
+            structure = _plan_structure_text(plan)
     else:
         css_class = "ready"
         title = decision.final_action
@@ -1001,10 +1009,14 @@ def render_main_ai_market_view(
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
-                ("Market Rukh", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
+                ("Structural Rukh", direction, f"Completed evidence {direction_score:.0f}/100 · {direction_note}"),
                 ("Data Quality", f"{data_quality:.0f}%", "Critical live feeds"),
                 ("Direction Agreement", f"{direction_agreement:.0f}%", "Core · OI · price · big player"),
-                ("Entry Confidence", f"{snapshot.decision.decision_confidence:.0f}%", snapshot.execution_guard.readiness),
+                (
+                    "Entry Confidence" if snapshot.market_session.is_live else "Reference Confidence",
+                    f"{snapshot.decision.decision_confidence:.0f}%",
+                    snapshot.execution_guard.readiness,
+                ),
             ]
         )
 

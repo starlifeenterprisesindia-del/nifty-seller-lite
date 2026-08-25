@@ -27,6 +27,113 @@ class FastQuote:
         return self.last_price - self.baseline
 
 
+@dataclass(frozen=True)
+class LiveImpulse:
+    direction: str
+    state: str
+    score: float
+    change_5s: float | None
+    change_15s: float | None
+    change_30s: float | None
+    change_60s: float | None
+    premium_shock: str
+    reasons: tuple[str, ...]
+
+
+def _sample_at_or_before(
+    history: list[dict[str, Any]], now_ts: float, age_seconds: int
+) -> dict[str, Any] | None:
+    target = now_ts - age_seconds
+    eligible = [item for item in history if float(item.get("captured_ts", 0.0)) <= target]
+    return eligible[-1] if eligible else None
+
+
+def calculate_live_impulse(
+    rows: list[FastQuote],
+    history: list[dict[str, Any]],
+    *,
+    captured_ts: float,
+) -> LiveImpulse:
+    """Classify a quote-speed impulse before a candle closes.
+
+    This is an early-warning lane, not an order signal.  It uses only observed
+    quote changes and never manufactures OI, volume or candle confirmation.
+    """
+    prices = {item.label: item.last_price for item in rows if item.last_price is not None}
+    spot = prices.get("NIFTY Live")
+    if spot is None:
+        return LiveImpulse("MIXED", "DATA UNAVAILABLE", 0.0, None, None, None, None, "NONE", ())
+
+    def change(age: int) -> float | None:
+        prior = _sample_at_or_before(history, captured_ts, age)
+        if prior is None:
+            return None
+        old = prior.get("prices", {}).get("NIFTY Live")
+        return None if old is None else float(spot) - float(old)
+
+    changes = {age: change(age) for age in (5, 15, 30, 60)}
+    weighted = 0.0
+    available_weight = 0.0
+    for age, weight, scale in ((5, 0.15, 4.0), (15, 0.25, 9.0), (30, 0.30, 16.0), (60, 0.30, 28.0)):
+        value = changes[age]
+        if value is None:
+            continue
+        weighted += max(-1.0, min(1.0, value / scale)) * weight
+        available_weight += weight
+    directional = weighted / available_weight if available_weight else 0.0
+
+    # Premium movement confirms speed but cannot create a NIFTY direction alone.
+    premium_reasons: list[str] = []
+    premium_shock = "NONE"
+    previous = _sample_at_or_before(history, captured_ts, 15)
+    if previous is not None:
+        previous_prices = previous.get("prices", {})
+        for label, current in prices.items():
+            if label == "NIFTY Live":
+                continue
+            old = previous_prices.get(label)
+            if old is None or float(old) <= 0:
+                continue
+            points = float(current) - float(old)
+            pct = points / float(old) * 100.0
+            if abs(points) >= 8.0 or abs(pct) >= 20.0:
+                premium_reasons.append(f"{label} {points:+.1f} ({pct:+.0f}%) /15s")
+    if premium_reasons:
+        premium_shock = "PREMIUM SHOCK"
+
+    magnitude = min(100.0, abs(directional) * 100.0)
+    same_sign = [value for value in changes.values() if value is not None and abs(value) >= 1.0]
+    persistent = len(same_sign) >= 2 and all(value > 0 for value in same_sign) or (
+        len(same_sign) >= 2 and all(value < 0 for value in same_sign)
+    )
+    direction = "BULLISH" if directional >= 0.18 else "BEARISH" if directional <= -0.18 else "MIXED"
+    if magnitude >= 75 and persistent:
+        state = "MAJOR MOVE CONFIRMED"
+    elif magnitude >= 48:
+        state = "FAST MOVE WATCH"
+    elif magnitude >= 25:
+        state = "WARMING UP"
+    else:
+        state = "STABLE"
+    reasons = [
+        f"NIFTY {value:+.1f}/{age}s"
+        for age, value in changes.items()
+        if value is not None
+    ]
+    reasons.extend(premium_reasons[:2])
+    return LiveImpulse(
+        direction=direction,
+        state=state,
+        score=round(magnitude, 1),
+        change_5s=changes[5],
+        change_15s=changes[15],
+        change_30s=changes[30],
+        change_60s=changes[60],
+        premium_shock=premium_shock,
+        reasons=tuple(reasons[:5]),
+    )
+
+
 def _number(value: Any) -> float | None:
     try:
         number = float(value)

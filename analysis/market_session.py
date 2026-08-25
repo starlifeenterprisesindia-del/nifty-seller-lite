@@ -12,6 +12,7 @@ def classify_market_session(
     quote_age_seconds: float | None,
     has_current_day_candle: bool,
     candle_age_seconds: float | None,
+    quote_candle_aligned: bool = True,
 ) -> MarketSession:
     """Classify whether current data is live or last-available reference data.
 
@@ -42,7 +43,7 @@ def classify_market_session(
             is_live=False,
             message="Official pre-open window chal rahi hai; regular cash market 09:15 IST par open hota hai. Last completed-session values reference-only hain.",
         )
-    if CONFIG.cas_start <= current_time <= CONFIG.market_close:
+    if CONFIG.cas_start <= current_time <= CONFIG.cas_end:
         return MarketSession(
             code="CLOSING_AUCTION",
             label="CLOSING AUCTION (CAS) - REFERENCE ONLY",
@@ -52,7 +53,7 @@ def classify_market_session(
                 "normal intraday direction ya fresh entry signal nahi maana jayega."
             ),
         )
-    if current_time > CONFIG.market_close:
+    if current_time > CONFIG.cas_end:
         return MarketSession(
             code="CLOSED_AFTER_HOURS",
             label="MARKET CLOSED — LAST AVAILABLE DATA",
@@ -69,7 +70,7 @@ def classify_market_session(
         and candle_age_seconds is not None
         and candle_age_seconds <= CONFIG.candle_max_age_minutes * 60
     )
-    if quote_is_fresh and candle_is_fresh:
+    if quote_is_fresh and candle_is_fresh and quote_candle_aligned:
         return MarketSession(
             code="LIVE",
             label="MARKET OPEN — LIVE DATA",
@@ -84,6 +85,8 @@ def classify_market_session(
         missing.append("current-session candle")
     elif not candle_is_fresh:
         missing.append("fresh completed candle")
+    if not quote_candle_aligned:
+        missing.append("quote/candle price alignment")
     reason = " and ".join(missing) or "fresh market evidence"
     return MarketSession(
         code="CLOSED_OR_STALE_SESSION",

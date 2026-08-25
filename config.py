@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.33.4_ONE_BRAIN_NO_DOUBLING"
+    version: str = "2.34.0_LIVE_IMPULSE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -29,9 +29,15 @@ class AppConfig:
     quote_max_age_seconds: int = 12
     context_quote_max_age_seconds: int = 60
     candle_max_age_minutes: int = 5
+    quote_candle_max_divergence_points: float = 50.0
+    quote_candle_max_divergence_pct: float = 0.20
     pre_open_start: time = time(9, 0)
     market_open: time = time(9, 15)
-    cas_start: time = time(15, 15)
+    # NSE cash continuous session remains open through 15:30.  CAS/closing
+    # indicative quotes after that point are reference-only and must never make
+    # the valid 15:15-15:30 candles disappear from the signal frame.
+    cas_start: time = time(15, 30)
+    cas_end: time = time(15, 40)
     market_close: time = time(15, 30)
     derivatives_close: time = time(15, 40)
     nifty: InstrumentRef = InstrumentRef(
@@ -233,8 +239,8 @@ class AppConfig:
     # Automatic read-only forward journal. It never sends broker orders.
     shadow_journal_path: str = "data/shadow_journal.json"
     shadow_journal_max_trades_per_day: int = 5
-    shadow_journal_min_confidence: float = 60.0
-    shadow_journal_min_strategy_score: float = 60.0
+    shadow_journal_min_confidence: float = 55.0
+    shadow_journal_min_strategy_score: float = 55.0
     shadow_journal_cooldown_minutes: int = 20
     shadow_journal_estimated_charges_per_trade: float = 40.0
 

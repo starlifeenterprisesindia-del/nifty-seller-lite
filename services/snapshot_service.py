@@ -216,7 +216,9 @@ class SnapshotService:
                 current = current.tz_localize(IST_TIMEZONE)
             else:
                 current = current.tz_convert(IST_TIMEZONE)
-            candle_close = latest + pd.Timedelta(minutes=max(0, interval_minutes))
+            candle_close = latest + pd.Timedelta(
+                minutes=int(max(0, interval_minutes))
+            )
             return max(0.0, (current - candle_close).total_seconds())
         except Exception:
             return None
@@ -461,11 +463,30 @@ class SnapshotService:
             not candles_1m.empty
             and pd.Timestamp(candles_1m.iloc[-1]["timestamp"]).date() == current.date()
         )
+        latest_spot_close = (
+            self._positive_number(candles_1m.iloc[-1].get("close"))
+            if not candles_1m.empty
+            else None
+        )
+        quote_candle_divergence = (
+            abs(float(nifty_price) - float(latest_spot_close))
+            if latest_spot_close is not None
+            else None
+        )
+        quote_candle_limit = max(
+            CONFIG.quote_candle_max_divergence_points,
+            float(nifty_price) * CONFIG.quote_candle_max_divergence_pct / 100.0,
+        )
+        quote_candle_aligned = (
+            quote_candle_divergence is not None
+            and quote_candle_divergence <= quote_candle_limit
+        )
         market_session = classify_market_session(
             current,
             quote_age_seconds=quote_age,
             has_current_day_candle=has_current_day_candle,
             candle_age_seconds=latest_1m_age,
+            quote_candle_aligned=quote_candle_aligned,
         )
 
         vix_age = self._quote_age_seconds(vix_quote, current)
@@ -545,7 +566,13 @@ class SnapshotService:
             ok=candle_available,
             fetched_at=current,
             age_seconds=latest_1m_age,
-            message=f"NIFTY 1m={len(candles_1m)}, derived 3m={len(candles_3m)}, native 15m={len(candles_15m)}",
+            message=(
+                f"NIFTY 1m={len(candles_1m)}, derived 3m={len(candles_3m)}, "
+                f"native 15m={len(candles_15m)}; quote/candle gap "
+                f"{quote_candle_divergence:.1f} pts (limit {quote_candle_limit:.1f})"
+                if quote_candle_divergence is not None
+                else "NIFTY candle/quote alignment unavailable"
+            ),
             use_state=feed_use_state(
                 available=candle_available,
                 market_session=market_session,

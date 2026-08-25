@@ -33,7 +33,7 @@ from services.pdf_report import (
     support_bundle_filename,
 )
 from services.snapshot_service import SnapshotService
-from services.live_monitor import fetch_fast_quotes, monitor_timestamp
+from services.live_monitor import calculate_live_impulse, fetch_fast_quotes, monitor_timestamp
 from ui.components import (
     render_candles,
     render_decision,
@@ -659,8 +659,38 @@ def render_fast_live_monitor() -> None:
         if not rows:
             st.caption("⚡ Fast Monitor — quote unavailable; full snapshot safe hai")
             return
+        captured_ts = time.time()
+        history = list(st.session_state.get("fast_quote_history", []))
+        impulse = calculate_live_impulse(rows, history, captured_ts=captured_ts)
+        history.append(
+            {
+                "captured_ts": captured_ts,
+                "prices": {item.label: item.last_price for item in rows if item.last_price is not None},
+            }
+        )
+        st.session_state.fast_quote_history = [
+            item for item in history if captured_ts - float(item.get("captured_ts", 0.0)) <= 180
+        ][-40:]
+        st.session_state.fast_live_impulse = impulse
         with st.container(border=True):
-            st.caption(f"⚡ FAST LIVE MONITOR · {monitor_timestamp()} · One-Brain unchanged")
+            icon = (
+                "🟢" if impulse.direction == "BULLISH"
+                else "🔴" if impulse.direction == "BEARISH"
+                else "🟡" if impulse.state != "STABLE"
+                else "⚪"
+            )
+            st.markdown(
+                f"{icon} **LIVE IMPULSE: {impulse.direction} — {impulse.state} "
+                f"{impulse.score:.0f}/100**"
+            )
+            st.caption(
+                f"⚡ {monitor_timestamp()} · Candle close ka wait nahi · "
+                "early warning only, OI/volume confirmation parallel"
+            )
+            if impulse.reasons:
+                st.caption(" | ".join(impulse.reasons))
+            if impulse.premium_shock != "NONE":
+                st.warning("⚡ ATM premium mein unusually fast change detect hua.")
             cols = st.columns(len(rows))
             for col, item in zip(cols, rows):
                 value = f"{item.last_price:,.2f}" if item.last_price is not None else "—"

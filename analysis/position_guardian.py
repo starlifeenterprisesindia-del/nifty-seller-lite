@@ -44,6 +44,7 @@ def create_trade_record(
     lots: int,
     lot_size: int,
     spot: float | None,
+    allow_paper_candidate: bool = False,
 ) -> dict[str, Any]:
     """Freeze the protected setup actually marked by the user.
 
@@ -52,11 +53,20 @@ def create_trade_record(
     """
 
     plan = _selected_plan(trade_plan)
-    if execution_guard.readiness != "ENTRY READY":
+    if execution_guard.readiness != "ENTRY READY" and not allow_paper_candidate:
         raise ValueError("Only an ENTRY READY setup can be marked as taken")
-    if decision.final_action == "WAIT" or plan is None or not plan.available:
+    if (
+        (decision.final_action == "WAIT" and not allow_paper_candidate)
+        or plan is None
+        or not plan.available
+    ):
         raise ValueError("No protected setup is available to record")
-    if lots < 1 or lots > execution_guard.allowed_lots:
+    allowed_lots = (
+        max(1, execution_guard.allowed_lots)
+        if allow_paper_candidate
+        else execution_guard.allowed_lots
+    )
+    if lots < 1 or lots > allowed_lots:
         raise ValueError("Selected lots exceed the execution guard allowance")
     if lot_size < 1:
         raise ValueError("Lot size must be positive")
@@ -85,7 +95,7 @@ def create_trade_record(
         "status": "OPEN",
         "opened_at": captured_at.isoformat(),
         "closed_at": "",
-        "action": decision.final_action,
+        "action": trade_plan.selected_setup if allow_paper_candidate else decision.final_action,
         "setup": trade_plan.selected_setup,
         "expiry": trade_plan.expiry or "",
         "entry_spot": float(spot) if spot is not None else None,

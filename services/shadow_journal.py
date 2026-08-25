@@ -173,14 +173,32 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
         return False, "Daily 5-trade paper cap reached"
     if not snapshot.market_session.is_live:
         return False, "Market is not live"
-    if snapshot.execution_guard.readiness != "ENTRY READY":
-        return False, "Execution Guard is not ENTRY READY"
     if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
         return False, "No concrete One-Brain strategy"
     if snapshot.decision.decision_confidence < CONFIG.shadow_journal_min_confidence:
         return False, "Entry confidence below threshold"
     if _strategy_score(snapshot, action) < CONFIG.shadow_journal_min_strategy_score:
         return False, "Strategy score below threshold"
+    selected_plan = {
+        "CE BUY": snapshot.trade_plan.ce_buy,
+        "PE BUY": snapshot.trade_plan.pe_buy,
+        "CE SELL": snapshot.trade_plan.ce_sell,
+        "PE SELL": snapshot.trade_plan.pe_sell,
+        "IRON CONDOR": snapshot.trade_plan.iron_condor,
+    }.get(action)
+    if selected_plan is None or not selected_plan.available:
+        return False, "Protected paper plan is unavailable"
+    for feed_name in ("quotes", "candles", "option_chain"):
+        feed = snapshot.feed_status.get(feed_name)
+        if feed is None or feed.use_state != "LIVE":
+            return False, f"{feed_name} is not confirmed live"
+    ready_windows = sum(
+        item.status == "READY" for item in snapshot.option_intelligence.windows
+    )
+    if snapshot.option_intelligence.status != "READY" or ready_windows < 2:
+        return False, "Option flow has fewer than two ready windows"
+    if snapshot.option_intelligence.confidence < CONFIG.shadow_journal_min_confidence:
+        return False, "Option-flow confidence below paper threshold"
     if any(
         str(item.get("status") or "").upper() == "OPEN"
         and str(item.get("setup") or "").upper() == action
@@ -215,11 +233,19 @@ def process_auto_shadow_journal(
             lots=1,
             lot_size=snapshot.risk_profile.lot_size,
             spot=snapshot.levels.current_price,
+            allow_paper_candidate=(
+                snapshot.execution_guard.readiness != "ENTRY READY"
+            ),
         )
         action = snapshot.trade_plan.selected_setup
         record.update(
             {
                 "journal_type": "AUTO SHADOW",
+                "qualification": (
+                    "ENTRY READY SHADOW"
+                    if snapshot.execution_guard.readiness == "ENTRY READY"
+                    else "55%+ TEST CANDIDATE"
+                ),
                 "trade_id": f"SH-{snapshot.created_at:%Y%m%d-%H%M%S}-{len(entries)+1}",
                 "session_date": snapshot.created_at.date().isoformat(),
                 "setup": action,

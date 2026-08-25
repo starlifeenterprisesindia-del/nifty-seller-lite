@@ -644,9 +644,11 @@ def calculate_option_intelligence(
     persistence = _persistence(history, current_snapshot, market_bias)
     ready_windows = sum(item.status == "READY" for item in windows)
     if previous_snapshot is None or not integrity_ready:
-        confidence = 38.0
+        confidence = 20.0
     else:
-        confidence = 58.0 + ready_windows * 8.0
+        # Continuity owns usability: a structurally valid day-change snapshot is
+        # not the same thing as a live intraday OI-change signal.
+        confidence = {0: 25.0, 1: 42.0, 2: 60.0, 3: 76.0}[ready_windows]
         if persistence.endswith("×3") or "PERSISTENT" in persistence:
             confidence += 8.0
     confidence = round(min(90.0, confidence), 1)
@@ -679,7 +681,7 @@ def calculate_option_intelligence(
         "REFERENCE ONLY"
         if not is_live
         else "READY"
-        if previous_snapshot is not None and integrity_ready
+        if previous_snapshot is not None and integrity_ready and ready_windows >= 2
         else "WARMING UP"
     )
 
