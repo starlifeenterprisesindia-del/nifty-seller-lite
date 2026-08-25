@@ -33,7 +33,14 @@ from services.pdf_report import (
     support_bundle_filename,
 )
 from services.snapshot_service import SnapshotService
-from services.live_monitor import calculate_live_impulse, fetch_fast_quotes, monitor_timestamp
+from services.live_monitor import (
+    FastQuote,
+    calculate_live_impulse,
+    calculate_live_impulse_from_changes,
+    fetch_fast_quotes,
+    monitor_timestamp,
+)
+from services.railway_live_client import fetch_railway_live_state
 from ui.components import (
     render_candles,
     render_decision,
@@ -151,6 +158,15 @@ def secret_value(name: str) -> str:
     return os.getenv(f"DHAN_{name.upper()}", "")
 
 
+def live_server_value(name: str) -> str:
+    try:
+        if "live_server" in st.secrets and name in st.secrets["live_server"]:
+            return str(st.secrets["live_server"][name])
+    except Exception:
+        pass
+    return os.getenv(f"LIVE_SERVER_{name.upper()}", "")
+
+
 def cloud_journal_values() -> dict[str, str]:
     values: dict[str, str] = {}
     try:
@@ -176,6 +192,8 @@ def cloud_journal_values() -> dict[str, str]:
 
 client_id = secret_value("client_id")
 access_token = secret_value("access_token")
+live_server_url = live_server_value("url")
+live_server_api_key = live_server_value("api_key")
 
 # Quiet housekeeping on every rerun. It prunes only temporary/raw market state older
 # than 24h; FII/DII journal, manual discipline/trade state and learning summaries remain.
@@ -654,23 +672,54 @@ def render_fast_live_monitor() -> None:
         st.caption("⚡ Fast Monitor PAUSED — market live nahi")
         return
     try:
-        credentials = Credentials(client_id=client_id, access_token=access_token)
-        rows = fetch_fast_quotes(DhanClient(credentials), current)
+        remote = None
+        if live_server_url and live_server_api_key:
+            remote = fetch_railway_live_state(
+                live_server_url, live_server_api_key, timeout_seconds=3.0
+            )
+        if remote is not None and remote.nifty_ltp is not None:
+            rows = [
+                FastQuote(
+                    label="NIFTY Live",
+                    last_price=remote.nifty_ltp,
+                    baseline=getattr(current, "nifty_quote", {}).get("last_price"),
+                    last_trade_time=remote.captured_at,
+                )
+            ]
+            impulse = calculate_live_impulse_from_changes(
+                {
+                    5: remote.change_5s,
+                    15: remote.change_15s,
+                    30: remote.change_30s,
+                    60: remote.change_60s,
+                }
+            )
+            source = "Railway WebSocket"
+        else:
+            credentials = Credentials(client_id=client_id, access_token=access_token)
+            rows = fetch_fast_quotes(DhanClient(credentials), current)
+            source = "Dhan quote fallback"
+            captured_ts = time.time()
+            history = list(st.session_state.get("fast_quote_history", []))
+            impulse = calculate_live_impulse(rows, history, captured_ts=captured_ts)
+            history.append(
+                {
+                    "captured_ts": captured_ts,
+                    "prices": {
+                        item.label: item.last_price
+                        for item in rows
+                        if item.last_price is not None
+                    },
+                }
+            )
+            st.session_state.fast_quote_history = [
+                item
+                for item in history
+                if captured_ts - float(item.get("captured_ts", 0.0)) <= 180
+            ][-40:]
         if not rows:
             st.caption("⚡ Fast Monitor — quote unavailable; full snapshot safe hai")
             return
-        captured_ts = time.time()
-        history = list(st.session_state.get("fast_quote_history", []))
-        impulse = calculate_live_impulse(rows, history, captured_ts=captured_ts)
-        history.append(
-            {
-                "captured_ts": captured_ts,
-                "prices": {item.label: item.last_price for item in rows if item.last_price is not None},
-            }
-        )
-        st.session_state.fast_quote_history = [
-            item for item in history if captured_ts - float(item.get("captured_ts", 0.0)) <= 180
-        ][-40:]
         st.session_state.fast_live_impulse = impulse
         with st.container(border=True):
             icon = (
@@ -684,7 +733,7 @@ def render_fast_live_monitor() -> None:
                 f"{impulse.score:.0f}/100**"
             )
             st.caption(
-                f"⚡ {monitor_timestamp()} · Candle close ka wait nahi · "
+                f"⚡ {monitor_timestamp()} · {source} · Candle close ka wait nahi · "
                 "early warning only, OI/volume confirmation parallel"
             )
             if impulse.reasons:

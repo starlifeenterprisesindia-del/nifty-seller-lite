@@ -40,6 +40,71 @@ class LiveImpulse:
     reasons: tuple[str, ...]
 
 
+def calculate_live_impulse_from_changes(
+    changes: dict[int, float | None],
+    *,
+    extra_reasons: tuple[str, ...] = (),
+    premium_shock: str = "NONE",
+) -> LiveImpulse:
+    """Apply the one live-speed formula to local or Railway observations."""
+
+    weighted = 0.0
+    available_weight = 0.0
+    for age, weight, scale in (
+        (5, 0.15, 4.0),
+        (15, 0.25, 9.0),
+        (30, 0.30, 16.0),
+        (60, 0.30, 28.0),
+    ):
+        value = changes.get(age)
+        if value is None:
+            continue
+        weighted += max(-1.0, min(1.0, float(value) / scale)) * weight
+        available_weight += weight
+    directional = weighted / available_weight if available_weight else 0.0
+    magnitude = min(100.0, abs(directional) * 100.0)
+    signed = [
+        float(value)
+        for value in changes.values()
+        if value is not None and abs(float(value)) >= 1.0
+    ]
+    persistent = len(signed) >= 2 and (
+        all(value > 0 for value in signed) or all(value < 0 for value in signed)
+    )
+    direction = (
+        "BULLISH"
+        if directional >= 0.18
+        else "BEARISH"
+        if directional <= -0.18
+        else "MIXED"
+    )
+    if magnitude >= 75 and persistent:
+        state = "MAJOR MOVE CONFIRMED"
+    elif magnitude >= 48:
+        state = "FAST MOVE WATCH"
+    elif magnitude >= 25:
+        state = "WARMING UP"
+    else:
+        state = "STABLE"
+    reasons = [
+        f"NIFTY {float(value):+.1f}/{age}s"
+        for age, value in changes.items()
+        if value is not None
+    ]
+    reasons.extend(extra_reasons)
+    return LiveImpulse(
+        direction=direction,
+        state=state,
+        score=round(magnitude, 1),
+        change_5s=changes.get(5),
+        change_15s=changes.get(15),
+        change_30s=changes.get(30),
+        change_60s=changes.get(60),
+        premium_shock=premium_shock,
+        reasons=tuple(reasons[:5]),
+    )
+
+
 def _sample_at_or_before(
     history: list[dict[str, Any]], now_ts: float, age_seconds: int
 ) -> dict[str, Any] | None:
@@ -72,16 +137,6 @@ def calculate_live_impulse(
         return None if old is None else float(spot) - float(old)
 
     changes = {age: change(age) for age in (5, 15, 30, 60)}
-    weighted = 0.0
-    available_weight = 0.0
-    for age, weight, scale in ((5, 0.15, 4.0), (15, 0.25, 9.0), (30, 0.30, 16.0), (60, 0.30, 28.0)):
-        value = changes[age]
-        if value is None:
-            continue
-        weighted += max(-1.0, min(1.0, value / scale)) * weight
-        available_weight += weight
-    directional = weighted / available_weight if available_weight else 0.0
-
     # Premium movement confirms speed but cannot create a NIFTY direction alone.
     premium_reasons: list[str] = []
     premium_shock = "NONE"
@@ -101,36 +156,10 @@ def calculate_live_impulse(
     if premium_reasons:
         premium_shock = "PREMIUM SHOCK"
 
-    magnitude = min(100.0, abs(directional) * 100.0)
-    same_sign = [value for value in changes.values() if value is not None and abs(value) >= 1.0]
-    persistent = len(same_sign) >= 2 and all(value > 0 for value in same_sign) or (
-        len(same_sign) >= 2 and all(value < 0 for value in same_sign)
-    )
-    direction = "BULLISH" if directional >= 0.18 else "BEARISH" if directional <= -0.18 else "MIXED"
-    if magnitude >= 75 and persistent:
-        state = "MAJOR MOVE CONFIRMED"
-    elif magnitude >= 48:
-        state = "FAST MOVE WATCH"
-    elif magnitude >= 25:
-        state = "WARMING UP"
-    else:
-        state = "STABLE"
-    reasons = [
-        f"NIFTY {value:+.1f}/{age}s"
-        for age, value in changes.items()
-        if value is not None
-    ]
-    reasons.extend(premium_reasons[:2])
-    return LiveImpulse(
-        direction=direction,
-        state=state,
-        score=round(magnitude, 1),
-        change_5s=changes[5],
-        change_15s=changes[15],
-        change_30s=changes[30],
-        change_60s=changes[60],
+    return calculate_live_impulse_from_changes(
+        changes,
+        extra_reasons=tuple(premium_reasons[:2]),
         premium_shock=premium_shock,
-        reasons=tuple(reasons[:5]),
     )
 
 
