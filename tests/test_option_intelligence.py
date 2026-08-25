@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from analysis.option_intelligence import calculate_option_intelligence
+from analysis.option_intelligence import _merge_flow, calculate_option_intelligence
 from services.option_state_store import OptionStateStore
 
 
@@ -152,7 +152,7 @@ def test_intraday_flow_windows_and_classification(tmp_path):
         current_snapshot=current_state,
         is_live=True,
     )
-    assert result.basis == "INTRADAY SNAPSHOT DELTA"
+    assert result.basis == "EXPIRY + STRIKE + SECURITY MATCHED INTRADAY DELTA"
     assert result.status == "READY"
     assert all(window.status == "READY" for window in result.windows)
     assert len(result.flow_rows) == 6
@@ -244,3 +244,24 @@ def test_first_snapshot_extreme_flow_is_calibrated_by_low_confidence():
     assert result.bearish_score > 0.0
     assert result.range_score > 0.0
     assert round(result.bullish_score + result.bearish_score + result.range_score, 1) == 100.0
+
+
+def test_negative_volume_delta_is_rejected_as_a_counter_reset():
+    previous = chain()
+    current = chain(2)
+    previous["security_id"] = range(1, len(previous) + 1)
+    current["security_id"] = range(1, len(current) + 1)
+    current["volume"] = 1.0
+    flow, _ = _merge_flow(current, previous, 24350)
+    assert set(flow["integrity_status"]) == {"INVALID COMPARISON"}
+    assert set(flow["classification"]) == {"NOISE / FLAT"}
+
+
+def test_security_id_mismatch_cannot_create_false_oi_change():
+    previous = chain()
+    current = chain(2)
+    previous["security_id"] = range(1, len(previous) + 1)
+    current["security_id"] = range(101, 101 + len(current))
+    flow, _ = _merge_flow(current, previous, 24350)
+    assert set(flow["integrity_status"]) == {"INVALID COMPARISON"}
+    assert set(flow["classification"]) == {"NOISE / FLAT"}

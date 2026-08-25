@@ -964,12 +964,47 @@ def render_main_ai_market_view(
 
     st.subheader("🧠 Main AI — Simple Trading View")
 
+    critical_feeds = [
+        snapshot.feed_status.get(key)
+        for key in ("quotes", "candles", "option_chain", "future_volume", "vix")
+    ]
+    critical_feeds = [item for item in critical_feeds if item is not None]
+    data_quality = (
+        100.0
+        * sum(item.ok and item.use_state not in {"UNAVAILABLE", "STALE"} for item in critical_feeds)
+        / len(critical_feeds)
+        if critical_feeds
+        else 0.0
+    )
+    final_direction = str(snapshot.decision.market_direction or "RANGE").upper()
+
+    def _evidence_direction(value: str) -> str:
+        text = str(value or "").upper()
+        if "BULL" in text or "BUYING" in text:
+            return "BULLISH"
+        if "BEAR" in text or "SELLING" in text:
+            return "BEARISH"
+        return "RANGE"
+
+    agreement_sources = (
+        _evidence_direction(snapshot.core_evidence.market_state),
+        _evidence_direction(snapshot.option_intelligence.market_bias),
+        _evidence_direction(snapshot.price_action.combined_state),
+        _evidence_direction(snapshot.big_player_activity.direction),
+    )
+    direction_agreement = round(
+        100.0 * sum(item == final_direction for item in agreement_sources) / len(agreement_sources)
+    )
+
     with st.container(border=True):
         _render_final_action_hero(snapshot, feed_ok)
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
                 ("Market Rukh", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
+                ("Data Quality", f"{data_quality:.0f}%", "Critical live feeds"),
+                ("Direction Agreement", f"{direction_agreement:.0f}%", "Core · OI · price · big player"),
+                ("Entry Confidence", f"{snapshot.decision.decision_confidence:.0f}%", snapshot.execution_guard.readiness),
             ]
         )
 

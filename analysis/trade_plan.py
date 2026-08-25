@@ -10,6 +10,7 @@ from analysis.technical_utils import clamp
 from config import CONFIG
 from models import (
     FinalDecision,
+    IndicatorBundle,
     LevelBundle,
     MarketSession,
     OptionIntelligence,
@@ -700,7 +701,15 @@ def _vertical_plan(
     )
 
 
-def _condor_plan(ce: SetupPlan, pe: SetupPlan) -> SetupPlan:
+def _condor_plan(
+    ce: SetupPlan,
+    pe: SetupPlan,
+    *,
+    spot: float | None = None,
+    levels: LevelBundle | None = None,
+    options: OptionIntelligence | None = None,
+    indicators: IndicatorBundle | None = None,
+) -> SetupPlan:
     if not ce.available or not pe.available:
         return SetupPlan.unavailable(
             "IRON CONDOR",
@@ -715,7 +724,61 @@ def _condor_plan(ce: SetupPlan, pe: SetupPlan) -> SetupPlan:
     max_width = max(widths)
     max_risk = max(0.0, max_width - credit)
     quality = round(min(ce.quality_score, pe.quality_score), 1)
-    status = "READY" if quality >= CONFIG.trade_min_plan_quality else "CAUTION"
+    balance_reasons: list[str] = []
+    blockers: list[str] = []
+    ce_delta = abs(float(ce_short.delta)) if ce_short.delta is not None else None
+    pe_delta = abs(float(pe_short.delta)) if pe_short.delta is not None else None
+    if ce_delta is not None and pe_delta is not None:
+        delta_gap = abs(ce_delta - pe_delta)
+        balance_reasons.append(f"Short delta gap {delta_gap:.2f}")
+        if delta_gap > 0.15:
+            blockers.append("CE/PE short deltas are imbalanced")
+            quality -= min(20.0, delta_gap * 80.0)
+
+    if spot is not None and spot > 0:
+        up_distance = max(0.0, ce_short.strike - spot)
+        down_distance = max(0.0, spot - pe_short.strike)
+        distance_ratio = max(up_distance, down_distance) / max(1.0, min(up_distance, down_distance))
+        balance_reasons.append(
+            f"Risk room UP {up_distance:.0f} / DN {down_distance:.0f} pts"
+        )
+        if distance_ratio > 1.8:
+            blockers.append("Upper/lower short-strike room is imbalanced")
+            quality -= min(18.0, (distance_ratio - 1.0) * 10.0)
+
+    ce_credit = float(ce.estimated_credit_points or 0.0)
+    pe_credit = float(pe.estimated_credit_points or 0.0)
+    credit_ratio = max(ce_credit, pe_credit) / max(0.01, min(ce_credit, pe_credit))
+    balance_reasons.append(f"Wing credit CE {ce_credit:.2f} / PE {pe_credit:.2f}")
+    if credit_ratio > 2.5:
+        blockers.append("CE/PE wing credits are excessively imbalanced")
+        quality -= min(15.0, (credit_ratio - 1.0) * 6.0)
+
+    if indicators is not None:
+        rsi3 = indicators.three_minute.rsi14
+        rsi15 = indicators.fifteen_minute.rsi14
+        if rsi3 is not None and rsi15 is not None:
+            balance_reasons.append(f"RSI 3m {rsi3:.1f} / 15m {rsi15:.1f}")
+            if rsi3 >= 65 and rsi15 >= 55:
+                blockers.append("RSI alignment shows CE-side upside risk")
+                quality -= 15.0
+            elif rsi3 <= 35 and rsi15 <= 45:
+                blockers.append("RSI alignment shows PE-side downside risk")
+                quality -= 15.0
+
+    if options is not None and options.market_bias in {"BULLISH", "BEARISH"}:
+        if options.confidence >= 75 and "PERSISTENT" in options.persistence:
+            blockers.append("Persistent directional option flow blocks Iron Condor")
+            quality -= 20.0
+
+    quality = round(clamp(quality, 0.0, 100.0), 1)
+    status = (
+        "READY"
+        if quality >= CONFIG.trade_min_plan_quality and not blockers
+        else "BLOCKED"
+        if blockers
+        else "CAUTION"
+    )
     return SetupPlan(
         name="IRON CONDOR",
         short_legs=(pe_short, ce_short),
@@ -731,9 +794,10 @@ def _condor_plan(ce: SetupPlan, pe: SetupPlan) -> SetupPlan:
             "Protected wings exist on both sides",
             f"Short-strike range {pe_short.strike:,.0f}–{ce_short.strike:,.0f}",
             f"Combined estimated credit {credit:.2f} points",
+            *balance_reasons,
             *(reason for reason in (*pe.reasons, *ce.reasons) if reason.startswith("Theta edge")),
         ),
-        blocker="None" if status == "READY" else "One or both wings have weak quality",
+        blocker="None" if status == "READY" else "; ".join(blockers) or "One or both wings have weak quality",
     )
 
 
@@ -748,6 +812,8 @@ def _apply_runtime_status(
         return plan
     if not market_session.is_live:
         return replace(plan, status="REFERENCE ONLY", blocker="Market is not live")
+    if plan.status == "BLOCKED":
+        return plan
     if decision.final_action == "WAIT":
         return replace(plan, status="WATCH ONLY", blocker=decision.blocker)
     if not selected:
@@ -846,6 +912,7 @@ def calculate_trade_plan(
     options: OptionIntelligence,
     decision: FinalDecision,
     market_session: MarketSession,
+    indicators: IndicatorBundle | None = None,
 ) -> TradePlanBundle:
     """Convert the same One-Brain choice into a concrete option structure.
 
@@ -876,7 +943,14 @@ def calculate_trade_plan(
     pe_sell = _vertical_plan(
         name="PE SELL", side="PE", frame=frame, spot=spot, levels=levels, options=options
     )
-    condor = _condor_plan(ce_sell, pe_sell)
+    condor = _condor_plan(
+        ce_sell,
+        pe_sell,
+        spot=spot,
+        levels=levels,
+        options=options,
+        indicators=indicators,
+    )
     ce_buy = _buy_plan(
         name="CE BUY", side="CE", frame=frame, spot=spot, levels=levels,
         target_delta=0.58, min_delta=0.46, max_delta=0.68, hedge_steps=3,
@@ -915,7 +989,14 @@ def calculate_trade_plan(
     # The audit must show one internally consistent protected structure. If the
     # balanced directional candidate changed a CE/PE sell wing, rebuild the condor
     # from those exact displayed standalone sell legs.
-    plans["IRON CONDOR"] = _condor_plan(plans["CE SELL"], plans["PE SELL"])
+    plans["IRON CONDOR"] = _condor_plan(
+        plans["CE SELL"],
+        plans["PE SELL"],
+        spot=spot,
+        levels=levels,
+        options=options,
+        indicators=indicators,
+    )
     plans = {
         name: _apply_runtime_status(
             plan,

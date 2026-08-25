@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.32.2_DATA_SAFETY"
+    version: str = "2.33.1_ADAPTIVE_CONFIRMATION"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -144,7 +144,7 @@ class AppConfig:
     # FII/DII journal, manual trade records and compact learning summaries are excluded.
     temporary_data_retention_hours: int = 24
     decision_minimum_score: float = 62.0
-    decision_minimum_margin: float = 8.0
+    decision_minimum_margin: float = 12.0
     decision_wait_block_threshold: float = 60.0
     decision_min_option_confidence: float = 58.0
     decision_min_core_confidence: float = 55.0
@@ -154,8 +154,13 @@ class AppConfig:
     # of calculate_final_decision using bounded same-session evidence memory.
     decision_memory_lookback: int = 5
     decision_memory_max_age_seconds: int = 900
-    decision_confirmation_snapshots: int = 2
-    decision_flip_confirmations: int = 2
+    decision_confirmation_snapshots: int = 3
+    decision_flip_confirmations: int = 3
+    decision_normal_confirmation_seconds: int = 60
+    decision_strong_confirmation_seconds: int = 30
+    decision_condor_confirmation_seconds: int = 120
+    decision_reversal_confirmation_seconds: int = 180
+    decision_strong_min_score: float = 80.0
     decision_flip_margin: float = 15.0
     decision_emergency_flip_margin: float = 35.0
     decision_stability_wait_floor: float = 65.0
@@ -204,7 +209,7 @@ class AppConfig:
     discipline_state_max_signals: int = 60
     discipline_signal_dedupe_seconds: int = 20
     discipline_signal_max_gap_seconds: int = 420
-    execution_required_confirmations: int = 2
+    execution_required_confirmations: int = 3
     execution_min_flow_confidence: float = 75.0
     execution_required_flow_windows: int = 3
     risk_default_capital: float = 250000.0
@@ -220,6 +225,18 @@ class AppConfig:
     # Manual post-entry position guardian. Alerts are deterministic and read-only.
     position_profit_protect_pct: float = 70.0
     position_risk_warning_pct: float = -70.0
+
+    # One-Brain participation gate. Evidence modules never select a strategy.
+    big_player_min_score: float = 60.0
+    big_player_min_confirmations: int = 2
+
+    # Automatic read-only forward journal. It never sends broker orders.
+    shadow_journal_path: str = "data/shadow_journal.json"
+    shadow_journal_max_trades_per_day: int = 5
+    shadow_journal_min_confidence: float = 75.0
+    shadow_journal_min_strategy_score: float = 75.0
+    shadow_journal_cooldown_minutes: int = 20
+    shadow_journal_estimated_charges_per_trade: float = 40.0
 
     @property
     def top7_symbols(self) -> tuple[str, ...]:

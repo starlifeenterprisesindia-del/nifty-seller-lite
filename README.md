@@ -1,4 +1,21 @@
-# Nifty Seller Lite 2.24
+# Nifty Seller Lite 2.33
+
+The OI engine now compares only the same expiry, strike, side and (when supplied)
+security ID. Negative volume-counter resets and unmatched contracts are invalidated
+instead of being interpreted as market activity. Executable bid/ask midpoint is used
+when the spread is healthy, with broker LTP as the fallback.
+
+One-Brain now gives higher weight to option OI/volume and bounded Big Player evidence.
+Adaptive confirmation uses 2 snapshots/30 seconds for strongly aligned moves,
+3 snapshots/60 seconds normally, 3 snapshots/120 seconds for Iron Condor and
+3 snapshots/180 seconds after a direction reversal. Execution Guard proceeds only at
+75% strategy score and entry confidence. The main screen keeps
+Data Quality, Direction Agreement and Entry Confidence separate.
+
+Iron Condor has a balance guard for CE/PE delta, credit, directional room, persistent
+option flow and aligned 3-minute/15-minute RSI risk. Auto Shadow Journal can record up
+to five confirmed paper trades per session with reasons, legs, MFE/MAE, exit outcome
+and estimated net P&L. It is read-only and never places broker orders.
 
 Directional CE/PE candidates now appear in three compact protected profiles:
 LOW RISK, BALANCED and HIGH RISK. Every BUY or SELL candidate uses a same-expiry,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -176,12 +177,20 @@ def test_wait_decision_blocks_execution_but_keeps_watch_candidates():
 
 
 def test_condor_has_two_short_legs_and_two_hedges():
+    range_options = replace(
+        option_intelligence(),
+        bullish_score=20,
+        bearish_score=20,
+        range_score=60,
+        market_bias="MIXED",
+        persistence="RANGE PERSISTENT ×3",
+    )
     result = calculate_trade_plan(
         frame=option_frame(),
         spot=24350,
         expiry="2026-07-21",
         levels=levels(),
-        options=option_intelligence(),
+        options=range_options,
         decision=decision("IRON CONDOR WITH HEDGE"),
         market_session=live_session(),
     )

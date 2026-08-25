@@ -12,7 +12,10 @@ from models import FlowWindow, OIWall, OptionIntelligence, PCRBundle
 
 NUMERIC_COLUMNS = (
     "strike",
+    "security_id",
     "last_price",
+    "top_bid_price",
+    "top_ask_price",
     "oi",
     "volume",
     "previous_oi",
@@ -37,6 +40,28 @@ def _rows_to_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 def _safe_sum(series: pd.Series) -> float:
     return float(pd.to_numeric(series, errors="coerce").fillna(0.0).sum())
+
+
+def _finite(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _fair_premium(frame: pd.DataFrame) -> pd.Series:
+    """Use a healthy executable midpoint, otherwise fall back to broker LTP."""
+
+    blank = pd.Series(float("nan"), index=frame.index, dtype=float)
+    last = pd.to_numeric(frame["last_price"], errors="coerce") if "last_price" in frame else blank
+    bid = pd.to_numeric(frame["top_bid_price"], errors="coerce") if "top_bid_price" in frame else blank
+    ask = pd.to_numeric(frame["top_ask_price"], errors="coerce") if "top_ask_price" in frame else blank
+    valid = bid.gt(0) & ask.gt(0) & ask.ge(bid)
+    midpoint = (bid + ask) / 2.0
+    spread_pct = (ask - bid).div(midpoint.where(midpoint.gt(0))).mul(100.0)
+    valid &= spread_pct.le(20.0)
+    return midpoint.where(valid, last)
 
 
 def _ratio(numerator: float, denominator: float) -> float | None:
@@ -112,21 +137,33 @@ def _merge_flow(
     base = current.copy()
     if base.empty:
         return base, "UNAVAILABLE"
+    base["fair_premium"] = _fair_premium(base)
     if previous is not None and not previous.empty:
-        prior = previous[["strike", "side", "last_price", "oi", "volume"]].rename(
+        previous = previous.copy()
+        previous["fair_premium"] = _fair_premium(previous)
+        merge_keys = ["strike", "side"]
+        if (
+            "security_id" in base
+            and "security_id" in previous
+            and base["security_id"].notna().any()
+            and previous["security_id"].notna().any()
+        ):
+            merge_keys.append("security_id")
+        prior = previous[[*merge_keys, "fair_premium", "oi", "volume"]].rename(
             columns={
-                "last_price": "prior_last_price",
+                "fair_premium": "prior_fair_premium",
                 "oi": "prior_oi",
                 "volume": "prior_volume",
             }
         )
-        base = base.merge(prior, on=["strike", "side"], how="left")
-        base["price_delta"] = base["last_price"] - base["prior_last_price"]
+        base = base.merge(prior, on=merge_keys, how="left")
+        base["price_delta"] = base["fair_premium"] - base["prior_fair_premium"]
         base["oi_delta"] = base["oi"] - base["prior_oi"]
-        base["volume_delta"] = (base["volume"] - base["prior_volume"]).clip(lower=0)
-        basis = "INTRADAY SNAPSHOT DELTA"
+        raw_volume_delta = base["volume"] - base["prior_volume"]
+        base["volume_delta"] = raw_volume_delta.where(raw_volume_delta.ge(0))
+        basis = "EXPIRY + STRIKE + SECURITY MATCHED INTRADAY DELTA"
     else:
-        base["prior_last_price"] = base.get("previous_close_price")
+        base["prior_fair_premium"] = base.get("previous_close_price")
         base["prior_oi"] = base.get("previous_oi")
         base["prior_volume"] = base.get("previous_volume")
         base["price_delta"] = base.get("day_price_change", 0.0)
@@ -138,23 +175,36 @@ def _merge_flow(
 
     rows: list[dict[str, Any]] = []
     for raw in base.to_dict(orient="records"):
-        strike = float(raw.get("strike") or 0.0)
+        strike = _finite(raw.get("strike")) or 0.0
         side = str(raw.get("side") or "").upper()
-        premium = float(raw.get("last_price") or 0.0)
-        oi = float(raw.get("oi") or 0.0)
-        price_delta = float(raw.get("price_delta") or 0.0)
-        oi_delta = float(raw.get("oi_delta") or 0.0)
-        volume_delta = float(raw.get("volume_delta") or 0.0)
+        premium = _finite(raw.get("fair_premium")) or 0.0
+        oi = _finite(raw.get("oi")) or 0.0
+        prior_oi = _finite(raw.get("prior_oi"))
+        raw_price_delta = _finite(raw.get("price_delta"))
+        raw_oi_delta = _finite(raw.get("oi_delta"))
+        raw_volume_delta = _finite(raw.get("volume_delta"))
+        integrity_ok = (
+            raw_price_delta is not None
+            and raw_oi_delta is not None
+            and raw_volume_delta is not None
+            and prior_oi is not None
+            and prior_oi > 0
+        )
+        price_delta = raw_price_delta or 0.0
+        oi_delta = raw_oi_delta or 0.0
+        volume_delta = raw_volume_delta or 0.0
         classification = _classify_flow(
             price_delta=price_delta,
             oi_delta=oi_delta,
             premium_reference=premium,
-            oi_reference=oi,
+            oi_reference=prior_oi or oi,
         )
+        if previous is not None and not integrity_ok:
+            classification = "NOISE / FLAT"
         direction = _direction_for(side, classification)
         strength = _flow_strength(
             oi_delta=oi_delta,
-            oi_reference=oi,
+            oi_reference=prior_oi or oi,
             volume_delta=volume_delta,
             strike=strike,
             spot=spot,
@@ -166,7 +216,10 @@ def _merge_flow(
                 "volume_delta": round(volume_delta, 4),
                 "classification": classification,
                 "directional_bias": direction,
-                "flow_strength": strength,
+                "flow_strength": strength if classification != "NOISE / FLAT" else 0.0,
+                "integrity_status": (
+                    "READY" if integrity_ok or previous is None else "INVALID COMPARISON"
+                ),
             }
         )
         rows.append(raw)
@@ -260,7 +313,12 @@ def _window(
         )
     previous = _rows_to_frame(sample.get("rows") or [])
     flow, _ = _merge_flow(current, previous, spot)
-    if flow.empty:
+    valid_rows = (
+        flow["integrity_status"].eq("READY").sum()
+        if not flow.empty and "integrity_status" in flow
+        else 0
+    )
+    if flow.empty or valid_rows < 4:
         bias = "UNAVAILABLE"
     else:
         directional = flow.apply(
@@ -293,7 +351,7 @@ def _window(
         ce_volume_delta=side_sum("CE", "volume_delta"),
         pe_volume_delta=side_sum("PE", "volume_delta"),
         bias=bias,
-        status="READY",
+        status="READY" if valid_rows >= 4 else "INVALID OI COMPARISON",
     )
 
 
@@ -560,6 +618,12 @@ def calculate_option_intelligence(
         else None
     )
     flow, basis = _merge_flow(current, previous_frame, spot)
+    valid_flow_rows = (
+        int(flow["integrity_status"].eq("READY").sum())
+        if "integrity_status" in flow
+        else 0
+    )
+    integrity_ready = previous_snapshot is None or valid_flow_rows >= 4
     if continuity_reset:
         basis = "DAY CHANGE — CONTINUITY RESET"
     pcr = _pcr(current, flow)
@@ -579,7 +643,7 @@ def calculate_option_intelligence(
     bullish, bearish, range_score, market_bias = _normalized_scores(flow, pcr)
     persistence = _persistence(history, current_snapshot, market_bias)
     ready_windows = sum(item.status == "READY" for item in windows)
-    if previous_snapshot is None:
+    if previous_snapshot is None or not integrity_ready:
         confidence = 38.0
     else:
         confidence = 58.0 + ready_windows * 8.0
@@ -603,6 +667,10 @@ def calculate_option_intelligence(
             if continuity_reset
             else "First snapshot: intraday delta is warming up"
         )
+    elif not integrity_ready:
+        blockers.append(
+            f"Expiry/security matched OI comparisons ready {valid_flow_rows}/4"
+        )
     if ready_windows < 3:
         blockers.append(f"Movement windows ready {ready_windows}/3")
     if not is_live:
@@ -611,7 +679,7 @@ def calculate_option_intelligence(
         "REFERENCE ONLY"
         if not is_live
         else "READY"
-        if previous_snapshot is not None
+        if previous_snapshot is not None and integrity_ready
         else "WARMING UP"
     )
 
@@ -628,6 +696,7 @@ def calculate_option_intelligence(
         "classification",
         "directional_bias",
         "flow_strength",
+        "integrity_status",
         "implied_volatility",
     )
     flow_rows = tuple(

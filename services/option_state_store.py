@@ -58,7 +58,10 @@ class OptionStateStore:
         keep = (
             "strike",
             "side",
+            "security_id",
             "last_price",
+            "top_bid_price",
+            "top_ask_price",
             "oi",
             "volume",
             "previous_oi",

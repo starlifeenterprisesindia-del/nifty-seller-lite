@@ -152,9 +152,10 @@ def common_kwargs():
 
 def test_live_bullish_setup_selects_pe_sell_with_hedge():
     result = calculate_final_decision(**common_kwargs())
-    assert result.final_action == "PE SELL WITH HEDGE"
+    assert result.instant_action == "PE SELL WITH HEDGE"
+    assert result.final_action == "WAIT"
     assert result.pe_sell.score > result.ce_sell.score
-    assert result.wait_need.score < 60
+    assert result.wait_need.score >= 65
     assert result.hedge_required is True
 
 
@@ -304,15 +305,24 @@ def test_first_direction_is_developing_but_execution_guard_can_confirm_later():
     kwargs = common_kwargs()
     kwargs["as_of"] = NOW
     result = calculate_final_decision(**kwargs)
-    assert result.final_action == "PE SELL WITH HEDGE"
+    assert result.instant_action == "PE SELL WITH HEDGE"
+    assert result.final_action == "WAIT"
     assert result.signal_state == "BULLISH DEVELOPING"
     assert "WARMING UP" in result.outlook.signal_memory
 
 
-def test_second_consistent_snapshot_confirms_direction():
+def test_three_minute_three_snapshot_stability_confirms_direction():
     kwargs = common_kwargs()
     kwargs["as_of"] = NOW
     kwargs["signal_history"] = (
+        _signal(
+            captured_at=NOW.replace(hour=10, minute=57),
+            direction="BULLISH",
+            state="BULLISH DEVELOPING",
+            ce=18,
+            pe=78,
+            condor=25,
+        ),
         _signal(
             captured_at=NOW.replace(hour=10, minute=58),
             direction="BULLISH",
@@ -325,7 +335,7 @@ def test_second_consistent_snapshot_confirms_direction():
     result = calculate_final_decision(**kwargs)
     assert result.final_action == "PE SELL WITH HEDGE"
     assert result.signal_state == "BULLISH CONFIRMED"
-    assert result.outlook.signal_memory.startswith("2/2 BULLISH")
+    assert result.outlook.signal_memory.startswith("3/3 BULLISH")
 
 
 def test_single_opposite_snapshot_is_held_at_wait_instead_of_flipping():
@@ -358,6 +368,14 @@ def test_persistent_opposite_direction_can_confirm_reversal():
             ce=18,
             pe=78,
             condor=25,
+        ),
+        _signal(
+            captured_at=NOW.replace(hour=10, minute=57),
+            direction="BEARISH",
+            state="TRANSITION / WAIT",
+            ce=76,
+            pe=24,
+            condor=20,
         ),
         _signal(
             captured_at=NOW.replace(hour=10, minute=58),
@@ -492,7 +510,8 @@ def test_strong_aligned_momentum_can_select_ce_buy_from_same_brain():
         status="READY", overall_view="BULLISH PARTICIPATION"
     )
     result = calculate_final_decision(**kwargs)
-    assert result.final_action == "CE BUY"
+    assert result.instant_action == "WAIT"
+    assert result.final_action == "WAIT"
     assert result.ce_buy.score > result.pe_sell.score
     assert result.hedge_required is False
 
@@ -511,7 +530,8 @@ def test_strong_aligned_bearish_momentum_can_select_pe_buy_from_same_brain():
         status="READY", overall_view="BEARISH PARTICIPATION"
     )
     result = calculate_final_decision(**kwargs)
-    assert result.final_action == "PE BUY"
+    assert result.instant_action == "WAIT"
+    assert result.final_action == "WAIT"
     assert result.pe_buy.score > result.ce_sell.score
     assert result.hedge_required is False
 

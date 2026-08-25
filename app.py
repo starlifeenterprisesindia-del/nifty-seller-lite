@@ -22,6 +22,7 @@ from services.instrument_master import InstrumentMaster
 from services.github_journal import GitHubJsonJournal
 from services.option_state_store import OptionStateStore
 from services.news_service import MarketNewsService
+from services.shadow_journal import ShadowJournalStore, process_auto_shadow_journal
 from services.housekeeping import run_housekeeping
 from services.pdf_report import (
     audit_pdf_filename,
@@ -61,6 +62,7 @@ from ui.components import (
 )
 from ui.premium_calculator import render_spot_premium_calculator
 from ui.alerts import render_market_alerts
+from ui.shadow_journal import render_auto_shadow_journal
 
 
 @contextmanager
@@ -182,6 +184,11 @@ state_store = OptionStateStore(Path(CONFIG.option_state_path))
 cloud_journal = GitHubJsonJournal.from_mapping(
     cloud_journal_values(), timeout_seconds=CONFIG.market_context_cloud_timeout_seconds
 )
+shadow_cloud_values = cloud_journal_values()
+shadow_cloud_values["path"] = "shadow_journal.json"
+shadow_cloud_journal = GitHubJsonJournal.from_mapping(
+    shadow_cloud_values, timeout_seconds=CONFIG.market_context_cloud_timeout_seconds
+)
 context_store = MarketContextStore(
     Path(CONFIG.market_context_path),
     Path(CONFIG.market_context_mirror_path),
@@ -189,6 +196,12 @@ context_store = MarketContextStore(
     cloud_backend=cloud_journal,
 )
 discipline_store = DisciplineStore(Path(CONFIG.discipline_state_path))
+shadow_journal_store = ShadowJournalStore(
+    Path(CONFIG.shadow_journal_path), cloud_backend=shadow_cloud_journal
+)
+if not st.session_state.get("shadow_journal_cloud_loaded", False):
+    shadow_journal_store.load(refresh_cloud=True)
+    st.session_state["shadow_journal_cloud_loaded"] = True
 news_service = MarketNewsService(Path(CONFIG.news_cache_path))
 
 
@@ -207,6 +220,12 @@ with st.sidebar:
         st.success("Dhan credentials found")
     else:
         st.error("Dhan credentials missing")
+    shadow_journal_enabled = st.toggle(
+        "Auto Shadow Journal ON",
+        value=True,
+        key="auto_shadow_journal_enabled",
+        help="Maximum 5 paper trades/day; no broker orders.",
+    )
     auto_due = bool(st.session_state.pop("auto_snapshot_due", False))
     refresh_requested = st.button(
         "Fetch Fresh Snapshot", type="primary", width="stretch"
@@ -602,6 +621,11 @@ if "snapshot" not in st.session_state or refresh:
 
 snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
+shadow_entries = process_auto_shadow_journal(
+    snapshot,
+    shadow_journal_store,
+    enabled=bool(shadow_journal_enabled),
+)
 # Presentation copy only: scores, strikes, final action and execution readiness remain
 # authoritative. It normalizes contradictory labels/reasons for screen and PDF output.
 view_snapshot = prepare_snapshot_for_presentation(snapshot)
@@ -659,6 +683,11 @@ with persistent_panel(
     if panel_open:
         render_big_player_activity(view_snapshot)
 render_protected_candidates(view_snapshot)
+with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
+    if panel_open:
+        render_auto_shadow_journal(
+            shadow_entries, view_snapshot.created_at.date().isoformat()
+        )
 render_spot_premium_calculator(view_snapshot)
 
 with persistent_panel(

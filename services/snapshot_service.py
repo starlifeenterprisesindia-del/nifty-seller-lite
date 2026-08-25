@@ -1002,6 +1002,7 @@ class SnapshotService:
             options=option_intelligence,
             decision=decision,
             market_session=market_session,
+            indicators=indicators,
         )
 
         fresh_signal = (
@@ -1059,6 +1060,7 @@ class SnapshotService:
             price_action=price_action,
             risk_profile=profile,
             discipline_state=discipline_state,
+            big_player=big_player_activity,
             feed_status=statuses,
             as_of=current,
         )

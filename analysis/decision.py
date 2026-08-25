@@ -656,7 +656,11 @@ def _memory_confirmation(
     fake_move_risk: float,
     core: CoreMarketEvidence,
     options: OptionIntelligence,
+    volume: VolumeBundle | None,
+    big_player: BigPlayerActivity | None,
+    leader_score: float,
     market_session: MarketSession,
+    as_of: datetime | None = None,
 ) -> tuple[str, str, bool]:
     directions = [row["market_direction"] for row in history]
     recent = (directions + [direction])[-CONFIG.decision_memory_lookback :]
@@ -669,11 +673,21 @@ def _memory_confirmation(
         return "REFERENCE ONLY", memory_text, False
 
     consecutive = 1
+    contiguous_times: list[datetime] = []
     for previous in reversed(directions):
         if previous != direction:
             break
         consecutive += 1
-
+    for row in reversed(history):
+        if row["market_direction"] != direction:
+            break
+        captured = row.get("_captured_at")
+        if isinstance(captured, datetime):
+            contiguous_times.append(captured)
+    stable_seconds = 0.0
+    if as_of is not None and contiguous_times:
+        oldest = min(contiguous_times)
+        stable_seconds = max(0.0, (as_of - oldest).total_seconds())
     previous_confirmed: str | None = None
     for row in reversed(history):
         state = str(row.get("signal_state") or "").upper()
@@ -690,30 +704,61 @@ def _memory_confirmation(
 
     core_direction = _directional_label(core.market_state)
     option_direction = _directional_label(options.market_bias)
-    emergency = (
+    activity_direction = {
+        "BUYING": "BULLISH",
+        "SELLING": "BEARISH",
+        "MIXED": "RANGE",
+    }.get(str(getattr(big_player, "direction", "")).upper(), "")
+    volume_text = str(getattr(volume, "overall_view", "")).upper()
+    strong_alignment = (
         direction in {"BULLISH", "BEARISH"}
-        and score_gap >= CONFIG.decision_emergency_flip_margin
+        and leader_score >= CONFIG.decision_strong_min_score
         and core_direction == direction
         and option_direction == direction
-        and core.confidence >= 70
-        and options.confidence >= 70
+        and core.confidence >= 80
+        and options.confidence >= 80
+        and volume is not None
+        and volume.status == "READY"
+        and direction in volume_text
+        and big_player is not None
+        and big_player.status == "READY"
+        and big_player.score >= 75
+        and big_player.confirmation_count >= 2
+        and activity_direction == direction
         and fake_move_risk < CONFIG.fake_move_medium_threshold
     )
 
     prior_direction = directions[-1] if directions else previous_confirmed
     if prior_direction and prior_direction != direction:
-        if emergency:
-            return f"{direction} CONFIRMED — RAPID REVERSAL", memory_text, True
+        required_seconds = CONFIG.decision_reversal_confirmation_seconds
+        time_confirmed = stable_seconds >= required_seconds
+        memory_text += f" · reversal {stable_seconds:.0f}/{required_seconds}s"
         if (
             consecutive >= CONFIG.decision_flip_confirmations
+            and time_confirmed
             and score_gap >= CONFIG.decision_flip_margin
             and fake_move_risk < CONFIG.fake_move_high_threshold
         ):
             return f"{direction} CONFIRMED", memory_text, True
         return "TRANSITION / WAIT", memory_text, False
 
+    if direction == "RANGE":
+        required_snapshots = CONFIG.decision_confirmation_snapshots
+        required_seconds = CONFIG.decision_condor_confirmation_seconds
+        confirmation_label = "condor"
+    elif strong_alignment:
+        required_snapshots = 2
+        required_seconds = CONFIG.decision_strong_confirmation_seconds
+        confirmation_label = "strong"
+    else:
+        required_snapshots = CONFIG.decision_confirmation_snapshots
+        required_seconds = CONFIG.decision_normal_confirmation_seconds
+        confirmation_label = "normal"
+    time_confirmed = stable_seconds >= required_seconds
+    memory_text += f" · {confirmation_label} {stable_seconds:.0f}/{required_seconds}s"
     if (
-        consecutive >= CONFIG.decision_confirmation_snapshots
+        consecutive >= required_snapshots
+        and time_confirmed
         and score_gap >= CONFIG.decision_minimum_margin
         and fake_move_risk < CONFIG.fake_move_high_threshold
     ):
@@ -881,35 +926,35 @@ def calculate_final_decision(
     # Seller setups retain the frozen seller architecture. Directional buys are
     # evaluated by the same brain with more weight on momentum/room and less on decay.
     ce = (
-        core.bearish_score * 0.35
-        + options.bearish_score * 0.35
-        + heavy_bear * 0.15
+        core.bearish_score * 0.25
+        + options.bearish_score * 0.40
+        + heavy_bear * 0.10
         + (seller_score * 0.60 + inst_bear * 0.40) * 0.15
     )
     pe = (
-        core.bullish_score * 0.35
-        + options.bullish_score * 0.35
-        + heavy_bull * 0.15
+        core.bullish_score * 0.25
+        + options.bullish_score * 0.40
+        + heavy_bull * 0.10
         + (seller_score * 0.60 + inst_bull * 0.40) * 0.15
     )
     condor = (
-        core.range_score * 0.35
-        + options.range_score * 0.35
-        + heavy_range * 0.15
+        core.range_score * 0.25
+        + options.range_score * 0.40
+        + heavy_range * 0.10
         + (seller_score * 0.65 + inst_range * 0.35) * 0.15
     )
     ce_buy = (
-        core.bullish_score * 0.40
-        + options.bullish_score * 0.22
-        + heavy_bull * 0.16
-        + inst_bull * 0.10
+        core.bullish_score * 0.30
+        + options.bullish_score * 0.30
+        + heavy_bull * 0.10
+        + inst_bull * 0.08
         + buyer_score * 0.12
     )
     pe_buy = (
-        core.bearish_score * 0.40
-        + options.bearish_score * 0.22
-        + heavy_bear * 0.16
-        + inst_bear * 0.10
+        core.bearish_score * 0.30
+        + options.bearish_score * 0.30
+        + heavy_bear * 0.10
+        + inst_bear * 0.08
         + buyer_score * 0.12
     )
 
@@ -962,7 +1007,7 @@ def calculate_final_decision(
     pe_buy += pattern_ce
 
     # Big-player activity is one bounded confirmation inside this same function.
-    # It cannot independently choose an action and contributes at most six points.
+    # It cannot independently choose an action and contributes at most ten points.
     big_player_note: str | None = None
     if (
         big_player is not None
@@ -970,7 +1015,7 @@ def calculate_final_decision(
         and big_player.confirmation_count >= 2
         and big_player.score >= 60
     ):
-        activity_adjust = min(6.0, max(0.0, (big_player.score - 55.0) * 0.14))
+        activity_adjust = min(10.0, max(0.0, (big_player.score - 55.0) * 0.22))
         if big_player.activity_type in {"SHORT COVERING", "LONG UNWINDING"}:
             # Position closing can move price sharply, but it is weaker evidence of
             # fresh directional commitment than new long/short build-up.
@@ -1289,7 +1334,11 @@ def calculate_final_decision(
         fake_move_risk=fake_move_risk,
         core=core,
         options=options,
+        volume=volume,
+        big_player=big_player,
+        leader_score=leader_score,
         market_session=market_session,
+        as_of=as_of,
     )
     if not option_data_available:
         signal_state = "DATA UNAVAILABLE / WAIT"
@@ -1302,6 +1351,12 @@ def calculate_final_decision(
             wait = max(wait, CONFIG.decision_stability_wait_floor)
             blockers.append(
                 "Opposite movement is not persistent; anti-flip filter is holding WAIT"
+            )
+        elif "DEVELOPING" in signal_state or "WARMING UP" in signal_state:
+            final_action = "WAIT"
+            wait = max(wait, CONFIG.decision_stability_wait_floor)
+            blockers.append(
+                "Adaptive confirmation is warming up: strong 30s, normal 60s, condor 120s"
             )
         elif fake_move_risk >= CONFIG.fake_move_high_threshold:
             final_action = "WAIT"

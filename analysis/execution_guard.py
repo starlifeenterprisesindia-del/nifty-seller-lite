@@ -6,6 +6,7 @@ from typing import Iterable
 
 from config import CONFIG
 from models import (
+    BigPlayerActivity,
     DisciplineState,
     ExecutionGuard,
     FeedStatus,
@@ -216,6 +217,7 @@ def calculate_execution_guard(
     discipline_state: DisciplineState,
     feed_status: dict[str, FeedStatus],
     as_of: datetime,
+    big_player: BigPlayerActivity | None = None,
 ) -> ExecutionGuard:
     """Convert the chosen setup into a read-only entry/risk gate.
 
@@ -261,6 +263,52 @@ def calculate_execution_guard(
     else:
         if decision.final_action == "WAIT":
             blockers.append(f"Final one-brain action is WAIT: {decision.blocker}")
+        evaluation = {
+            "CE BUY": decision.ce_buy,
+            "PE BUY": decision.pe_buy,
+            "CE SELL": decision.ce_sell,
+            "PE SELL": decision.pe_sell,
+            "IRON CONDOR": decision.iron_condor,
+        }.get(setup)
+        if evaluation is not None and evaluation.score < CONFIG.shadow_journal_min_strategy_score:
+            blockers.append(
+                f"Strategy score {evaluation.score:.1f}% is below "
+                f"{CONFIG.shadow_journal_min_strategy_score:.0f}%"
+            )
+        if decision.decision_confidence < CONFIG.shadow_journal_min_confidence:
+            blockers.append(
+                f"Entry confidence {decision.decision_confidence:.1f}% is below "
+                f"{CONFIG.shadow_journal_min_confidence:.0f}%"
+            )
+        expected_activity = {
+            "CE BUY": "BUYING",
+            "PE SELL": "BUYING",
+            "PE BUY": "SELLING",
+            "CE SELL": "SELLING",
+            "IRON CONDOR": "MIXED",
+        }.get(setup)
+        if big_player is not None and big_player.status != "READY":
+            blockers.append("Big Player evidence is not READY")
+        elif big_player is not None and setup == "IRON CONDOR":
+            if big_player.direction != "MIXED" and big_player.score >= CONFIG.big_player_min_score:
+                blockers.append(
+                    f"Directional Big Player {big_player.direction} blocks Iron Condor"
+                )
+        elif big_player is not None and expected_activity:
+            if big_player.score < CONFIG.big_player_min_score:
+                blockers.append(
+                    f"Big Player score {big_player.score:.1f} is below "
+                    f"{CONFIG.big_player_min_score:.0f}"
+                )
+            if big_player.confirmation_count < CONFIG.big_player_min_confirmations:
+                blockers.append(
+                    f"Big Player confirmations {big_player.confirmation_count}/"
+                    f"{CONFIG.big_player_min_confirmations}"
+                )
+            if big_player.direction != expected_activity:
+                blockers.append(
+                    f"Big Player {big_player.direction} conflicts with {setup}"
+                )
         if setup == "WAIT" or plan is None:
             blockers.append("No protected setup is selected")
         elif plan.status != "READY":

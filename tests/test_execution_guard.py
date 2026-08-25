@@ -193,7 +193,7 @@ def feeds(live: bool = True) -> dict[str, FeedStatus]:
     }
 
 
-def discipline(confirmations: int = 2, locked: bool = False) -> DisciplineState:
+def discipline(confirmations: int = 3, locked: bool = False) -> DisciplineState:
     history = tuple(
         {
             "captured_at": (NOW - timedelta(minutes=confirmations - i - 1)).isoformat(),
@@ -229,10 +229,10 @@ def run(**overrides) -> ExecutionGuard:
     return calculate_execution_guard(**kwargs)
 
 
-def test_two_fresh_confirmations_and_risk_budget_make_entry_ready():
+def test_three_fresh_confirmations_and_risk_budget_make_entry_ready():
     result = run()
     assert result.readiness == "ENTRY READY"
-    assert result.confirmations >= 2
+    assert result.confirmations >= 3
     assert result.allowed_lots == 1
     assert result.target_profit_rupees > 0
     assert result.stop_loss_rupees > 0
@@ -363,11 +363,11 @@ def test_ce_buy_uses_debit_risk_math_and_can_be_entry_ready():
             "last_action": "CE BUY",
             "signal_history": tuple(
                 {
-                    "captured_at": (NOW - timedelta(minutes=1 - i)).isoformat(),
+                    "captured_at": (NOW - timedelta(minutes=2 - i)).isoformat(),
                     "action": "CE BUY",
                     "execution_status": "READY",
                 }
-                for i in range(2)
+                for i in range(3)
             ),
         }
     )
