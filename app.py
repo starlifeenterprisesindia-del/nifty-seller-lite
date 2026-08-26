@@ -71,6 +71,7 @@ from ui.premium_calculator import render_spot_premium_calculator
 from ui.alerts import render_market_alerts
 from ui.shadow_journal import render_auto_shadow_journal
 from ui.timeframe_outlook import render_timeframe_outlook
+from ui.rsi_reversal_setup import render_rsi_reversal_setup
 
 
 @contextmanager
@@ -781,6 +782,12 @@ with persistent_panel(
 ) as panel_open:
     if panel_open:
         render_big_player_activity(view_snapshot)
+with persistent_panel(
+    "🎯 RSI Top–Bottom Setup — Alag Strategy",
+    "panel_rsi_reversal_setup_open",
+) as panel_open:
+    if panel_open:
+        render_rsi_reversal_setup(view_snapshot, previous_view_snapshot)
 render_protected_candidates(view_snapshot)
 with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
     if panel_open:
