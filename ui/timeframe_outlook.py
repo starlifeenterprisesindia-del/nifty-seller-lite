@@ -22,6 +22,16 @@ def _short_reason(*parts: Any) -> str:
     return " · ".join(str(part) for part in parts if part not in (None, ""))[:150]
 
 
+def _price_action_move(item: Any) -> str:
+    """Return a move label across old and new snapshot model versions."""
+    return str(
+        getattr(item, "current_move", None)
+        or getattr(item, "event", None)
+        or getattr(item, "move_stage", None)
+        or ""
+    )
+
+
 def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = None) -> list[dict[str, Any]]:
     """Display-only horizon projection from existing One-Brain evidence.
 
@@ -34,7 +44,7 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
     outlook = snapshot.decision.outlook
 
     five = _pick(pa3.bullish_score, pa3.bearish_score, pa3.range_score)
-    five_reason = _short_reason("3m price action", pa3.structure, pa3.current_move)
+    five_reason = _short_reason("3m price action", pa3.structure, _price_action_move(pa3))
     if live_impulse is not None and getattr(live_impulse, "direction", "RANGE") in {"BULLISH", "BEARISH"}:
         impulse_score = float(getattr(live_impulse, "score", 0.0) or 0.0)
         if impulse_score >= 55:
@@ -42,7 +52,7 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
             five_reason = _short_reason("Live impulse", live_impulse.state, *(live_impulse.reasons[:2]))
 
     fifteen = _pick(pa15.bullish_score, pa15.bearish_score, pa15.range_score)
-    fifteen_reason = _short_reason("15m structure", pa15.structure, pa15.current_move)
+    fifteen_reason = _short_reason("15m structure", pa15.structure, _price_action_move(pa15))
 
     thirty = _pick(outlook.bullish_path_pct, outlook.bearish_path_pct, outlook.range_path_pct)
     thirty_reason = _short_reason("One-Brain path", snapshot.decision.market_direction, *(outlook.reasons[:1]))
