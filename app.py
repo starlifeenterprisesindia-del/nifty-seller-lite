@@ -40,7 +40,7 @@ from services.live_monitor import (
     fetch_fast_quotes,
     monitor_timestamp,
 )
-from services.railway_live_client import fetch_railway_live_state
+from services.railway_live_client import RailwayDhanClient, fetch_railway_live_state
 from ui.components import (
     render_candles,
     render_decision,
@@ -70,6 +70,7 @@ from ui.components import (
 from ui.premium_calculator import render_spot_premium_calculator
 from ui.alerts import render_market_alerts
 from ui.shadow_journal import render_auto_shadow_journal
+from ui.timeframe_outlook import render_timeframe_outlook
 
 
 @contextmanager
@@ -233,9 +234,12 @@ def optional_number(raw: str) -> float | None:
 with st.sidebar:
     st.subheader("Connection")
     st.write(f"Version: `{CONFIG.version}`")
-    credentials_ready = bool(client_id and access_token)
-    if credentials_ready:
-        st.success("Dhan credentials found")
+    railway_ready = bool(live_server_url and live_server_api_key)
+    credentials_ready = railway_ready or bool(client_id and access_token)
+    if railway_ready:
+        st.success("Railway single-source Dhan gateway ready")
+    elif credentials_ready:
+        st.warning("Legacy direct Dhan mode — Railway recommended")
     else:
         st.error("Dhan credentials missing")
     shadow_journal_enabled = st.toggle(
@@ -602,7 +606,7 @@ risk_profile = RiskProfile(
 
 if not credentials_ready:
     st.code(
-        '[dhan]\nclient_id = "YOUR_CLIENT_ID"\naccess_token = "YOUR_24_HOUR_ACCESS_TOKEN"',
+        '[live_server]\nurl = "https://YOUR-SERVICE.up.railway.app"\napi_key = "YOUR_LIVE_API_KEY"',
         language="toml",
     )
     st.stop()
@@ -612,8 +616,15 @@ if "snapshot" not in st.session_state or refresh:
         with st.spinner(
             "Building one authoritative DhanHQ snapshot, core market evidence and option intelligence..."
         ):
-            credentials = Credentials(client_id=client_id, access_token=access_token)
-            client = DhanClient(credentials)
+            if railway_ready:
+                client = RailwayDhanClient(
+                    live_server_url,
+                    live_server_api_key,
+                    timeout_seconds=max(15.0, CONFIG.request_timeout_seconds * 2),
+                )
+            else:
+                credentials = Credentials(client_id=client_id, access_token=access_token)
+                client = DhanClient(credentials)
             service = SnapshotService(
                 client,
                 InstrumentMaster(Path("data/instrument_master.csv")),
@@ -696,9 +707,14 @@ def render_fast_live_monitor() -> None:
             )
             source = "Railway WebSocket"
         else:
+            # Railway is the only live source when configured. Calling Dhan again
+            # from Streamlit would duplicate traffic and recreate HTTP 429 bursts.
+            if railway_ready:
+                st.caption("⚡ Fast Monitor fallback — Railway tick ka wait; direct Dhan call roki gayi")
+                return
             credentials = Credentials(client_id=client_id, access_token=access_token)
             rows = fetch_fast_quotes(DhanClient(credentials), current)
-            source = "Dhan quote fallback"
+            source = "Legacy direct Dhan"
             captured_ts = time.time()
             history = list(st.session_state.get("fast_quote_history", []))
             impulse = calculate_live_impulse(rows, history, captured_ts=captured_ts)
@@ -755,6 +771,10 @@ render_market_session(view_snapshot)
 render_data_health(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
+render_timeframe_outlook(
+    view_snapshot,
+    st.session_state.get("fast_live_impulse"),
+)
 with persistent_panel(
     "🐘 Big Player Activity — Buying / Selling Alert",
     "panel_big_player_open",
@@ -774,7 +794,11 @@ with persistent_panel(
     "panel_market_alerts_open",
 ) as panel_open:
     if panel_open:
-        render_market_alerts(view_snapshot)
+        render_market_alerts(
+            view_snapshot,
+            live_server_url=live_server_url,
+            live_server_api_key=live_server_api_key,
+        )
 
 with persistent_panel(
     "Compact Evidence + Next 5–15 Min Outlook",

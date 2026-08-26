@@ -35,3 +35,22 @@ def test_mixed_move_does_not_alert():
             changes=changes, ltp=24300, now_ts=timestamp, enforce_market_hours=False
         )
     assert messages == []
+
+
+def test_confirmed_big_player_alert_and_conflict_wait_message():
+    messages: list[str] = []
+    engine = LiveAlertEngine(
+        ReadyNotifier(), sender=messages.append, async_delivery=False
+    )
+    assert engine.observe_big_player(
+        {
+            "score": 71,
+            "confirmation_count": 2,
+            "direction": "SELLING",
+            "activity_type": "SHORT BUILD-UP",
+            "futures_setup": "SHORT BUILD-UP",
+            "conflict": True,
+        },
+        now_ts=1000,
+    )
+    assert "TRADE WAIT" in messages[0]

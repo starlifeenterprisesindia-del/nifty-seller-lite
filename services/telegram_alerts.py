@@ -83,6 +83,8 @@ class LiveAlertEngine:
         self.last_alert = ""
         self.last_error = ""
         self.alert_count = 0
+        self._big_player_candidate = ""
+        self._big_player_count = 0
 
     @property
     def configured(self) -> bool:
@@ -176,6 +178,54 @@ class LiveAlertEngine:
             "Railway server se test message successful hai.\n"
             "Automatic order kabhi place nahi hoga."
         )
+
+    def observe_big_player(self, payload: dict[str, Any], *, now_ts: float | None = None) -> bool:
+        """Send bounded Big Player evidence; it never converts conflict into advice."""
+        timestamp = float(now_ts if now_ts is not None else time.time())
+        score = float(payload.get("score", 0.0) or 0.0)
+        confirmations = int(payload.get("confirmation_count", 0) or 0)
+        direction = str(payload.get("direction", "MIXED")).upper()
+        activity_type = str(payload.get("activity_type", "ACTIVITY")).upper()
+        conflict = bool(payload.get("conflict", False))
+        stage = "CONFIRMED" if score >= 70 and confirmations >= 2 else "EARLY" if score >= 65 and confirmations >= 1 else ""
+        if not stage or direction not in {"BUYING", "SELLING"}:
+            return False
+        signature = f"BIG:{stage}:{direction}:{activity_type}"
+        with self._lock:
+            if signature == self._big_player_candidate:
+                self._big_player_count += 1
+            else:
+                self._big_player_candidate = signature
+                self._big_player_count = 1
+            required = 1 if stage == "CONFIRMED" else 2
+            if self._big_player_count < required:
+                return False
+            if timestamp - self._last_sent.get(signature, 0.0) < self.cooldown_seconds:
+                return False
+            self._last_sent[signature] = timestamp
+            self._big_player_count = 0
+        icon = "🟢" if direction == "BUYING" else "🔴"
+        lines = [
+            f"{icon} BIG PLAYER {stage} — {direction}",
+            f"Score {score:.0f}/100 · {confirmations}/2 · {activity_type}",
+        ]
+        if payload.get("futures_setup"):
+            lines.append(f"Futures: {payload['futures_setup']}")
+        if conflict:
+            lines.append("⚠️ Options/Top-9 conflict — TRADE WAIT; activity alert only.")
+        else:
+            lines.append("Direction supporting evidence; One-Brain entry confirmation alag hai.")
+        lines.append("Automatic order nahi lagaya gaya.")
+        message = "\n".join(lines)
+        if self.async_delivery:
+            threading.Thread(
+                target=self._deliver,
+                args=(message, signature, timestamp),
+                daemon=True,
+                name="telegram-big-player-send",
+            ).start()
+            return True
+        return self._deliver(message, signature, timestamp)
 
     def status(self) -> dict[str, Any]:
         with self._lock:

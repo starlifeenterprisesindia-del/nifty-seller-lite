@@ -22,11 +22,12 @@ def activity(**updates):
     return NS(**values)
 
 
-def test_heavy_alert_requires_75_and_two_confirmations():
+def test_heavy_alert_requires_70_and_two_confirmations():
     assert heavy_activity_alert_qualifies(activity())
-    assert not heavy_activity_alert_qualifies(activity(score=74.9))
+    assert not heavy_activity_alert_qualifies(activity(score=69.9))
     assert not heavy_activity_alert_qualifies(activity(confirmation_count=1))
-    assert not heavy_activity_alert_qualifies(activity(state="STRONG"))
+    # A presentation-state label must not suppress numeric confirmed evidence.
+    assert heavy_activity_alert_qualifies(activity(state="STRONG", score=71))
 
 
 def test_early_alert_catches_one_of_three_directional_surge():

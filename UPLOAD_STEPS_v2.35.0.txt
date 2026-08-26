@@ -1,0 +1,40 @@
+NIFTY SELLER LITE v2.35.0 — UPLOAD / DEPLOY
+
+1) GitHub
+- Upload the contents of the update ZIP to the repository root.
+- Folder paths must remain exactly analysis/, services/, ui/, tests/.
+- Commit to main. Railway will rebuild automatically.
+
+2) Railway Variables (Dhan token lives only here)
+DHAN_CLIENT_ID=your Dhan client id
+DHAN_ACCESS_TOKEN=your current 24-hour Dhan token
+LIVE_API_KEY=your existing private shared key
+TELEGRAM_BOT_TOKEN=your BotFather token
+TELEGRAM_CHAT_ID=your Telegram chat id
+
+Optional:
+PREMIUM_ALERT_POLL_SECONDS=5
+TELEGRAM_ALERT_COOLDOWN_SECONDS=180
+RAILWAY_ALERT_STORE_PATH=/data/nsl_alerts.json  (only after a Railway volume is mounted at /data)
+
+3) Streamlit Secrets
+[live_server]
+url = "https://nifty-seller-lite-production.up.railway.app"
+api_key = "same LIVE_API_KEY as Railway"
+
+- After the Railway health/gateway test succeeds, remove [dhan] from Streamlit secrets.
+- Keep [fii_dii_cloud] unchanged if you use the FII/DII cloud journal.
+
+4) Check
+- Railway /health: dhan_gateway.configured=true and telegram.configured=true.
+- Streamlit sidebar: "Railway single-source Dhan gateway ready".
+- Fetch one fresh snapshot.
+- Telegram test once.
+- Arm a far-away test premium alert, verify it appears active, then cancel it.
+
+5) Daily Dhan token renewal
+- Change DHAN_ACCESS_TOKEN only in Railway Variables.
+- Apply/deploy the Railway variable change.
+- Do not paste the Dhan token into Streamlit.
+
+Safety: this release does not place broker orders. Alerts and entry plans are informational.

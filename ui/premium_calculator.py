@@ -18,6 +18,7 @@ from analysis.sl_target_planner import (
     stop_reference,
     stop_spot_price,
 )
+from analysis.premium_entry_planner import build_premium_entry_plan
 from models import MarketSnapshot
 
 
@@ -195,6 +196,39 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
         )
         lots = p4.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
         lot_size = int(snapshot.risk_profile.lot_size)
+
+        entry_count = st.select_slider(
+            "Entry parts",
+            options=(1, 2, 3),
+            value=min(3, int(lots)),
+            help="Entry 2/3 tabhi jab One-Brain direction, OI aur Big Player setup valid rahe.",
+            key="spc2_entry_parts",
+        )
+        entry_plan = build_premium_entry_plan(
+            position=position,
+            current_premium=chain_price,
+            bid=_cell(row, "top_bid_price") or None,
+            ask=_cell(row, "top_ask_price") or None,
+            total_lots=int(lots),
+            entries=int(entry_count),
+        )
+        ec1, ec2 = st.columns(2)
+        ec1.metric("Best entry premium", f"₹{entry_plan.best_entry_premium:,.2f}")
+        ec2.metric("3-part estimated average", f"₹{entry_plan.average_premium:,.2f}")
+        st.dataframe(
+            [
+                {
+                    "Entry": f"E{item.entry_no}",
+                    "Premium": f"₹{item.premium:,.2f}",
+                    "Lots": item.lots,
+                    "Kab": item.condition,
+                }
+                for item in entry_plan.entries
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        st.warning(entry_plan.warning)
 
         h1, h2 = st.columns(2)
         holding = h1.selectbox(

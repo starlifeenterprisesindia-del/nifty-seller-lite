@@ -19,6 +19,7 @@ from analysis.alerts import (
 )
 from config import IST_TIMEZONE
 from models import MarketSnapshot
+from services.railway_live_client import delete_railway_alert, post_railway_json
 
 
 def _bell_wav() -> bytes:
@@ -131,7 +132,29 @@ def _option_premium(
     return value if value >= 0 else None
 
 
-def render_market_alerts(snapshot: MarketSnapshot) -> None:
+def _option_security_id(snapshot: MarketSnapshot, option_side: str, strike: float) -> int | None:
+    frame = snapshot.option_chain
+    required = {"side", "strike", "security_id"}
+    if frame is None or frame.empty or not required.issubset(frame.columns):
+        return None
+    rows = frame[
+        (frame["side"].astype(str).str.upper() == option_side)
+        & ((frame["strike"].astype(float) - float(strike)).abs() < 0.01)
+    ]
+    if rows.empty:
+        return None
+    try:
+        return int(rows.iloc[0]["security_id"])
+    except (TypeError, ValueError):
+        return None
+
+
+def render_market_alerts(
+    snapshot: MarketSnapshot,
+    *,
+    live_server_url: str = "",
+    live_server_api_key: str = "",
+) -> None:
     activity = snapshot.big_player_activity
     sound_enabled = bool(st.session_state.get("market_alert_sound_enabled", False))
 
@@ -182,7 +205,7 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
                     f"{activity.confirmation_count}/{activity.confirmation_total}"
                 )
             else:
-                st.caption("ARMED · Early 65+ (1/3), Heavy 75+ (2/3) ka wait")
+                st.caption("ARMED · Early 65+ (1 confirmation), Heavy 70+ (2 confirmations) ka wait")
 
     with manual_col:
         st.markdown("#### 🎯 Manual CE/PE Premium Alert")
@@ -221,6 +244,21 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
             step=0.50,
             key="manual_option_alert_target_input",
         )
+        m1, m2, m3 = st.columns(3)
+        trigger_mode = m1.selectbox(
+            "Trigger",
+            ("TOUCH", "ABOVE", "BELOW"),
+            help="TOUCH target ke aas-paas; ABOVE/BELOW exact crossing.",
+            key="manual_option_alert_mode_input",
+        )
+        tolerance = m2.number_input(
+            "Near ₹",
+            min_value=0.05,
+            value=0.50,
+            step=0.05,
+            key="manual_option_alert_tolerance_input",
+        )
+        entry_no = m3.selectbox("Entry no.", (1, 2, 3), key="manual_option_alert_entry_no")
         arm_col, cancel_col = st.columns(2)
         arm_clicked = arm_col.button(
             "ARM ALERT",
@@ -236,6 +274,30 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
             key="cancel_manual_option_alert",
         )
         if arm_clicked and current_premium is not None and strike is not None:
+            security_id = _option_security_id(snapshot, option_side, float(strike))
+            cloud_armed = False
+            if live_server_url and live_server_api_key and security_id is not None:
+                try:
+                    result = post_railway_json(
+                        live_server_url,
+                        live_server_api_key,
+                        "/alerts/premium",
+                        {
+                            "security_id": security_id,
+                            "side": option_side,
+                            "position": position,
+                            "strike": float(strike),
+                            "expiry": str(snapshot.expiry or ""),
+                            "target_premium": float(target),
+                            "mode": trigger_mode,
+                            "tolerance": float(tolerance),
+                            "entry_no": int(entry_no),
+                        },
+                    )
+                    st.session_state.manual_option_cloud_alert_id = result.get("id")
+                    cloud_armed = True
+                except Exception as exc:
+                    st.error(f"Railway Telegram alert arm nahi hua: {exc}")
             st.session_state.manual_option_alert_active = True
             st.session_state.manual_option_alert_side = option_side
             st.session_state.manual_option_alert_position = position
@@ -248,9 +310,17 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
             ).isoformat()
             st.success(
                 f"{option_side} {position} alert ARMED · Strike {float(strike):,.0f} · "
-                f"Target ₹{target:,.2f} · Current ₹{current_premium:,.2f}"
+                f"Target ₹{target:,.2f} · Current ₹{current_premium:,.2f} · "
+                f"{'Railway + Telegram 24×7' if cloud_armed else 'Browser only'}"
             )
         if cancel_clicked:
+            cloud_id = str(st.session_state.get("manual_option_cloud_alert_id", ""))
+            if cloud_id and live_server_url and live_server_api_key:
+                try:
+                    delete_railway_alert(live_server_url, live_server_api_key, cloud_id)
+                except Exception as exc:
+                    st.warning(f"Railway cancel pending: {exc}")
+            st.session_state.pop("manual_option_cloud_alert_id", None)
             st.session_state.manual_option_alert_active = False
             st.info("Manual CE/PE premium alert cancelled")
 
@@ -279,6 +349,36 @@ def render_market_alerts(snapshot: MarketSnapshot) -> None:
     early_qualifies = early_activity_alert_qualifies(activity) and not qualifies
     active_signature = heavy_activity_signature(activity) if qualifies else ""
     early_signature = heavy_activity_signature(activity) if early_qualifies else ""
+    if activity is not None and live_server_url and live_server_api_key:
+        post_signature = (
+            f"{snapshot.snapshot_id}:{activity.direction}:{activity.score:.0f}:"
+            f"{activity.confirmation_count}:{activity.activity_type}"
+        )
+        if st.session_state.get("last_big_player_cloud_post") != post_signature:
+            try:
+                option_confirmation = str(getattr(activity, "option_confirmation", ""))
+                top_confirmation = str(getattr(activity, "top7_confirmation", ""))
+                expected = "BULL" if activity.direction == "BUYING" else "BEAR"
+                conflict = any(
+                    value and expected not in value.upper() and "MIX" not in value.upper()
+                    for value in (option_confirmation, top_confirmation)
+                )
+                post_railway_json(
+                    live_server_url,
+                    live_server_api_key,
+                    "/alerts/big-player",
+                    {
+                        "score": activity.score,
+                        "direction": activity.direction,
+                        "activity_type": activity.activity_type,
+                        "confirmation_count": activity.confirmation_count,
+                        "futures_setup": activity.futures_setup,
+                        "conflict": conflict,
+                    },
+                )
+                st.session_state.last_big_player_cloud_post = post_signature
+            except Exception as exc:
+                st.caption(f"Telegram Big Player sync pending: {exc}")
     if not early_qualifies:
         st.session_state.pop("early_alert_latched_signature", None)
     elif (

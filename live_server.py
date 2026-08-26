@@ -9,8 +9,10 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 
+from services.dhan_gateway import DhanGateway
+from services.railway_alert_store import PremiumAlertMonitor, RailwayAlertStore
 from services.telegram_alerts import LiveAlertEngine
 
 
@@ -189,12 +191,54 @@ ALERTS = LiveAlertEngine(
     confirmations=int(os.getenv("TELEGRAM_ALERT_CONFIRMATIONS", "2") or 2),
     cooldown_seconds=int(os.getenv("TELEGRAM_ALERT_COOLDOWN_SECONDS", "180") or 180),
 )
+GATEWAY: DhanGateway | None = None
+PREMIUM_STORE = RailwayAlertStore()
+PREMIUM_MONITOR: PremiumAlertMonitor | None = None
+
+
+def _authorise(key: str, header_key: str) -> None:
+    expected = os.getenv("LIVE_API_KEY", "").strip()
+    if expected and key != expected and header_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid live API key")
+
+
+def _gateway() -> DhanGateway:
+    global GATEWAY
+    if GATEWAY is None:
+        client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
+        access_token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
+        if not client_id or not access_token:
+            raise HTTPException(status_code=503, detail="Railway Dhan credentials missing")
+        GATEWAY = DhanGateway(client_id, access_token)
+    return GATEWAY
+
+
+def _gateway_result(function: Any) -> dict[str, Any]:
+    try:
+        return {"ok": True, "data": function()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global PREMIUM_MONITOR
     STATE.start()
+    try:
+        PREMIUM_MONITOR = PremiumAlertMonitor(
+            PREMIUM_STORE,
+            _gateway().market_quote,
+            ALERTS.notifier.send,
+            interval_seconds=float(os.getenv("PREMIUM_ALERT_POLL_SECONDS", "5") or 5),
+        )
+        PREMIUM_MONITOR.start()
+    except Exception:
+        PREMIUM_MONITOR = None
     yield
+    if PREMIUM_MONITOR is not None:
+        PREMIUM_MONITOR.stop()
     STATE.stop()
 
 
@@ -210,6 +254,13 @@ def root() -> dict[str, str]:
 def health() -> dict[str, Any]:
     payload = STATE.health()
     payload["telegram"] = ALERTS.status()
+    try:
+        payload["dhan_gateway"] = _gateway().status()
+    except HTTPException as exc:
+        payload["dhan_gateway"] = {"configured": False, "error": exc.detail}
+    payload["premium_alerts"] = (
+        PREMIUM_MONITOR.status() if PREMIUM_MONITOR is not None else {"active": 0, "last_error": "monitor unavailable"}
+    )
     return payload
 
 
@@ -218,9 +269,7 @@ def live(
     key: str = Query(default=""),
     x_live_key: str = Header(default=""),
 ) -> dict[str, Any]:
-    expected = os.getenv("LIVE_API_KEY", "").strip()
-    if expected and key != expected and x_live_key != expected:
-        raise HTTPException(status_code=401, detail="Invalid live API key")
+    _authorise(key, x_live_key)
     payload = STATE.public_state()
     payload["telegram"] = ALERTS.status()
     return payload
@@ -231,9 +280,7 @@ def telegram_test(
     key: str = Query(default=""),
     x_live_key: str = Header(default=""),
 ) -> dict[str, Any]:
-    expected = os.getenv("LIVE_API_KEY", "").strip()
-    if expected and key != expected and x_live_key != expected:
-        raise HTTPException(status_code=401, detail="Invalid live API key")
+    _authorise(key, x_live_key)
     if not ALERTS.configured:
         raise HTTPException(status_code=503, detail="Telegram alerts not configured")
     try:
@@ -241,3 +288,115 @@ def telegram_test(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)[:200]) from exc
     return {"ok": True, "telegram": ALERTS.status()}
+
+
+@app.post("/dhan/market-quote")
+def dhan_market_quote(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    instruments = payload.get("instruments") or {}
+    return _gateway_result(lambda: _gateway().market_quote(instruments))
+
+
+@app.post("/dhan/intraday")
+def dhan_intraday(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return _gateway_result(lambda: _gateway().intraday(payload))
+
+
+@app.post("/dhan/expiry-list")
+def dhan_expiry_list(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return _gateway_result(
+        lambda: _gateway().expiry_list(
+            int(payload.get("underlying_security_id", 13)),
+            str(payload.get("segment", "IDX_I")),
+        )
+    )
+
+
+@app.post("/dhan/option-chain")
+def dhan_option_chain(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return _gateway_result(
+        lambda: _gateway().option_chain(
+            str(payload["expiry"]),
+            int(payload.get("underlying_security_id", 13)),
+            str(payload.get("segment", "IDX_I")),
+        )
+    )
+
+
+@app.post("/alerts/premium")
+def create_premium_alert(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    required = ("security_id", "side", "position", "strike", "target_premium")
+    missing = [name for name in required if payload.get(name) in (None, "")]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Missing: {', '.join(missing)}")
+    try:
+        row = PREMIUM_STORE.add(
+            {
+                "security_id": int(payload["security_id"]),
+                "side": str(payload["side"]).upper(),
+                "position": str(payload["position"]).upper(),
+                "strike": float(payload["strike"]),
+                "expiry": str(payload.get("expiry", "")),
+                "target_premium": float(payload["target_premium"]),
+                "mode": str(payload.get("mode", "TOUCH")).upper(),
+                "tolerance": max(0.05, float(payload.get("tolerance", 0.5))),
+                "entry_no": max(1, min(3, int(payload.get("entry_no", 1)))),
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "data": row}
+
+
+@app.get("/alerts")
+def list_alerts(
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return {"ok": True, "data": {"alerts": PREMIUM_STORE.list()[-50:]}}
+
+
+@app.delete("/alerts/{alert_id}")
+def cancel_alert(
+    alert_id: str,
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return {"ok": True, "data": {"cancelled": PREMIUM_STORE.cancel(alert_id)}}
+
+
+@app.post("/alerts/big-player")
+def big_player_alert(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    sent = ALERTS.observe_big_player(payload)
+    return {"ok": True, "data": {"accepted": True, "sent": sent}}
