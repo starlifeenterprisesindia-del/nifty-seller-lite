@@ -195,7 +195,7 @@ def test_stale_previous_snapshot_resets_intraday_continuity(tmp_path):
     )
     assert result.basis == "DAY CHANGE — CONTINUITY RESET"
     assert result.status == "WARMING UP"
-    assert result.confidence == 38.0
+    assert result.confidence == 20.0
     assert "continuity reset" in " ".join(result.blockers).lower()
 
 
@@ -223,6 +223,21 @@ def test_pcr_never_overrides_opposite_premium_oi_volume_flow():
     assert round(bullish + bearish + neutral, 1) == 100.0
 
 
+def test_ready_windows_influence_direction_without_double_counting():
+    from analysis.option_intelligence import _blend_movement_windows
+    from models import FlowWindow
+
+    windows = (
+        FlowWindow("1m", 60, 60, 1, 1, 1, 1, 1, 1, "BEARISH", "READY"),
+        FlowWindow("3m", 180, 180, 1, 1, 1, 1, 1, 1, "BULLISH", "READY"),
+        FlowWindow("5m", 300, 300, 1, 1, 1, 1, 1, 1, "BULLISH", "READY"),
+    )
+    bull, bear, mixed = _blend_movement_windows(3.2, 3.2, 93.6, windows)
+    assert bull > bear
+    assert mixed < 70
+    assert round(bull + bear + mixed, 1) == 100.0
+
+
 def test_first_snapshot_extreme_flow_is_calibrated_by_low_confidence():
     now = datetime(2026, 7, 20, 10, 0, tzinfo=IST)
     current = chain()
@@ -239,7 +254,7 @@ def test_first_snapshot_extreme_flow_is_calibrated_by_low_confidence():
         },
         is_live=True,
     )
-    assert result.confidence == 38.0
+    assert result.confidence == 20.0
     assert result.bullish_score < 85.0
     assert result.bearish_score > 0.0
     assert result.range_score > 0.0

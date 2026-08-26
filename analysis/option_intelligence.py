@@ -534,6 +534,66 @@ def _normalized_scores(
     return bull_pct, bear_pct, range_pct, bias
 
 
+def _blend_movement_windows(
+    bullish: float,
+    bearish: float,
+    range_score: float,
+    windows: tuple[FlowWindow, ...],
+) -> tuple[float, float, float]:
+    """Blend the same option-flow evidence across time, without double counting it.
+
+    The instantaneous snapshot remains useful for fast turns, but a 20-30 second
+    comparison must not overpower ready 1m/3m/5m movement windows.  Windows are an
+    aggregation of the same OI/premium/volume source, so they replace part of the
+    instantaneous score rather than adding a second independent vote.
+    """
+
+    ready = [item for item in windows if item.status == "READY"]
+    if not ready:
+        return bullish, bearish, range_score
+
+    weights = {60: 0.20, 180: 0.35, 300: 0.45}
+    bull_weight = bear_weight = mixed_weight = 0.0
+    total_weight = 0.0
+    for item in ready:
+        weight = weights.get(item.target_seconds, 0.25)
+        total_weight += weight
+        if item.bias == "BULLISH":
+            bull_weight += weight
+        elif item.bias == "BEARISH":
+            bear_weight += weight
+        else:
+            mixed_weight += weight
+    if total_weight <= 0:
+        return bullish, bearish, range_score
+
+    # A directional window still retains uncertainty. Conflicting windows naturally
+    # increase both sides/range instead of producing a false 90% RANGE result.
+    window_bull = (bull_weight + mixed_weight * 0.20) / total_weight * 70.0
+    window_bear = (bear_weight + mixed_weight * 0.20) / total_weight * 70.0
+    window_range = max(0.0, 100.0 - window_bull - window_bear)
+    window_share = {1: 0.35, 2: 0.50, 3: 0.60}.get(len(ready), 0.60)
+    values = (
+        bullish * (1.0 - window_share) + window_bull * window_share,
+        bearish * (1.0 - window_share) + window_bear * window_share,
+        range_score * (1.0 - window_share) + window_range * window_share,
+    )
+    total = sum(values)
+    if total <= 0:
+        return 20.0, 20.0, 60.0
+    result = [round(value / total * 100.0, 1) for value in values]
+    result[2] = round(100.0 - result[0] - result[1], 1)
+    return result[0], result[1], result[2]
+
+
+def _bias_from_scores(bullish: float, bearish: float, range_score: float) -> str:
+    if bullish >= max(bearish, range_score) + 8:
+        return "BULLISH"
+    if bearish >= max(bullish, range_score) + 8:
+        return "BEARISH"
+    return "MIXED"
+
+
 
 
 def _calibrate_scores_for_confidence(
@@ -640,8 +700,12 @@ def calculate_option_intelligence(
         )
         for label, seconds in (("1 minute", 60), ("3 minute", 180), ("5 minute", 300))
     )
-    bullish, bearish, range_score, market_bias = _normalized_scores(flow, pcr)
-    persistence = _persistence(history, current_snapshot, market_bias)
+    bullish, bearish, range_score, _ = _normalized_scores(flow, pcr)
+    bullish, bearish, range_score = _blend_movement_windows(
+        bullish, bearish, range_score, windows
+    )
+    preliminary_bias = _bias_from_scores(bullish, bearish, range_score)
+    persistence = _persistence(history, current_snapshot, preliminary_bias)
     ready_windows = sum(item.status == "READY" for item in windows)
     if previous_snapshot is None or not integrity_ready:
         confidence = 20.0
@@ -655,11 +719,15 @@ def calculate_option_intelligence(
     bullish, bearish, range_score = _calibrate_scores_for_confidence(
         bullish, bearish, range_score, confidence
     )
+    market_bias = _bias_from_scores(bullish, bearish, range_score)
 
     reasons: list[str] = []
     if market_bias != "MIXED":
         reasons.append(f"Option flow mix is {market_bias}")
     reasons.append(pcr.state)
+    ready_biases = [item.bias for item in windows if item.status == "READY"]
+    if ready_biases:
+        reasons.append("Windows 1m/3m/5m: " + "/".join(ready_biases))
     if ce_wall.strike is not None and pe_wall.strike is not None:
         reasons.append(f"CE wall {ce_wall.strike:.0f} / PE wall {pe_wall.strike:.0f}")
     blockers: list[str] = []

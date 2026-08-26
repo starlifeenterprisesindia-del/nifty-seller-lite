@@ -1022,6 +1022,28 @@ def calculate_final_decision(
     ce_buy += ce_buy_momentum_adjust
     pe_buy += pe_buy_momentum_adjust
 
+    # Iron Condor is a range structure, not a generic fallback. A clearly
+    # directional core or option-flow read must reduce its fit before ranking.
+    core_directional = max(core.bullish_score, core.bearish_score)
+    option_directional = max(options.bullish_score, options.bearish_score)
+    if core_directional >= core.range_score + 12:
+        condor -= 8
+        condor_level_cautions = tuple(condor_level_cautions) + (
+            "Directional core evidence weakens Iron Condor",
+        )
+    if option_directional >= options.range_score + 12:
+        condor -= 8
+        condor_level_cautions = tuple(condor_level_cautions) + (
+            "Directional option flow weakens Iron Condor",
+        )
+    core_side = "BULL" if core.bullish_score > core.bearish_score + 8 else "BEAR" if core.bearish_score > core.bullish_score + 8 else "MIXED"
+    option_side = "BULL" if options.bullish_score > options.bearish_score + 8 else "BEAR" if options.bearish_score > options.bullish_score + 8 else "MIXED"
+    if core_side == option_side and core_side in {"BULL", "BEAR"}:
+        condor -= 6
+        condor_level_cautions = tuple(condor_level_cautions) + (
+            "Core and option flow agree directionally",
+        )
+
     (
         pattern_ce,
         pattern_pe,

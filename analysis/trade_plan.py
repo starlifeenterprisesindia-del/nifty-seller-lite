@@ -138,6 +138,32 @@ def _buy_candidate_rows(frame: pd.DataFrame, side: str, spot: float) -> pd.DataF
     return rows.sort_values("strike").reset_index(drop=True)
 
 
+def _has_farther_leg(
+    frame: pd.DataFrame,
+    *,
+    side: str,
+    strike: float,
+    minimum_steps: int,
+    maximum_steps: int | None = None,
+) -> bool:
+    """Check protection before a main leg is scored as the best candidate."""
+    step = _strike_step(frame)
+    if step is None or step <= 0:
+        return False
+    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
+    rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
+    rows = rows.dropna(subset=["strike", "last_price"])
+    rows = rows[rows["last_price"] >= CONFIG.trade_min_hedge_premium]
+    minimum_gap = max(1, minimum_steps) * step
+    maximum_gap = (maximum_steps * step) if maximum_steps is not None else None
+    gap = rows["strike"] - strike if side == "CE" else strike - rows["strike"]
+    eligible = gap.ge(minimum_gap)
+    if maximum_gap is not None:
+        eligible &= gap.le(maximum_gap)
+    return bool(eligible.any())
+
+
 def _select_long_leg(
     frame: pd.DataFrame,
     *,
@@ -149,6 +175,17 @@ def _select_long_leg(
     max_delta: float = 0.72,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _buy_candidate_rows(frame, side, spot)
+    if not rows.empty:
+        rows = rows[
+            rows["strike"].map(
+                lambda strike: _has_farther_leg(
+                    frame,
+                    side=side,
+                    strike=float(strike),
+                    minimum_steps=1,
+                )
+            )
+        ].reset_index(drop=True)
     if rows.empty:
         return None, 0.0, (f"No usable ATM/near-ITM {side} buy row",)
     if "delta" in rows.columns:
@@ -426,8 +463,26 @@ def _select_short_leg(
     max_delta: float = 0.38,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _candidate_rows(frame, side, spot)
+    had_directional_rows = not rows.empty
+    if not rows.empty:
+        rows = rows[
+            rows["strike"].map(
+                lambda strike: _has_farther_leg(
+                    frame,
+                    side=side,
+                    strike=float(strike),
+                    minimum_steps=CONFIG.trade_hedge_steps,
+                    maximum_steps=CONFIG.trade_max_hedge_steps,
+                )
+            )
+        ].reset_index(drop=True)
     if rows.empty:
-        return None, 0.0, (f"No usable OTM {side} row in current option window",)
+        reason = (
+            f"No protected OTM {side} pair: farther hedge is missing"
+            if had_directional_rows
+            else f"No usable OTM {side} row in current option window"
+        )
+        return None, 0.0, (reason,)
     if "delta" in rows.columns:
         deltas = pd.to_numeric(rows["delta"], errors="coerce").abs()
         in_band = rows[deltas.between(min_delta, max_delta, inclusive="both")]

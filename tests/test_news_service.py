@@ -107,9 +107,39 @@ def test_news_older_than_180_minutes_is_context_only_with_zero_live_weight(tmp_p
     }
     context = service._context_from_payload(payload, NOW)
     assert context.status == "CONTEXT ONLY"
-    assert context.risk_level == "HIGH"
+    assert context.risk_level == "NONE"
     assert context.headlines
     assert "decision weight zero" in context.summary
+
+
+def test_fresh_headline_does_not_reactivate_old_high_risk_story(tmp_path):
+    service = MarketNewsService(tmp_path / "news.json")
+    payload = {
+        "fetched_at": NOW.isoformat(),
+        "headlines": [
+            {
+                "title": "Nifty trades flat - Example News",
+                "source": "Example News",
+                "published_at": (NOW - timedelta(minutes=20)).isoformat(),
+                "impact": "MEDIUM",
+                "bias": "NEUTRAL",
+                "link": "",
+            },
+            {
+                "title": "Old attack headline - Example News",
+                "source": "Example News",
+                "published_at": (NOW - timedelta(hours=20)).isoformat(),
+                "impact": "HIGH",
+                "bias": "BEARISH",
+                "link": "",
+            },
+        ],
+        "source": "test",
+    }
+    context = service._context_from_payload(payload, NOW)
+    assert context.status == "READY"
+    assert context.risk_level != "HIGH"
+    assert len(context.headlines) == 2  # old item remains visible as context
 
 
 def test_news_older_than_context_window_is_removed(tmp_path):

@@ -137,6 +137,35 @@ class MarketNewsService:
     def _downgrade_risk_for_old(risk: str) -> str:
         return {"HIGH": "MEDIUM", "MEDIUM": "LOW", "LOW": "LOW", "NONE": "NONE"}.get(risk, "LOW")
 
+    @staticmethod
+    def _decision_rows(
+        rows: list[dict[str, Any]], now: datetime, status: str
+    ) -> list[dict[str, Any]]:
+        """Return only headlines allowed to influence the current decision.
+
+        Display context may remain visible for the full context window, but a fresh
+        headline must not make unrelated 19-23 hour stories fresh again.
+        """
+        if status not in {"READY", "OLD"}:
+            return []
+        maximum_age = (
+            CONFIG.news_recent_minutes
+            if status == "READY"
+            else CONFIG.news_stale_minutes
+        )
+        eligible: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                published = datetime.fromisoformat(str(row.get("published_at")))
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=now.tzinfo)
+                age = (now - published.astimezone(now.tzinfo)).total_seconds() / 60.0
+            except Exception:
+                continue
+            if 0 <= age <= maximum_age:
+                eligible.append(row)
+        return eligible
+
     def _write_cache(self, payload: dict[str, Any]) -> None:
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +237,8 @@ class MarketNewsService:
             }
             for item in headlines
         ]
-        bias, risk, summary = self._summarize(rows)
+        decision_rows = self._decision_rows(rows, now, status)
+        bias, risk, summary = self._summarize(decision_rows)
         if status == "OLD":
             risk = self._downgrade_risk_for_old(risk)
             summary = "OLD / low-weight context. " + summary
@@ -317,7 +347,6 @@ class MarketNewsService:
         clean.sort(key=lambda row: str(row.get("published_at") or ""), reverse=True)
         clean = clean[: CONFIG.news_max_headlines]
 
-        bias, risk, summary = self._summarize(clean)
         newest_age = None
         if clean:
             ages = []
@@ -331,6 +360,8 @@ class MarketNewsService:
                     continue
             newest_age = min(ages, default=None)
         status = self._freshness_status(newest_age)
+        decision_rows = self._decision_rows(clean, now, status)
+        bias, risk, summary = self._summarize(decision_rows)
         if not clean:
             # If every live request failed, preserve the last same-day context instead
             # of replacing it with an empty payload. Freshness still controls weight.
