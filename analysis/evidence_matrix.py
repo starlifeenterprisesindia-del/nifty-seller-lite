@@ -161,6 +161,11 @@ def _volume_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
 
 
 def _heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
+    from analysis.decision import _heavyweight_scores as recent_scores
+    return _normalise(*recent_scores(snapshot.heavyweights))
+
+
+def _legacy_day_heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
     if snapshot.heavyweights.status not in {"READY", "CAUTION"}:
         return 0.0, 0.0, 100.0
     state = snapshot.heavyweights.state.upper()
@@ -265,13 +270,13 @@ def build_module_impact_audit(
             key=lambda name: float(getattr(evaluations[name], "score", 0.0)),
         )
     weights = {
-        "Price Action": 13.5,
-        "OI & Options Flow": 30.0,
-        "EMA / MACD / RSI": 10.5,
-        "Barrier / Levels / Volume": 6.0,
-        "NIFTY Top-9": 8.0,
-        "FII/DII (15 Sessions)": 5.0,
-        "VIX / Data Integrity": 12.0,
+        "Price Action": 25.0,
+        "OI & Options Flow": 35.0,
+        "EMA / MACD / RSI": 20.0,
+        "Barrier / Levels / Volume": 0.0,
+        "NIFTY Top-9": 10.0,
+        "FII/DII (15 Sessions)": 0.0,
+        "VIX / Data Integrity": 0.0,
     }
     audit: dict[str, str] = {}
     for row in rows:
@@ -290,13 +295,13 @@ def build_module_impact_audit(
             confirmations = int(getattr(activity, "confirmation_count", 0) or 0)
             audit[module] = (
                 f"{direction} {score:.0f}/100 · confirm {confirmations} · "
-                "raw Futures activity 15% · composite confirmation/gate extra 0"
+                "raw Futures activity 10% · composite confirmation/gate extra 0"
             )
             continue
         if module == "3M W/M Pattern":
-            maximum, max_text = 8.0, "Max 8 pts"
+            maximum, max_text = 0.0, "Trigger/alert only; extra weight 0"
         elif module == "Special Candle":
-            maximum, max_text = 4.0, "Max 4 pts"
+            maximum, max_text = 0.0, "Trigger/alert only; extra weight 0"
         elif module == "News / Event Risk":
             news = getattr(snapshot, "news_context", None)
             status = str(getattr(news, "status", "UNAVAILABLE")).upper()
@@ -305,7 +310,7 @@ def build_module_impact_audit(
             if status == "READY":
                 points = {"HIGH": 9, "MEDIUM": 5, "LOW": 2}.get(risk, 0)
             elif status == "OLD":
-                points = min(2, {"HIGH": 9, "MEDIUM": 5, "LOW": 2}.get(risk, 0))
+                points = 0
             else:
                 points = 0
             severity = (
@@ -480,7 +485,7 @@ def _blank_pattern(family: str, name: str) -> PatternSignal:
         confidence=0.0,
         bullish_score=0.0,
         bearish_score=0.0,
-        neutral_score=100.0,
+        neutral_score=0.0,
         level_label="",
         level_value=None,
         neckline=None,
@@ -552,13 +557,13 @@ def build_compact_evidence_matrix(
                 pa3.bullish_score,
                 pa3.bearish_score,
                 pa3.range_score,
-                0.40 if pa3.status == "READY" else 0.0,
+                0.20 if pa3.status == "READY" else 0.0,
             ),
             (
                 pa15.bullish_score,
                 pa15.bearish_score,
                 pa15.range_score,
-                0.60 if pa15.status == "READY" else 0.0,
+                0.80 if pa15.status == "READY" else 0.0,
             ),
         ]
     )
@@ -577,39 +582,9 @@ def build_compact_evidence_matrix(
         f"{windows_ready}/3 · {_short_pcr(options.pcr.state)}"
     )
 
-    ind3 = _indicator_vote(snapshot.indicators.three_minute)
-    ind15 = _indicator_vote(snapshot.indicators.fifteen_minute)
-    indicator_bull, indicator_bear, indicator_neutral = _weighted_scores(
-        [
-            (
-                *ind3,
-                0.40 if snapshot.indicators.three_minute.status == "READY" else 0.0,
-            ),
-            (
-                *ind15,
-                0.60 if snapshot.indicators.fifteen_minute.status == "READY" else 0.0,
-            ),
-        ]
-    )
-    indicator_confidence = (
-        90.0
-        if all(
-            item.status == "READY"
-            for item in (
-                snapshot.indicators.three_minute,
-                snapshot.indicators.fifteen_minute,
-            )
-        )
-        else 45.0
-        if any(
-            item.status == "READY"
-            for item in (
-                snapshot.indicators.three_minute,
-                snapshot.indicators.fifteen_minute,
-            )
-        )
-        else 0.0
-    )
+    from analysis.directional_core import indicator_scores
+    indicator_bull, indicator_bear, indicator_neutral = _normalise(*indicator_scores(snapshot.indicators))
+    indicator_confidence = 100.0 if snapshot.indicators.fifteen_minute.status == "READY" else 0.0
     indicator_result = (
         f"{_dominant_label(indicator_bull, indicator_bear, indicator_neutral)} · "
         f"15m {_short_ema(snapshot.indicators.fifteen_minute.ema_state)}"
@@ -651,10 +626,10 @@ def build_compact_evidence_matrix(
         and snapshot.institutional_context.confidence > 0
     )
     heavy_bull, heavy_bear, heavy_neutral = heavy_scores
-    move = getattr(snapshot.heavyweights, "weighted_move_pct", None)
+    move = getattr(snapshot.heavyweights, "recent_15m_move_pct", None)
     move_text = f"{move:+.3f}%" if move is not None else "NA"
     prior_move = (
-        getattr(previous_snapshot.heavyweights, "weighted_move_pct", None)
+        getattr(previous_snapshot.heavyweights, "recent_15m_move_pct", None)
         if previous_snapshot is not None
         else None
     )
@@ -667,7 +642,7 @@ def build_compact_evidence_matrix(
     else:
         delta_text = " · badlav warming"
     heavy_result = (
-        f"WEIGHTED {move_text}{delta_text} · "
+        f"15m WEIGHTED {move_text}{delta_text} · "
         f"{getattr(snapshot.heavyweights, 'advancing', 0)} UP / {getattr(snapshot.heavyweights, 'declining', 0)} DOWN"
     )
     inst_bull, inst_bear, inst_neutral = inst_scores
@@ -721,8 +696,8 @@ def build_compact_evidence_matrix(
         news_result = f"EVENT {snapshot.event_risk.level} · FRESH NEWS NA · ZERO DIRECTION WEIGHT"
         news_confidence = 0.0
     elif news.status == "OLD":
-        news_result = f"EVENT {snapshot.event_risk.level} · NEWS OLD/LOW WEIGHT · {news.bias}"
-        news_confidence = 25.0
+        news_result = f"EVENT {snapshot.event_risk.level} · NEWS OLD/ZERO WEIGHT · {news.bias}"
+        news_confidence = 0.0
     elif news.status == "CONTEXT ONLY":
         news_result = f"EVENT {snapshot.event_risk.level} · NEWS CONTEXT/0 WEIGHT · {news.bias}"
         news_confidence = 0.0
@@ -737,9 +712,9 @@ def build_compact_evidence_matrix(
         else _blank_pattern("3M W/M", "NO VALID W/M")
     )
     candle = (
-        (getattr(patterns, "candle_5m", None) or patterns.candle_3m)
+        patterns.candle_3m
         if patterns is not None
-        else _blank_pattern("5M CANDLE", "NO IMPORTANT CANDLE")
+        else _blank_pattern("3M CANDLE", "NO IMPORTANT CANDLE")
     )
 
     return [

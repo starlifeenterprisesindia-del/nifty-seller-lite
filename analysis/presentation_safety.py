@@ -119,6 +119,12 @@ def market_rukh_display(snapshot: Any) -> tuple[str, float, str]:
     range_score = float(getattr(core, "range_score", 0.0) or 0.0)
     confidence = float(getattr(core, "confidence", 0.0) or 0.0)
 
+    canonical = _upper(getattr(getattr(snapshot, "decision", None), "market_direction", ""))
+    if canonical in {"BULLISH", "BEARISH", "RANGE", "MIXED"}:
+        label = {"BULLISH": "UP", "BEARISH": "DOWN"}.get(canonical, canonical)
+        score = {"BULLISH": bullish, "BEARISH": bearish, "RANGE": range_score}.get(canonical, max(bullish, bearish, range_score))
+        return label, score, f"Combined direction {canonical} · Core {core_state}"
+
     mixed = (
         "MIXED" in core_state
         or "NO CLEAR" in core_state
@@ -185,14 +191,14 @@ def safe_brain_hinglish_line(snapshot: Any, previous_snapshot: Any | None = None
     elif rukh == "DOWN":
         parts.append("Market neeche ja sakta hai")
     else:
-        parts.append(f"Market ka rukh {rukh.lower()} hai")
+        parts.append(f"Market direction {rukh.lower()} hai")
 
     evidence: list[str] = []
-    weighted_move = getattr(heavyweights, "weighted_move_pct", None)
+    weighted_move = getattr(heavyweights, "recent_15m_move_pct", None)
     prior_heavy = getattr(previous_snapshot, "heavyweights", None)
-    prior_move = getattr(prior_heavy, "weighted_move_pct", None)
+    prior_move = getattr(prior_heavy, "recent_15m_move_pct", None)
     if weighted_move is not None:
-        top7_text = f"Top-9 weighted move {float(weighted_move):+.2f}% hai"
+        top7_text = f"Top-9 recent 15m weighted move {float(weighted_move):+.2f}% hai"
         if prior_move is not None:
             top7_text += f" aur last snapshot se {float(weighted_move) - float(prior_move):+.2f}% badla"
         evidence.append(top7_text)
@@ -204,6 +210,17 @@ def safe_brain_hinglish_line(snapshot: Any, previous_snapshot: Any | None = None
         parts.append(", lekin ".join(evidence) if len(evidence) > 1 else evidence[0])
     elif rukh_note:
         parts.append(rukh_note)
+
+    indicators = getattr(snapshot, "indicators", None)
+    for field, label in (("three_minute", "3m"), ("fifteen_minute", "15m")):
+        item = getattr(indicators, field, None)
+        if item is not None and getattr(item, "status", "") == "READY":
+            stamp = getattr(item, "as_of", None)
+            stamp_text = stamp.strftime("%H:%M") if hasattr(stamp, "strftime") else str(stamp or "—")
+            parts.append(f"{label} completed candle {stamp_text}: RSI {item.rsi14:.1f}, MACD {item.macd_state}")
+    activity = getattr(snapshot, "big_player_activity", None)
+    if activity is not None:
+        parts.append(f"Recent 3m flow {activity.direction} {activity.score:.0f}/100 ({activity.state}); ye structural trend se alag ho sakta hai")
 
     level_bits: list[str] = []
     r_level = getattr(barrier, "nearest_resistance", None)
@@ -349,8 +366,8 @@ def prepare_snapshot_for_presentation(snapshot: Any) -> Any:
         for field in ("ce_sell", "pe_sell", "iron_condor", "wait_need"):
             _clean_strategy(getattr(decision, field, None))
         rukh, _score, _note = market_rukh_display(view)
-        if rukh == "MIXED":
-            _force_set(decision, "market_direction", "MIXED")
+        # Structural state and strategy direction are different concepts.
+        # Preserve canonical direction so agreement and confirmation use one source.
 
     guard = getattr(view, "execution_guard", None)
     if guard is not None and hasattr(guard, "blockers"):

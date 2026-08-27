@@ -143,11 +143,13 @@ class DisciplineStore:
         market_direction: str = "",
         fake_move_risk: float | None = None,
         spot: float | None = None,
+        candidate_action: str = "",
     ) -> tuple[DisciplineState, bool]:
         key = self._day_key(captured_at)
         sample = {
             "captured_at": captured_at.isoformat(),
             "action": str(action or "WAIT").upper(),
+            "candidate_action": str(candidate_action or action or "WAIT").upper(),
             "execution_status": str(execution_status or "").upper(),
             "ce_score": None if ce_score is None else round(float(ce_score), 1),
             "pe_score": None if pe_score is None else round(float(pe_score), 1),

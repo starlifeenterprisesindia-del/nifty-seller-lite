@@ -66,24 +66,12 @@ def _future_setup(frame: pd.DataFrame) -> tuple[str, float | None, str]:
     if "is_complete" in source.columns:
         source = source[source["is_complete"].fillna(False).astype(bool)]
     source = source.dropna(subset=["close", oi_column])
+    if "timestamp" in source:
+        source = source.sort_values("timestamp").drop_duplicates("timestamp")
     if len(source) < 2:
         return "OI WARMING UP", None, "NEUTRAL"
-    candidates: list[tuple[float, str, float | None, str]] = []
-    for bars in (3, 4, 6, 11, 16):
-        window = source.tail(bars)
-        if len(window) < min(3, bars):
-            continue
-        setup, oi_change, direction, price_change = _classify_future_window(
-            window, oi_column
-        )
-        significance = abs(price_change) / max(1.0, len(window) ** 0.5)
-        if direction == "NEUTRAL":
-            significance *= 0.55
-        candidates.append((significance, setup, oi_change, direction))
-    if not candidates:
-        return "OI WARMING UP", None, "NEUTRAL"
-    _, setup, oi_change, direction = max(candidates, key=lambda item: item[0])
-    return setup, oi_change, direction
+    # Fixed current window: do not select the largest historical move as live flow.
+    return _classify_future_window(source.tail(4), oi_column)[:3]
 
 
 def _recent_volume_ratio(frame: pd.DataFrame) -> float | None:
@@ -135,10 +123,24 @@ def calculate_big_player_activity(
     is calculated from the last three authoritative app snapshots.
     """
 
+    if future_candles_1m is not None and not future_candles_1m.empty and "timestamp" in future_candles_1m:
+        timestamps = pd.to_datetime(future_candles_1m.timestamp)
+        future_candles_1m = future_candles_1m.loc[timestamps.dt.date.eq(as_of.date())].copy()
+
+    def recent_observation(item: dict[str, Any]) -> bool:
+        stamp = item.get("captured_at")
+        if not stamp:
+            return True
+        try:
+            age = (as_of - datetime.fromisoformat(str(stamp))).total_seconds()
+            return 0 <= age <= 180
+        except (TypeError, ValueError):
+            return False
+
     history = [
         item
         for item in list(history or [])
-        if (
+        if recent_observation(item) and (
             not observation_key
             or (
                 bool(str(item.get("observation_key", "")))
@@ -146,10 +148,7 @@ def calculate_big_player_activity(
             )
         )
     ]
-    volume_windows = (
-        volume.three_minute,
-        getattr(volume, "fifteen_minute", volume.three_minute),
-    )
+    volume_windows = (volume.three_minute,)
     ratios = [
         float(item.relative_volume)
         for item in volume_windows
@@ -158,7 +157,7 @@ def calculate_big_player_activity(
     one_minute_ratio = _recent_volume_ratio(future_candles_1m)
     if one_minute_ratio is not None:
         ratios.append(one_minute_ratio)
-    ratio = max(ratios) if ratios else None
+    ratio = ratios[0] if ratios else None
     intensity = _volume_intensity(ratio)
     futures_setup, oi_change, futures_direction = _future_setup(future_candles_1m)
     activity_type = (
@@ -195,12 +194,10 @@ def calculate_big_player_activity(
     option_gap = float(options.bullish_score) - float(options.bearish_score)
     option_direction = "BUY" if option_gap >= 8 else "SELL" if option_gap <= -8 else "NEUTRAL"
     option_strength = min(100.0, abs(option_gap) * 1.8 + float(options.confidence) * 0.35)
-    top7_direction = _direction_label(heavyweights.state)
-    top7_strength = min(100.0, abs(float(heavyweights.weighted_move_pct or 0.0)) * 85.0 + 30.0)
-    strongest_volume = max(
-        volume_windows,
-        key=lambda item: float(item.relative_volume or 0.0),
-    )
+    top_move = getattr(heavyweights, "recent_15m_move_pct", None)
+    top7_direction = "BUY" if top_move is not None and top_move > 0.03 else "SELL" if top_move is not None and top_move < -0.03 else "NEUTRAL"
+    top7_strength = min(100.0, abs(float(top_move or 0.0)) * 85.0 + 30.0) if top_move is not None else 0.0
+    strongest_volume = volume.three_minute
     price_direction = str(
         getattr(strongest_volume, "price_direction", "NEUTRAL") or "NEUTRAL"
     ).upper()
@@ -211,11 +208,11 @@ def calculate_big_player_activity(
     reasons: list[str] = []
     cautions: list[str] = []
     for direction, weight, strength, reason in (
-        (candle_direction, 0.25, intensity, f"Strongest recent volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
+        (candle_direction, 0.25, intensity, f"3m volume {ratio:.2f}x with price {price_direction}" if ratio is not None else "Futures volume baseline unavailable"),
         (futures_direction, 0.28, 82.0 if oi_change is not None else 25.0, f"Futures {futures_setup}"),
         (option_direction, 0.21, option_strength, f"ATM option flow {options.market_bias}"),
         # Top-9 is useful context, but it cannot represent the remaining NIFTY stocks.
-        (top7_direction, 0.07, top7_strength, f"Top-9 {heavyweights.state}"),
+        (top7_direction, 0.07, top7_strength, f"Top-9 recent {getattr(heavyweights, 'recent_state', 'WARMING UP')}"),
     ):
         if direction == "BUY":
             buy += strength * weight
@@ -226,7 +223,7 @@ def calculate_big_player_activity(
 
     # Afternoon/closing time raises activity sensitivity, never direction by itself.
     time_window = _time_window(as_of)
-    time_bonus = 6.0 if time_window in {"AFTERNOON BUILD-UP", "CLOSING PRESSURE"} else 9.0 if "FINAL HOUR" in time_window else 0.0
+    time_bonus = 0.0  # time is context, not evidence of buying/selling strength
     buy += time_bonus
     sell += time_bonus
     buy = clamp(buy, 0.0, 100.0)
@@ -238,13 +235,15 @@ def calculate_big_player_activity(
     if not completed.empty and "is_complete" in completed.columns:
         completed = completed[completed["is_complete"].fillna(False).astype(bool)]
     completed = completed.dropna(subset=["close"]).tail(16) if not completed.empty else completed
+    completed = completed.tail(4)
     current_spot = float(completed.iloc[-1]["close"]) if not completed.empty else None
     move_points = (
         abs(float(completed.iloc[-1]["close"]) - float(completed.iloc[0]["close"]))
         if len(completed) >= 2
         else 0.0
     )
-    required_move = 4.0
+    ranges = (completed["high"] - completed["low"]) if not completed.empty and {"high", "low"}.issubset(completed.columns) else pd.Series(dtype=float)
+    required_move = max(4.0, float(ranges.median()) * 0.5) if not ranges.empty else 4.0
 
     spot_completed = spot_candles_1m.copy() if spot_candles_1m is not None else pd.DataFrame()
     if not spot_completed.empty and "is_complete" in spot_completed.columns:
@@ -264,17 +263,6 @@ def calculate_big_player_activity(
         else "PRICE SHOCK DOWN" if shock_points <= -30.0 or shock_3m <= -15.0
         else "NONE"
     )
-    if price_shock_state == "NONE":
-        for prior in reversed(history[-8:]):
-            payload = prior.get("activity_payload") or {}
-            prior_state = str(payload.get("price_shock_state") or "")
-            if "PRICE SHOCK UP" in prior_state or "PRICE SHOCK DOWN" in prior_state:
-                price_shock_state = f"RECENT {prior_state.replace('RECENT ', '')}"
-                try:
-                    shock_points = float(payload.get("price_shock_points") or 0.0)
-                except (TypeError, ValueError):
-                    shock_points = 0.0
-                break
     directional_support = sum(
         (
             futures_direction == ("BUY" if direction == "BUYING" else "SELL"),
@@ -311,6 +299,7 @@ def calculate_big_player_activity(
     )
     if direction_change_blocked:
         direction = previous_direction
+        score = buy if direction == "BUYING" else sell
         large_activity = False
 
     near_resistance = barrier_map.nearest_resistance
@@ -319,7 +308,7 @@ def calculate_big_player_activity(
     absorption = False
     if ratio is not None and ratio >= 1.2 and price_direction == "FLAT":
         absorption = True
-        level_reaction = "HIGH ACTIVITY ABSORBED / PRICE FLAT"
+        level_reaction = "HIGH ACTIVITY / LIMITED PRICE RESPONSE (absorption unconfirmed)"
     elif direction == "BUYING" and near_resistance is not None and near_resistance.distance_points <= 12:
         level_reaction = "BUYING TESTING RESISTANCE"
     elif direction == "SELLING" and near_support is not None and near_support.distance_points <= 12:
@@ -328,7 +317,7 @@ def calculate_big_player_activity(
     matching = 0
     recent_history = history[-1:]
     total = min(2, len(recent_history) + 1)
-    if direction in {"BUYING", "SELLING"} and score >= 40 and large_activity:
+    if direction in {"BUYING", "SELLING"} and score >= 40:
         recent = [
             str(item.get("direction", ""))
             if float(item.get("score", 0.0) or 0.0) >= 40
@@ -373,16 +362,16 @@ def calculate_big_player_activity(
     elif not large_activity and score >= 40:
         move_state = "CHHOTA MOVE — BADI HALCHAL NAHI"
     elif matching >= 2:
-        move_state = "BADI HALCHAL PAKKI 2/2"
+        move_state = "PERSISTENT 2/2 — strength and price response separate"
     elif matching == 1:
-        move_state = "BADI HALCHAL SHURU 1/2"
+        move_state = "FIRST OBSERVATION 1/2"
     else:
         move_state = "ABHI SAAF NAHI"
 
     if not market_session.is_live:
         cautions.append("Market live nahi; result last available data ka hai")
         status = "REFERENCE ONLY"
-    elif volume.status == "UNAVAILABLE":
+    elif volume.status != "READY" or futures_setup in {"OI UNAVAILABLE", "OI WARMING UP"}:
         cautions.append("Futures volume unavailable")
         status = "PARTIAL"
     else:
@@ -398,6 +387,12 @@ def calculate_big_player_activity(
         if option_direction != "SELL" or top7_direction != "SELL":
             cautions.append("Options/Top-9 fresh selling ko confirm nahi kar rahe")
 
+    signed_move = float(completed.iloc[-1]["close"]) - float(completed.iloc[0]["close"]) if len(completed) >= 2 else None
+    response = "UNCONFIRMED"
+    if signed_move is not None and direction in {"BUYING", "SELLING"}:
+        aligned_move = signed_move if direction == "BUYING" else -signed_move
+        response = "FOLLOW-THROUGH" if aligned_move >= required_move else "OPPOSITE RESPONSE" if aligned_move <= -required_move else "PRICE HOLDING / STALLED"
+    participant_explanation = "Price + OI inference: " + futures_setup + "; trader identity/intent unconfirmed"
     return BigPlayerActivity(
         direction=direction,
         state=state,
@@ -413,9 +408,9 @@ def calculate_big_player_activity(
         futures_oi_change_pct=round(float(oi_change), 2) if oi_change is not None else None,
         futures_setup=futures_setup,
         option_confirmation=options.market_bias,
-        top7_confirmation=heavyweights.state,
+        top7_confirmation=getattr(heavyweights, "recent_state", "WARMING UP"),
         level_reaction=level_reaction,
-        reasons=tuple(dict.fromkeys(reasons))[:4],
+        reasons=tuple(["Current flow: latest 3 completed 1m intervals; not trader identity"] + list(dict.fromkeys(reasons)))[:5],
         cautions=tuple(dict.fromkeys(cautions))[:3],
         status=status,
         activity_type=activity_type,
@@ -426,4 +421,6 @@ def calculate_big_player_activity(
         required_move_points=required_move,
         price_shock_state=price_shock_state,
         price_shock_points=round(abs(float(shock_points)), 1) if price_shock_state != "NONE" else None,
+        price_response=response,
+        futures_price_change_points=signed_move,
     )

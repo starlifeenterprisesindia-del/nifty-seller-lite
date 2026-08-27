@@ -179,6 +179,32 @@ class LiveAlertEngine:
             "Automatic order kabhi place nahi hoga."
         )
 
+    def observe_pattern(self, payload: dict[str, Any], now_ts: float | None = None) -> bool:
+        timestamp = time.time() if now_ts is None else now_ts
+        if not _market_hours(datetime.fromtimestamp(timestamp, IST)):
+            return False
+        try:
+            stamp = datetime.fromisoformat(str(payload["captured_at"]))
+            if not 0 <= timestamp - stamp.timestamp() <= 120:
+                return False
+        except (KeyError, ValueError, TypeError):
+            return False
+        ids = payload.get("pattern_ids")
+        if payload.get("direction") not in {"BULLISH", "BEARISH"} or not isinstance(ids, list) or not 1 <= len(ids) <= 2:
+            return False
+        signatures = ["pattern:" + stamp.date().isoformat() + ":" + str(x)[:180] for x in ids]
+        with self._lock:
+            if all(x in self._last_sent for x in signatures):
+                return False
+            # Delivery is synchronous under this lock to prevent duplicate requests.
+            self._sender(str(payload.get("message", "Strong aligned pattern confirmation"))[:1800])
+            for signature in signatures:
+                self._last_sent[signature] = timestamp
+            self.alert_count += 1
+            self.last_alert = signatures[0]
+            self.last_alert_at = timestamp
+        return True
+
     def observe_big_player(self, payload: dict[str, Any], *, now_ts: float | None = None) -> bool:
         """Send bounded Big Player evidence; it never converts conflict into advice."""
         timestamp = float(now_ts if now_ts is not None else time.time())

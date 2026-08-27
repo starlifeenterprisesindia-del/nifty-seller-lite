@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from analysis.technical_utils import clamp
+from analysis.activity_gate import activity_gate, confirmed_activity
 from config import CONFIG
 from models import (
     BigPlayerActivity,
@@ -39,17 +40,15 @@ _DIRECTION_FROM_ACTION = {
 
 def _heavyweight_scores(bundle: HeavyweightBundle) -> tuple[float, float, float]:
     if bundle.status not in {"READY", "CAUTION"}:
-        return 45.0, 45.0, 58.0
-    state = bundle.state.upper()
-    if "BROAD BULLISH" in state:
-        return 88.0, 12.0, 20.0
-    if "NARROW BULLISH" in state:
-        return 68.0, 25.0, 42.0
-    if "BROAD BEARISH" in state:
-        return 12.0, 88.0, 20.0
-    if "NARROW BEARISH" in state:
-        return 25.0, 68.0, 42.0
-    return 42.0, 42.0, 70.0
+        return 0.0, 0.0, 0.0
+    move = getattr(bundle, "recent_15m_move_pct", None)
+    if move is None:
+        return 0.0, 0.0, 0.0
+    coverage = min(1.0, bundle.recent_coverage_pct / max(bundle.covered_weight_pct, 0.01))
+    strength = min(95.0, abs(move) * 250 + 40)
+    if abs(move) <= 0.03:
+        return 10 * coverage, 10 * coverage, 70 * coverage
+    return (strength * coverage, 5 * coverage, 0.0) if move > 0 else (5 * coverage, strength * coverage, 0.0)
 
 
 def _institutional_scores(
@@ -132,15 +131,17 @@ def _futures_activity_scores(
     is allowed into the canonical base score.
     """
     setup = str(getattr(activity, "futures_setup", "") or "").upper()
-    if setup == "LONG BUILD-UP":
-        return 85.0, 10.0, 20.0
-    if setup == "SHORT BUILD-UP":
-        return 10.0, 85.0, 20.0
-    if setup == "SHORT COVERING":
-        return 65.0, 15.0, 45.0
-    if setup == "LONG UNWINDING":
-        return 15.0, 65.0, 45.0
-    return 35.0, 35.0, 70.0
+    if activity is None or activity.status != "READY" or getattr(activity, "futures_oi_change_pct", None) is None:
+        return 0.0, 0.0, 0.0
+    move = abs(float(activity.futures_price_change_points or 0.0))
+    strength = min(95.0, 25 + move / max(activity.required_move_points, 1) * 20 + abs(activity.futures_oi_change_pct) * 60)
+    if setup in {"SHORT COVERING", "LONG UNWINDING"}:
+        strength *= 0.75
+    if setup in {"LONG BUILD-UP", "SHORT COVERING"}:
+        return strength, 0.0, 0.0
+    if setup in {"SHORT BUILD-UP", "LONG UNWINDING"}:
+        return 0.0, strength, 0.0
+    return 0.0, 0.0, 0.0
 
 
 def _buy_level_adjustments(levels: LevelBundle) -> tuple[float, float, list[str], list[str]]:
@@ -281,10 +282,10 @@ def _level_adjustments(
             pe_cautions.append("Resistance paas hai; rejection se PE Sell ko risk")
 
     if levels.current_position == "NEAR SUPPORT":
-        ce_adjust -= 10
+        ce_adjust = min(ce_adjust, -10)
         ce_cautions.append("Price support ke paas hai; CE Sell me bounce risk")
     elif levels.current_position == "NEAR RESISTANCE":
-        pe_adjust -= 10
+        pe_adjust = min(pe_adjust, -10)
         pe_cautions.append("Price resistance ke paas hai; PE Sell me rejection risk")
 
     rooms = [
@@ -326,11 +327,6 @@ def _news_adjustment(news: NewsContext | None) -> tuple[float, str | None]:
         if news.risk_level == "MEDIUM":
             return 8.0, "Fresh/recent medium-impact market news is active"
         return 0.0, None
-    if news.status == "OLD":
-        if news.risk_level == "HIGH":
-            return 4.0, "Older high-impact news exists; low decision weight"
-        if news.risk_level == "MEDIUM":
-            return 2.0, "Older market news exists; low decision weight"
     return 0.0, None
 
 
@@ -557,23 +553,6 @@ def _fake_move_risk(
             risk += 15
             reasons.append("Price-action direction opposes the current score leader")
 
-    if patterns is not None and patterns.status == "READY":
-        wm_direction = patterns.wm_3m.direction
-        main_candle = getattr(patterns, "candle_5m", None) or patterns.candle_3m
-        candle_direction = main_candle.direction
-        usable_directions = {
-            item
-            for item in (wm_direction, candle_direction)
-            if item in {"BULLISH", "BEARISH"}
-        }
-        if len(usable_directions) > 1:
-            risk += 10
-            reasons.append("3-minute W/M and 5-minute candle evidence conflict")
-        pattern_direction = patterns.combined_direction
-        if pattern_direction in {"BULLISH", "BEARISH"} and pattern_direction != direction:
-            risk += 10
-            reasons.append("3-minute pattern evidence opposes the score leader")
-
     core_direction = _directional_label(core.market_state)
     option_direction = _directional_label(options.market_bias)
     if core_direction and option_direction and core_direction != option_direction:
@@ -584,39 +563,8 @@ def _fake_move_risk(
     if option_direction and option_direction not in {direction, "RANGE"}:
         risk += 14
 
-    heavy_direction = _directional_label(heavyweights.state)
-    if heavy_direction == "RANGE":
-        risk += 12
-        reasons.append("Top-7 heavyweights are mixed or flat")
-    elif heavy_direction and heavy_direction != direction and direction != "RANGE":
-        risk += 18
-        reasons.append("Top-7 heavyweights do not confirm the move")
-
-    if volume is None or volume.status != "READY":
-        risk += 10
-        reasons.append("Futures-volume confirmation is unavailable")
-    else:
-        volume_view = volume.overall_view.upper()
-        if direction == "BULLISH" and "BEARISH" in volume_view:
-            risk += 18
-            reasons.append("Futures volume opposes the bullish move")
-        elif direction == "BEARISH" and "BULLISH" in volume_view:
-            risk += 18
-            reasons.append("Futures volume opposes the bearish move")
-        elif (
-            "LOW" in volume_view
-            or "WEAK" in volume_view
-            or "NOT CONFIRMED" in volume_view
-        ):
-            risk += 12
-            reasons.append("Movement has weak volume participation")
-
-    if direction == "BULLISH" and levels.current_position == "NEAR RESISTANCE":
-        risk += 13
-        reasons.append("Bullish move is testing nearby resistance")
-    elif direction == "BEARISH" and levels.current_position == "NEAR SUPPORT":
-        risk += 13
-        reasons.append("Bearish move is testing nearby support")
+    # Top-9 already votes once; barrier proximity already adjusts entry location.
+    # Low volume is participation context, not a second direction/range penalty.
 
     ready_windows = sum(window.status == "READY" for window in options.windows)
     if ready_windows < 2:
@@ -639,7 +587,7 @@ def _fake_move_risk(
     if vix.status != "READY":
         risk += 8
         reasons.append("India VIX confirmation is unavailable")
-    elif vix.movement == "RISING FAST" or vix.regime == "HIGH":
+    elif vix.movement == "RISING FAST":
         risk += 12
         reasons.append("VIX risk is elevated")
 
@@ -657,12 +605,6 @@ def _fake_move_risk(
         elif news.risk_level == "MEDIUM":
             risk += 8
             reasons.append("Fresh/recent market news adds short-term movement risk")
-    elif news is not None and news.status == "OLD":
-        if news.risk_level == "HIGH":
-            risk += 5
-            reasons.append("Older high-impact news is low-weight background risk")
-        elif news.risk_level == "MEDIUM":
-            risk += 2
 
     if reference_only:
         reasons.append("Live session not confirmed; fake-move score is reference-only")
@@ -745,6 +687,7 @@ def _memory_confirmation(
         and big_player.status == "READY"
         and big_player.score >= 75
         and big_player.confirmation_count >= 2
+        and confirmed_activity(big_player)
         and activity_direction == direction
         and fake_move_risk < CONFIG.fake_move_medium_threshold
     )
@@ -938,56 +881,33 @@ def calculate_final_decision(
     """
 
     heavy_bull, heavy_bear, heavy_range = _heavyweight_scores(heavyweights)
-    inst_bull, inst_bear, inst_range, inst_caution = _institutional_scores(
-        institutional
-    )
-    seller_score = _seller_environment_score(vix)
-    buyer_score = _buyer_environment_score(vix)
 
     futures_bull, futures_bear, futures_range = _futures_activity_scores(big_player)
 
-    # Every strategy starts from the same 100-point architecture:
-    # core 30 + options 30 + raw futures activity 15 + Top-9 8 + FII/DII 5
-    # + VIX environment 12.  This makes BUY/SELL/CONDOR fits comparable.
-    ce = (
-        core.bearish_score * 0.30
-        + options.bearish_score * 0.30
-        + futures_bear * 0.15
-        + heavy_bear * 0.08
-        + inst_bear * 0.05
-        + seller_score * 0.12
+    def base(core_value, option_value, future_value, heavy_value):
+        return core_value * 0.45 + option_value * 0.35 + future_value * 0.10 + heavy_value * 0.10
+
+    base_bull = base(core.bullish_score, options.bullish_score, futures_bull, heavy_bull)
+    base_bear = base(core.bearish_score, options.bearish_score, futures_bear, heavy_bear)
+    base_range = base(core.range_score, options.range_score, futures_range, heavy_range)
+    pe = ce_buy = base_bull
+    ce = pe_buy = base_bear
+    condor = base_range
+    # RANGE needs observed range structure, not merely conflicting/missing votes.
+    range_eligible = bool(
+        price_action is not None
+        and getattr(price_action.fifteen_minute, "status", "") == "READY"
+        and "RANGE" in getattr(price_action.fifteen_minute, "structure", "")
+        and core.range_score > max(core.bullish_score, core.bearish_score)
+        and levels.status == "READY"
+        and levels.immediate_support is not None and levels.immediate_resistance is not None
+        and levels.immediate_support.status != "BROKEN" and levels.immediate_resistance.status != "BROKEN"
+        and min(levels.upside_room or 0, levels.downside_room or 0) >= 18
     )
-    pe = (
-        core.bullish_score * 0.30
-        + options.bullish_score * 0.30
-        + futures_bull * 0.15
-        + heavy_bull * 0.08
-        + inst_bull * 0.05
-        + seller_score * 0.12
-    )
-    condor = (
-        core.range_score * 0.30
-        + options.range_score * 0.30
-        + futures_range * 0.15
-        + heavy_range * 0.08
-        + inst_range * 0.05
-        + seller_score * 0.12
-    )
-    ce_buy = (
-        core.bullish_score * 0.30
-        + options.bullish_score * 0.30
-        + futures_bull * 0.15
-        + heavy_bull * 0.08
-        + inst_bull * 0.05
-        + buyer_score * 0.12
-    )
-    pe_buy = (
-        core.bearish_score * 0.30
-        + options.bearish_score * 0.30
-        + futures_bear * 0.15
-        + heavy_bear * 0.08
-        + inst_bear * 0.05
-        + buyer_score * 0.12
+    evidence_direction = (
+        "RANGE" if range_eligible and base_range > max(base_bull, base_bear)
+        else "BULLISH" if base_bull - base_bear >= 8
+        else "BEARISH" if base_bear - base_bull >= 8 else "MIXED"
     )
 
     (
@@ -1044,17 +964,9 @@ def calculate_final_decision(
             "Core and option flow agree directionally",
         )
 
-    (
-        pattern_ce,
-        pattern_pe,
-        pattern_condor,
-        pattern_wait,
-        pattern_conflict,
-        _pattern_notes,
-    ) = _pattern_adjustments(patterns)
-    ce += pattern_ce
-    pe += pattern_pe
-    condor += pattern_condor
+    # Patterns trigger aligned alerts/entry timing; no repeated price vote.
+    pattern_ce = pattern_pe = pattern_wait = 0.0
+    pattern_conflict = False
     # Bullish pattern evidence supports CE BUY; bearish supports PE BUY. The same
     # bounded source is reused, not double-counted as another independent brain.
     ce_buy += pattern_pe
@@ -1074,9 +986,6 @@ def calculate_final_decision(
             f"confirmed {big_player.confirmation_count}/{big_player.confirmation_total}"
         )
 
-    if core.move_stage in {"MATURE", "EXHAUSTION", "SHORT-TERM EXHAUSTION RISK"}:
-        ce -= 6
-        pe -= 6
     if options.persistence in {"WARMING UP", "UNAVAILABLE"}:
         ce -= 5
         pe -= 5
@@ -1109,11 +1018,6 @@ def calculate_final_decision(
             condor -= 4
             ce_buy -= 4
             pe_buy -= 4
-    elif news is not None and news.status == "OLD":
-        # Older headlines remain visible as background context only; they receive a
-        # deliberately small penalty and never behave like fresh market-moving news.
-        if news.risk_level == "HIGH":
-            condor -= 2
 
     ce = round(clamp(ce, 0, 100), 1)
     pe = round(clamp(pe, 0, 100), 1)
@@ -1165,11 +1069,9 @@ def calculate_final_decision(
         if vix.status != "READY":
             wait += 6
             blockers.append("India VIX data is unavailable")
-        elif vix.movement == "RISING FAST" or vix.regime == "HIGH":
+        elif vix.movement == "RISING FAST":
             wait += 14
             blockers.append("VIX risk is elevated")
-        if inst_caution:
-            wait += 4
         wait += pattern_wait
         if pattern_conflict:
             blockers.append("3-minute W/M and candle evidence conflict")
@@ -1313,11 +1215,9 @@ def calculate_final_decision(
 
     candidates = sorted(
         (
-            ("CE BUY", ce_buy),
-            ("PE BUY", pe_buy),
             ("CE SELL", ce),
             ("PE SELL", pe),
-            ("IRON CONDOR", condor),
+            ("IRON CONDOR", condor if range_eligible else 0.0),
         ),
         key=lambda item: item[1],
         reverse=True,
@@ -1326,39 +1226,14 @@ def calculate_final_decision(
     runner_up = candidates[1][1]
     bullish_score = max(pe, ce_buy)
     bearish_score = max(ce, pe_buy)
-    direction, _, _ = (
-        _direction_from_scores(bearish_score, bullish_score, condor)
-        if option_data_available
-        else ("RANGE", 0.0, 0.0)
-    )
+    direction = evidence_direction if option_data_available else "UNAVAILABLE"
     score_gap = max(0.0, leader_score - runner_up)
 
-    # Big Player is a contradiction/absorption gate, never a duplicate vote.
-    leader_direction = _direction_from_action(leader)
-    if (
-        market_session.is_live
-        and big_player is not None
-        and big_player.status == "READY"
-    ):
-        if big_player.state == "ABSORPTION":
-            wait += 18.0
-            blockers.append("Heavy activity is being absorbed near the current level")
-        if (
-            big_player.score >= CONFIG.big_player_min_score
-            and big_player.confirmation_count >= CONFIG.big_player_min_confirmations
-            and leader_direction in {"BULLISH", "BEARISH"}
-        ):
-            bp_direction = (
-                "BULLISH" if big_player.direction == "BUYING"
-                else "BEARISH" if big_player.direction == "SELLING"
-                else "RANGE"
-            )
-            if bp_direction not in {leader_direction, "RANGE"}:
-                wait += 35.0
-                blockers.append("Confirmed Big Player activity opposes the strategy")
-        elif big_player.direction in {"BUYING", "SELLING"} and big_player.score >= 40:
-            wait += 6.0
-            blockers.append("Big Player activity is warming up; confirmation pending")
+    # Same policy as the execution guard; never a duplicate direction vote.
+    activity_blocked, activity_note = activity_gate(leader, big_player)
+    if market_session.is_live and activity_blocked:
+        wait = max(wait + 35.0, CONFIG.decision_wait_block_threshold)
+        blockers.append(activity_note)
     wait = round(clamp(wait, 0, 100), 1)
 
     if wait >= CONFIG.decision_wait_block_threshold:
@@ -1410,6 +1285,19 @@ def calculate_final_decision(
         memory_text = "Option chain unavailable"
 
     final_action = instant_action
+    if direction not in {"BULLISH", "BEARISH", "RANGE"}:
+        final_action = "WAIT"
+        blockers.append("Direction mixed; no automatic range fallback")
+    elif _direction_from_action(instant_action) not in {None, direction}:
+        final_action = "WAIT"
+        blockers.append("Entry candidate does not match independent direction evidence")
+    # Strategy identity has its own persistence, independent of market direction.
+    if final_action != "WAIT" and history:
+        recent_actions = [str(row.get("candidate_action", row.get("action", ""))) for row in history[-4:]]
+        different = [a for a in recent_actions if a not in {"", "WAIT", final_action}]
+        if different and recent_actions[-2:] != [final_action, final_action]:
+            final_action = "WAIT"
+            blockers.append("Strategy switch pending: candidate must persist; no automatic conversion")
     if instant_action != "WAIT":
         if signal_state == "TRANSITION / WAIT":
             final_action = "WAIT"
@@ -1443,12 +1331,11 @@ def calculate_final_decision(
         cautions=(),
     )
 
-    confidence_inputs = [core.confidence, options.confidence, heavyweights.confidence]
-    if institutional.confidence > 0:
-        confidence_inputs.append(institutional.confidence)
-    confidence = sum(confidence_inputs) / len(confidence_inputs)
-    confidence *= max(0.35, 1.0 - wait_eval.score / 160.0)
-    confidence *= max(0.45, 1.0 - fake_move_risk / 180.0)
+    coverage = core.confidence * .45 + options.confidence * .35
+    coverage += 10 if big_player is not None and big_player.status == "READY" else 0
+    coverage += min(10., heavyweights.recent_coverage_pct / max(heavyweights.covered_weight_pct, .01) * 10)
+    # One risk discount, not two penalties for the same evidence.
+    confidence = coverage * max(.35, 1 - max(wait_eval.score, fake_move_risk) / 180)
     confidence = round(clamp(confidence, 0, 95), 1)
 
     outlook = _build_outlook(

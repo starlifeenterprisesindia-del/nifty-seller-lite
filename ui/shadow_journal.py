@@ -8,14 +8,29 @@ import streamlit as st
 from config import CONFIG
 
 
-def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str) -> None:
+def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
     st.subheader("🧪 Auto Shadow Journal — Paper Trades Only")
     st.caption(
         f"One-Brain ke {CONFIG.shadow_journal_min_confidence:.0f}%+ qualified setups "
         "paper-test hote hain; ENTRY READY aur TEST CANDIDATE alag label hote hain. "
         "Koi broker order ya real paisa use nahi hota."
     )
-    today = [item for item in entries if str(item.get("session_date")) == session_date]
+    if store is not None:
+        st.caption(f"Last checked: {store.last_checked} · Paper status: {store.last_blocker} · Last saved this process: {store.last_saved or 'No save yet'}")
+        if store.last_error:
+            st.warning(store.last_error)
+        else:
+            st.caption("Local journal available; cloud backup only if configured. Not broker trades.")
+        import json
+        try:
+            history = json.loads(store.path.with_suffix(".signals.json").read_text())
+        except (OSError, ValueError):
+            history = []
+        with st.expander("Signal / WAIT reasons history"):
+            st.dataframe(history[-100:], width="stretch", hide_index=True)
+    dates = sorted({session_date, *(str(x.get("session_date")) for x in entries)}, reverse=True)
+    selected_date = st.selectbox("Journal date", dates, key="shadow_history_date")
+    today = [item for item in entries if str(item.get("session_date")) == selected_date]
     closed = [item for item in today if str(item.get("status")).upper() == "CLOSED"]
     open_items = [item for item in today if str(item.get("status")).upper() == "OPEN"]
     net = sum(float(item.get("net_pnl_rupees") or 0.0) for item in closed)
@@ -44,6 +59,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str)
                 "Strategy": item.get("setup"),
                 "Confidence": item.get("decision_confidence"),
                 "Strategy score": item.get("strategy_score"),
+                "Score band": item.get("score_band", "LEGACY"),
                 "Qualification": item.get("qualification") or "LEGACY",
                 "OI bias": item.get("oi_bias"),
                 "Big Player": f"{item.get('big_player_direction')} {float(item.get('big_player_score') or 0):.0f}",

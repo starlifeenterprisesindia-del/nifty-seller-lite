@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from math import isfinite
+import pandas as pd
+from analysis.indicators import _rsi_wilder
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,63 @@ def _rsi(snapshot: Any | None) -> float | None:
         None,
     )
     return float(value) if value is not None else None
+
+
+def _completed_rsi_pair(snapshot: Any) -> tuple[float | None, float | None]:
+    """Use adjacent completed bars, never adjacent UI refreshes."""
+    frame = getattr(snapshot, "candles_3m", None)
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return _rsi(snapshot), None
+    frame = frame.copy()
+    if "is_complete" not in frame or "timestamp" not in frame:
+        return _rsi(snapshot), None
+    frame = (
+        frame[frame.is_complete.fillna(False)]
+        .sort_values("timestamp")
+        .drop_duplicates("timestamp")
+    )
+    values = _rsi_wilder(pd.to_numeric(frame.close, errors="coerce").dropna()).dropna()
+    if len(values) < 2:
+        return _rsi(snapshot), None
+    return float(values.iloc[-1]), float(values.iloc[-2])
+
+
+def _budget(snapshot: Any) -> float:
+    profile = getattr(snapshot, "risk_profile", None)
+    value = float(getattr(profile, "risk_budget_rupees", 0) or 0)
+    return min(MONEY_STOP_RUPEES, value) if isfinite(value) and value > 0 else 0.0
+
+
+def _safety_blockers(snapshot: Any) -> list[str]:
+    blockers = []
+    feeds = getattr(snapshot, "feed_status", {})
+    for key in ("quotes", "candles", "future_volume", "option_chain"):
+        feed = feeds.get(key) if isinstance(feeds, dict) else None
+        if not feed or not feed.ok or feed.use_state != "LIVE":
+            blockers.append(f"{key}: fresh live data required")
+    now = getattr(snapshot, "created_at", None)
+    profile = getattr(snapshot, "risk_profile", None)
+    if now is None or profile is None:
+        blockers.append("Risk profile / timestamp unavailable")
+    else:
+        start, end = (
+            getattr(profile, "entry_start", None),
+            getattr(profile, "entry_end", None),
+        )
+        if (
+            start is None
+            or end is None
+            or not start <= now.time().replace(tzinfo=None) <= end
+        ):
+            blockers.append("Entry window closed")
+        indicator = getattr(getattr(snapshot, "indicators", None), "three_minute", None)
+        stamp = getattr(indicator, "as_of", None)
+        if stamp is None or not 180 <= (now - stamp).total_seconds() <= 420:
+            blockers.append("Completed 3m RSI stale / unavailable")
+    discipline = getattr(snapshot, "discipline_state", None)
+    if discipline is None or discipline.day_locked or discipline.trades_taken:
+        blockers.append("Trade/day lock active or unavailable")
+    return blockers
 
 
 def _strong_barrier(level: Any | None) -> bool:
@@ -92,7 +152,7 @@ def _leg_text(legs: tuple[Any, ...] | list[Any]) -> str:
     values = []
     for leg in legs or ():
         strike = getattr(leg, "strike", None)
-        option_type = str(getattr(leg, "option_type", ""))
+        option_type = str(getattr(leg, "side", getattr(leg, "option_type", "")))
         if strike is not None:
             values.append(f"{float(strike):,.0f} {option_type}".strip())
     return " + ".join(values) or "—"
@@ -109,14 +169,15 @@ def _structure(plan: Any | None) -> str:
 def _suggested_lots(snapshot: Any, plan: Any | None) -> int:
     if plan is None or not bool(getattr(plan, "available", False)):
         return 0
-    credit = float(getattr(plan, "estimated_credit_points", 0.0) or 0.0)
+    risk = float(getattr(plan, "max_risk_points", 0.0) or 0.0)
     lot_size = int(getattr(getattr(snapshot, "risk_profile", None), "lot_size", 0) or 0)
-    if credit <= 0 or lot_size <= 0:
+    if not isfinite(risk) or risk <= 0 or lot_size <= 0:
         return 0
-    estimated_stop_per_lot = credit * SELL_PREMIUM_STOP_PCT / 100.0 * lot_size
+    estimated_stop_per_lot = risk * lot_size * 1.10
     if estimated_stop_per_lot <= 0:
         return 0
-    return max(0, int(MONEY_STOP_RUPEES // estimated_stop_per_lot))
+    cap = int(getattr(snapshot.risk_profile, "max_lots_cap", 0) or 0)
+    return max(0, min(cap, int(_budget(snapshot) // estimated_stop_per_lot)))
 
 
 def _market_sl(action: str, resistance: Any | None, support: Any | None) -> str:
@@ -132,11 +193,12 @@ def _market_sl(action: str, resistance: Any | None, support: Any | None) -> str:
     return "Barrier invalidation unavailable"
 
 
-def evaluate_rsi_reversal_setup(snapshot: Any, previous_snapshot: Any | None) -> RsiReversalSetup:
+def evaluate_rsi_reversal_setup(
+    snapshot: Any, previous_snapshot: Any | None
+) -> RsiReversalSetup:
     """Independent RSI reversal advisory; it never changes the One-Brain decision."""
 
-    rsi_now = _rsi(snapshot)
-    rsi_previous = _rsi(previous_snapshot)
+    rsi_now, rsi_previous = _completed_rsi_pair(snapshot)
     barrier_map = getattr(snapshot, "barrier_map", None)
     resistance = getattr(barrier_map, "nearest_resistance", None)
     support = getattr(barrier_map, "nearest_support", None)
@@ -156,11 +218,24 @@ def evaluate_rsi_reversal_setup(snapshot: Any, previous_snapshot: Any | None) ->
         and rsi_previous <= RSI_BOTTOM
         and rsi_now > rsi_previous
     )
-    zone = "TOP" if top_seen or top_turn else "BOTTOM" if bottom_seen or bottom_turn else "NORMAL"
+    zone = (
+        "TOP"
+        if top_seen or top_turn
+        else "BOTTOM"
+        if bottom_seen or bottom_turn
+        else "NORMAL"
+    )
 
     resistance_ready = _strong_barrier(resistance) and _near_barrier(resistance)
     support_ready = _strong_barrier(support) and _near_barrier(support)
     both_barriers = _strong_barrier(resistance) and _strong_barrier(support)
+    spot = getattr(snapshot, "nifty_quote", {}).get("last_price")
+    if spot is None or not isfinite(float(spot)):
+        resistance_ready = support_ready = both_barriers = False
+    else:
+        resistance_ready = resistance_ready and float(spot) <= float(resistance.upper)
+        support_ready = support_ready and float(spot) >= float(support.lower)
+        both_barriers = both_barriers and float(support.lower) <= float(spot) <= float(resistance.upper)
 
     bp_direction = str(getattr(big_player, "direction", "MIXED") or "MIXED").upper()
     bp_score = float(getattr(big_player, "score", 0.0) or 0.0)
@@ -172,7 +247,12 @@ def evaluate_rsi_reversal_setup(snapshot: Any, previous_snapshot: Any | None) ->
     )
     selling_confirmed = bp_ready and bp_direction == "SELLING"
     buying_confirmed = bp_ready and bp_direction == "BUYING"
-    mixed_flow = not bp_ready or bp_direction == "MIXED"
+    mixed_flow = (
+        str(getattr(big_player, "status", "")).upper() == "READY"
+        and bp_direction == "MIXED"
+        and str(getattr(getattr(barrier_map, "trading_range", None), "state", ""))
+        == "STRONG RANGE"
+    )
 
     reasons: list[str] = []
     cautions: list[str] = []
@@ -236,9 +316,26 @@ def evaluate_rsi_reversal_setup(snapshot: Any, previous_snapshot: Any | None) ->
     else:
         cautions.append("RSI top 70+ ya bottom 30- zone mein nahi")
 
-    market_live = bool(getattr(getattr(snapshot, "market_session", None), "is_live", False))
+    market_live = bool(
+        getattr(getattr(snapshot, "market_session", None), "is_live", False)
+    )
     plan = _plan(snapshot, action)
-    if action != "WAIT" and (plan is None or not bool(getattr(plan, "available", False))):
+    safety = _safety_blockers(snapshot)
+    option = getattr(snapshot, "option_intelligence", None)
+    if option is None or option.status != "READY":
+        safety.append("OI data not ready")
+    if action != "WAIT" and safety:
+        cautions.extend(safety)
+        action, plan = "WAIT", None
+    if plan is not None and any(
+        getattr(leg, "delta", None) is None or getattr(leg, "status", "") != "READY"
+        for leg in (*plan.short_legs, *plan.hedge_legs)
+    ):
+        cautions.append("Selected legs: verified Greeks/liquidity required")
+        action, plan = "WAIT", None
+    if action != "WAIT" and (
+        plan is None or not bool(getattr(plan, "available", False))
+    ):
         cautions.append(f"{action} ka protected strike/hedge available nahi")
         action = "WAIT"
         plan = None
@@ -266,7 +363,9 @@ def evaluate_rsi_reversal_setup(snapshot: Any, previous_snapshot: Any | None) ->
         if big_player is not None
         else "Unavailable"
     )
-    active_level = resistance if zone == "TOP" else support if zone == "BOTTOM" else None
+    active_level = (
+        resistance if zone == "TOP" else support if zone == "BOTTOM" else None
+    )
     return RsiReversalSetup(
         action=action,
         status=status,
@@ -278,8 +377,70 @@ def evaluate_rsi_reversal_setup(snapshot: Any, previous_snapshot: Any | None) ->
         big_player_text=bp_text,
         structure_text=_structure(plan),
         market_sl_text=_market_sl(action, resistance, support),
-        money_sl_text="₹5,000 total hard SL · hedge included",
+        money_sl_text=f"Loss alert budget ₹{_budget(snapshot):,.0f} · actual trade record required; auto-exit nahi",
         suggested_lots=lots if action != "WAIT" else 0,
         reasons=tuple(reasons),
         cautions=tuple(cautions),
     )
+
+
+def create_rsi_trade_record(
+    snapshot: Any, lots: int, entry_prices: list[float]
+) -> dict:
+    """Explicit manual fills only. Never places orders or guesses actual entries."""
+    result = evaluate_rsi_reversal_setup(snapshot, None)
+    if result.status != "ENTRY READY" or not 1 <= lots <= result.suggested_lots:
+        raise ValueError("RSI entry/risk guard does not allow this quantity")
+    plan = _plan(snapshot, result.action)
+    legs = [("SHORT", x) for x in plan.short_legs] + [
+        ("HEDGE", x) for x in plan.hedge_legs
+    ]
+    if len(entry_prices) != len(legs) or any(
+        not isfinite(x) or x <= 0 for x in entry_prices
+    ):
+        raise ValueError("Enter actual positive fill prices for every leg")
+    credit = sum(
+        price if role == "SHORT" else -price
+        for (role, _), price in zip(legs, entry_prices)
+    )
+    width = float(plan.width_points or 0)
+    qty = lots * snapshot.risk_profile.lot_size
+    if not 0 < credit < width or (width - credit) * qty * 1.10 > _budget(snapshot):
+        raise ValueError("Actual fills exceed the conservative risk budget")
+    barrier = snapshot.barrier_map
+    low = (
+        barrier.nearest_support.lower - 20
+        if result.action in {"PE SELL", "IRON CONDOR"}
+        else None
+    )
+    high = (
+        barrier.nearest_resistance.upper + 20
+        if result.action in {"CE SELL", "IRON CONDOR"}
+        else None
+    )
+    return {
+        "schema_version": 2,
+        "status": "OPEN",
+        "strategy": "RSI TOP BOTTOM",
+        "action": result.action,
+        "setup": result.action,
+        "opened_at": snapshot.created_at.isoformat(),
+        "expiry": snapshot.trade_plan.expiry,
+        "entry_spot": snapshot.nifty_quote.get("last_price"),
+        "lots": lots,
+        "lot_size": snapshot.risk_profile.lot_size,
+        "entry_credit_points": credit,
+        "max_risk_points": width - credit,
+        "money_stop_rupees": _budget(snapshot),
+        "stop_exit_debit_points": credit + _budget(snapshot) / qty,
+        "target_exit_debit_points": None,
+        "target_capture_points": None,
+        "forced_exit_time": snapshot.risk_profile.forced_exit.isoformat(),
+        "spot_invalidation_low": low,
+        "spot_invalidation_high": high,
+        "barrier_close_required": True,
+        "legs": [
+            {"role": role, "side": leg.side, "strike": leg.strike, "entry_price": price}
+            for (role, leg), price in zip(legs, entry_prices)
+        ],
+    }

@@ -203,6 +203,7 @@ def calculate_position_guardian(
     market_session: MarketSession,
     option_chain_live: bool,
     as_of: datetime,
+    completed_spot_close: float | None = None,
 ) -> PositionGuardian:
     """Monitor an already-marked protected trade from the current snapshot.
 
@@ -228,6 +229,7 @@ def calculate_position_guardian(
     stop_exit = _number(record.get("stop_exit_debit_points"))
     invalidation_low = _number(record.get("spot_invalidation_low"))
     invalidation_high = _number(record.get("spot_invalidation_high"))
+    invalidation_spot = completed_spot_close if record.get("barrier_close_required") else current_spot
     legs_raw = record.get("legs") if isinstance(record.get("legs"), list) else []
 
     blockers: list[str] = []
@@ -323,18 +325,27 @@ def calculate_position_guardian(
         instruction = "DATA BLOCKED"
         status = "DATA BLOCKED"
         blockers.append("Option chain is not confirmed live")
+    elif (
+        _number(record.get("money_stop_rupees")) is not None
+        and float(record["money_stop_rupees"]) > 0
+        and pnl_rupees is not None
+        and pnl_rupees <= -float(record["money_stop_rupees"])
+    ):
+        instruction = "SL TRIGGERED — TOTAL POSITION LOSS"
+        status = "EXIT ALERT"
+        reasons.append("Combined short + hedge loss reached the recorded money limit; manual exit required")
     elif _forced_exit_reached(as_of, record.get("forced_exit_time")):
         instruction = "EXIT NOW — TIME"
         status = "EXIT ALERT"
         reasons.append("Compulsory exit time has been reached")
     elif (
         invalidation_low is not None
-        and current_spot is not None
-        and current_spot <= invalidation_low
+        and invalidation_spot is not None
+        and invalidation_spot <= invalidation_low
     ) or (
         invalidation_high is not None
-        and current_spot is not None
-        and current_spot >= invalidation_high
+        and invalidation_spot is not None
+        and invalidation_spot >= invalidation_high
     ):
         instruction = "EXIT / REVIEW — SPOT INVALIDATION"
         status = "EXIT ALERT"

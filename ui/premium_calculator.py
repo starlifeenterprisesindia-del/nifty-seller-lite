@@ -20,6 +20,7 @@ from analysis.sl_target_planner import (
 )
 from analysis.premium_entry_planner import build_premium_entry_plan
 from models import MarketSnapshot
+from ui.strike_entry import render_strike_entry
 
 
 def _number(value: Any) -> float:
@@ -197,11 +198,17 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
         lots = p4.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
         lot_size = int(snapshot.risk_profile.lot_size)
 
+        planner_mode = st.selectbox("Calculator mode", ["Plan new entry", "Already entered — actual fill"], key="spc_planner_mode")
+        if planner_mode == "Plan new entry":
+            render_strike_entry(snapshot, side, position, strike, lots)
+        else:
+            st.caption("Entry premium/NIFTY above are your actual-fill inputs; planner does not overwrite them.")
+
         entry_count = st.select_slider(
             "Entry parts",
             options=(1, 2, 3),
             value=min(3, int(lots)),
-            help="Entry 2/3 tabhi jab One-Brain direction, OI aur Big Player setup valid rahe.",
+            help="Optional price ladder only; not an entry signal or automatic averaging.",
             key="spc2_entry_parts",
         )
         entry_plan = build_premium_entry_plan(
@@ -213,8 +220,8 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
             entries=int(entry_count),
         )
         ec1, ec2 = st.columns(2)
-        ec1.metric("Best entry premium", f"₹{entry_plan.best_entry_premium:,.2f}")
-        ec2.metric("3-part estimated average", f"₹{entry_plan.average_premium:,.2f}")
+        ec1.metric("Indicative ladder price (not best entry)", f"₹{entry_plan.best_entry_premium:,.2f}")
+        ec2.metric(f"{len(entry_plan.entries)}-part estimated average", f"₹{entry_plan.average_premium:,.2f}")
         st.dataframe(
             [
                 {

@@ -168,16 +168,13 @@ def calculate_timeframe_price_action(
     close = float(source.iloc[-1]["close"])
     stage = _move_stage(structure, event, close, last_low.price, last_high.price, atr)
 
-    if "BREAKOUT CONFIRMED" in event or "SUPPORT HOLD" in event:
+    if "BREAKOUT CONFIRMED" in event or "SUPPORT HOLD" in event or "SUPPORT REJECTION" in event:
         bullish = clamp(bullish + 10, 0, 100)
         bearish = clamp(bearish - 5, 0, 100)
     if "BREAKDOWN CONFIRMED" in event or "RESISTANCE REJECTION" in event:
         bearish = clamp(bearish + 10, 0, 100)
         bullish = clamp(bullish - 5, 0, 100)
-    if "FALSE" in event:
-        range_score = clamp(range_score + 12, 0, 100)
-    if stage.startswith("EXHAUSTION"):
-        range_score = clamp(range_score + 8, 0, 100)
+    # Extension/failed break is not independent proof of a range.
 
     reasons: list[str] = []
     reasons.append(structure)

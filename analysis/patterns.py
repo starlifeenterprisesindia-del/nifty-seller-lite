@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pandas as pd
 
@@ -40,7 +40,7 @@ def _empty_signal(family: str, name: str, status: str) -> PatternSignal:
         confidence=0.0,
         bullish_score=0.0,
         bearish_score=0.0,
-        neutral_score=100.0,
+        neutral_score=0.0,
         level_label="",
         level_value=None,
         neckline=None,
@@ -182,7 +182,7 @@ def _wm_candidates(source: pd.DataFrame, atr: float) -> list[_WMCandidate]:
         if close < min(first.price, second.price) - break_tolerance:
             continue
         if close > neckline + break_tolerance:
-            stage = "CONFIRMED"
+            stage = "CONFIRMED" if float(source.iloc[-2]["close"]) > neckline + break_tolerance else "BREAK DETECTED"
         elif age <= 4 and close >= min(first.price, second.price) + depth * 0.30:
             stage = "FORMING"
         else:
@@ -219,7 +219,7 @@ def _wm_candidates(source: pd.DataFrame, atr: float) -> list[_WMCandidate]:
         if close > max(first.price, second.price) + break_tolerance:
             continue
         if close < neckline - break_tolerance:
-            stage = "CONFIRMED"
+            stage = "CONFIRMED" if float(source.iloc[-2]["close"]) < neckline - break_tolerance else "BREAK DETECTED"
         elif age <= 4 and close <= max(first.price, second.price) - depth * 0.30:
             stage = "FORMING"
         else:
@@ -322,6 +322,8 @@ def detect_wm_pattern(
         age_candles=candidate.age_candles,
         reasons=tuple(reasons[:4]),
         status="READY",
+        detected_at=str(source.iloc[candidate.second_index]["timestamp"]),
+        invalidation_level=min(candidate.first_price, candidate.second_price) if candidate.direction == "BULLISH" else max(candidate.first_price, candidate.second_price),
     )
 
 
@@ -382,7 +384,7 @@ def _candle_pattern(source: pd.DataFrame) -> tuple[str, str, int] | None:
     return None
 
 
-def detect_special_candle(
+def _detect_special_candle_geometry(
     candles_3m: pd.DataFrame,
     levels: LevelBundle,
     volume: VolumeBundle,
@@ -467,7 +469,7 @@ def detect_special_candle(
         family=family,
         name=name,
         direction=direction,
-        stage="CONFIRMED",
+        stage="DETECTED",
         strength=strength,
         confidence=confidence,
         bullish_score=bull_score,
@@ -479,7 +481,36 @@ def detect_special_candle(
         age_candles=0,
         reasons=tuple(reasons[:4]),
         status="READY",
+        detected_at=str(source.iloc[-1]["timestamp"]),
+        invalidation_level=float(recent["low"].min()) if bullish else float(recent["high"].max()) if bearish else None,
     )
+
+
+def detect_special_candle(candles_3m, levels, volume, timeframe="3M"):
+    source = _current_session(candles_3m)
+    current = _detect_special_candle_geometry(source, levels, volume, timeframe)
+    if len(source) < 8:
+        return current
+    atr = atr_value(source) or 1.0
+    for age in (1, 2, 3):
+        prior = source.iloc[:-age]
+        signal = _detect_special_candle_geometry(prior, levels, volume, timeframe)
+        if signal.direction not in {"BULLISH", "BEARISH"} or signal.confidence < 65 or not signal.level_label:
+            continue
+        candle = prior.iloc[-1]
+        # Tiny shapes in quiet noise must not qualify as strong triggers.
+        if float(candle.high - candle.low) < atr * .6:
+            continue
+        sign = 1 if signal.direction == "BULLISH" else -1
+        following = source.iloc[-age:]
+        invalid = signal.invalidation_level
+        if invalid is not None and any((float(x) - invalid) * sign < 0 for x in following.close):
+            return replace(signal, stage="FAILED", strength="NONE", age_candles=age)
+        trigger = float(candle.high) + atr * .08 if sign == 1 else float(candle.low) - atr * .08
+        if (float(source.iloc[-1].close) - trigger) * sign > 0:
+            return replace(signal, stage="CONFIRMED", age_candles=age, neckline=trigger,
+                           reasons=(*signal.reasons[:3], "Subsequent completed candle confirmed trigger"))
+    return current
 
 
 def calculate_pattern_evidence(
@@ -502,7 +533,7 @@ def calculate_pattern_evidence(
         if candles_15m is not None
         else None
     )
-    candle = candle_5m
+    candle = candle_3m
     usable = [
         item
         for item in (wm, candle)

@@ -53,7 +53,7 @@ def build_premium_entry_plan(
         condition = (
             "Initial limit near live bid/ask"
             if index == 0
-            else "Only if One-Brain direction + OI/Big Player setup remains valid"
+            else "Only after independent candle/barrier trigger; no automatic averaging"
         )
         rows.append(PremiumEntry(index + 1, round(premium, 2), lots, condition))
     average = sum(item.premium * item.lots for item in rows) / sum(item.lots for item in rows)

@@ -66,7 +66,7 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
         base = (
             "Market upar ja sakta hai"
             if snapshot.market_session.is_live
-            else "Last available data ke hisaab se market ka rukh UP tha"
+            else "Last available data ke hisaab se market direction UP tha"
         )
         barrier = snapshot.barrier_map.nearest_resistance
         barrier_text = (
@@ -90,7 +90,7 @@ def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
         base = (
             "Market neeche ja sakta hai"
             if snapshot.market_session.is_live
-            else "Last available data ke hisaab se market ka rukh DOWN tha"
+            else "Last available data ke hisaab se market direction DOWN tha"
         )
         barrier = snapshot.barrier_map.nearest_support
         barrier_text = (

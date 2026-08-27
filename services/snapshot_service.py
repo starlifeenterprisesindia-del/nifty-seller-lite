@@ -44,6 +44,7 @@ from services.instrument_master import InstrumentMaster, ResolvedInstrument
 from services.option_state_store import OptionStateStore
 from services.activity_state_store import ActivityStateStore
 from services.news_service import MarketNewsService
+from services.recent_quotes import record_quotes
 
 
 IST = ZoneInfo(IST_TIMEZONE)
@@ -723,11 +724,18 @@ class SnapshotService:
             market_session,
             future_volume_live=statuses["future_volume"].use_state == "LIVE",
         )
+        top9_history = []
+        if market_session.is_live and statuses["heavyweights"].use_state == "LIVE":
+            try:
+                top9_history = record_quotes(analysis_heavyweight_quotes, nifty_quote, current)
+            except OSError:
+                top9_history = []  # no fabricated recent direction if storage unavailable
         heavyweights = calculate_heavyweight_bundle(
             analysis_heavyweight_quotes,
             current,
             nifty_quote=nifty_quote,
             reference_only=not market_session.is_live,
+            history=top9_history,
         )
         vix_for_analysis = (
             vix_quote
@@ -924,6 +932,9 @@ class SnapshotService:
             option_history=option_history,
         )
 
+        recent_vix = barrier_map.market_speed.vix_change_5m_pct
+        if vix_context.status == "READY" and recent_vix is not None:
+            vix_context = replace(vix_context, movement="RISING FAST" if recent_vix >= 3 else "RISING" if recent_vix > .5 else "FALLING" if recent_vix < -.5 else "STABLE")
         activity_history = self.activity_state_store.load(current)
         activity_candles = future_candles_1m
         if not activity_candles.empty and "is_complete" in activity_candles.columns:
@@ -1043,6 +1054,7 @@ class SnapshotService:
                 discipline_state, signal_appended = self.discipline_store.append_signal(
                     captured_at=current,
                     action=decision.final_action,
+                    candidate_action=decision.instant_action,
                     execution_status=decision.execution_status,
                     # Legacy history keys mean bearish and bullish directional edge.
                     ce_score=max(decision.ce_sell.score, decision.pe_buy.score),
@@ -1100,6 +1112,7 @@ class SnapshotService:
             market_session=market_session,
             option_chain_live=statuses["option_chain"].use_state == "LIVE",
             as_of=current,
+            completed_spot_close=indicators.three_minute.close if indicators.three_minute.status == "READY" else None,
         )
         statuses["position_guardian"] = FeedStatus(
             name="position_guardian",

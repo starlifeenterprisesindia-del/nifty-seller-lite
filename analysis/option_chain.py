@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from math import isfinite
 
 import pandas as pd
 
@@ -41,6 +42,8 @@ def _flatten_side(
             number = float(value)
         except (TypeError, ValueError):
             return None
+        if not isfinite(number):
+            return None
         if lower is not None and number < lower:
             return None
         if upper is not None and number > upper:
@@ -48,6 +51,10 @@ def _flatten_side(
         return number
 
     delta = _valid(greeks.get("delta"), lower=-1.0, upper=1.0)
+    if delta is not None and (
+        (side.upper() == "CE" and delta <= 0) or (side.upper() == "PE" and delta >= 0)
+    ):
+        delta = None
     if not valid_iv and delta == 0.0:
         delta = None
     gamma = _valid(greeks.get("gamma"), lower=0.0) if valid_iv else None
@@ -85,7 +92,61 @@ def option_chain_to_frame(
     frame["day_oi_change"] = frame["oi"] - frame["previous_oi"]
     frame["day_price_change"] = frame["last_price"] - frame["previous_close_price"]
     frame = frame.sort_values(["strike", "side"]).reset_index(drop=True)
-    return (float(spot) if spot is not None else None), frame
+    return (float(spot) if spot is not None else None), validate_greeks(frame)
+
+
+def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
+    """Conservative consistency screen, not a replacement pricing model.
+
+    Keep quotes/OI even when Greeks cannot safely rank a trade. Pair tolerances
+    flag a model/input mismatch; they do not establish which vendor is right.
+    """
+    frame = frame.copy()
+    fields = ["delta", "gamma", "theta", "vega", "implied_volatility"]
+    for field in fields:
+        if field not in frame:
+            frame[field] = float("nan")
+        frame[field] = pd.to_numeric(frame[field], errors="coerce")
+        if f"source_{field}" not in frame:
+            frame[f"source_{field}"] = frame[field]
+    finite = (
+        frame[fields]
+        .apply(lambda col: col.map(lambda v: pd.notna(v) and isfinite(float(v))))
+        .all(axis=1)
+    )
+    valid = (
+        finite
+        & frame.gamma.gt(0)
+        & frame.vega.gt(0)
+        & frame.theta.lt(0)
+        & frame.implied_volatility.gt(0)
+        & frame.delta.abs().between(0.001, 1)
+    )
+    valid &= (frame.side.eq("CE") & frame.delta.gt(0)) | (
+        frame.side.eq("PE") & frame.delta.lt(0)
+    )
+    frame["greeks_quality"] = "UNAVAILABLE"
+    frame.loc[valid, "greeks_quality"] = "READY"
+    for _, pair in frame.groupby("strike"):
+        ce, pe = pair[pair.side.eq("CE")], pair[pair.side.eq("PE")]
+        if len(ce) != 1 or len(pe) != 1:
+            continue
+        c, p = ce.iloc[0], pe.iloc[0]
+        ivs = [c.implied_volatility, p.implied_volatility]
+        suspicious_iv = (
+            all(pd.notna(v) and v > 0 for v in ivs) and max(ivs) / min(ivs) > 1.35
+        )
+        suspicious_delta = (
+            pd.notna(c.delta)
+            and pd.notna(p.delta)
+            and abs(c.delta - p.delta - 1) > 0.15
+        )
+        if suspicious_iv or suspicious_delta:
+            frame.loc[pair.index, "greeks_quality"] = "MODEL MISMATCH"
+    frame.loc[frame.greeks_quality.ne("READY"), ["delta", "gamma", "theta", "vega"]] = (
+        float("nan")
+    )
+    return frame
 
 
 def select_atm_window(

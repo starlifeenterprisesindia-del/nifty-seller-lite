@@ -129,10 +129,16 @@ def calculate_timeframe_indicators(
         macd=values["macd"],
         macd_signal=values["signal"],
         macd_histogram=values["histogram"],
-        macd_state=_macd_state(values["macd"], values["signal"], values["histogram"]),
+        macd_state=(
+            "BULLISH BUT WEAKENING" if values["histogram"] > 0 and values["histogram"] < float(histogram_series.iloc[-2])
+            else "BEARISH BUT WEAKENING" if values["histogram"] < 0 and values["histogram"] > float(histogram_series.iloc[-2])
+            else _macd_state(values["macd"], values["signal"], values["histogram"])
+        ),
         rsi14=values["rsi"],
         rsi_state=_rsi_state(values["rsi"]),
         status="READY",
+        previous_rsi14=float(rsi_series.iloc[-2]),
+        previous_macd_histogram=float(histogram_series.iloc[-2]),
     )
 
 

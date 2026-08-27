@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.36.0_RSI_REVERSAL_SETUP"
+    version: str = "2.38.1_SHARED_ACTIVITY_GATE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -239,8 +239,9 @@ class AppConfig:
     # Automatic read-only forward journal. It never sends broker orders.
     shadow_journal_path: str = "data/shadow_journal.json"
     shadow_journal_max_trades_per_day: int = 5
-    shadow_journal_min_confidence: float = 55.0
-    shadow_journal_min_strategy_score: float = 55.0
+    shadow_journal_min_confidence: float = 45.0
+    shadow_journal_min_strategy_score: float = 45.0
+    shadow_journal_min_option_confidence: float = 55.0
     shadow_journal_cooldown_minutes: int = 20
     shadow_journal_estimated_charges_per_trade: float = 40.0
 

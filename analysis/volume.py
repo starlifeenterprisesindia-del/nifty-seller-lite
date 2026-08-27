@@ -99,10 +99,6 @@ def calculate_timeframe_volume(
     last_timestamp = pd.Timestamp(volume_source.iloc[-1]["timestamp"])
     matching_price = price_source[price_source["timestamp"] == last_timestamp]
     if matching_price.empty:
-        matching_price = price_source[price_source["timestamp"] <= last_timestamp].tail(
-            1
-        )
-    if matching_price.empty:
         return _empty(timeframe, "MATCHING PRICE CANDLE UNAVAILABLE")
 
     baseline, samples = _baseline_for_row(volume_source, len(volume_source) - 1)
@@ -134,7 +130,7 @@ def calculate_timeframe_volume(
     elif ratio < CONFIG.volume_low_ratio and direction in {"UP", "DOWN"}:
         support = "PRICE MOVE ON LOW PARTICIPATION"
     elif direction == "FLAT" and ratio >= CONFIG.volume_high_ratio:
-        support = "HIGH ACTIVITY / BREAKOUT BUILD-UP"
+        support = "HIGH ACTIVITY / LIMITED PRICE RESPONSE"
     else:
         support = "NORMAL PARTICIPATION"
 

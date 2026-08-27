@@ -206,7 +206,7 @@ def render_compact_barrier_map(
         )
         stage = str(getattr(signal, "stage", "") or "")
         note = (
-            f"{direction} · {strength} · Bharosa {confidence:.0f}% · "
+            f"{direction} · {strength} · Evidence quality {confidence:.0f}% · "
             f"{stage} · {level_text}"
         )
         if show_possible_effect:
@@ -230,7 +230,7 @@ def render_compact_barrier_map(
                 note += f" · Seedha matlab: {pattern_meaning}"
             note += (
                 f" · Mumkin asar: {effect} · "
-                f"Chance (signal bharosa) {confidence:.0f}%"
+                f"Chance (signal evidence quality) {confidence:.0f}%"
             )
         return name, note
 
@@ -245,7 +245,7 @@ def render_compact_barrier_map(
             estimated = round(raw / 50.0) * 50.0
             return (
                 f"Estimated zone {estimated:,.0f}",
-                f"Agla pakka barrier nahi mila — Bharosa kam. {fallback}",
+                f"Agla pakka barrier nahi mila — Evidence quality kam. {fallback}",
             )
         return (
             f"{level.lower:,.0f}–{level.upper:,.0f}",
@@ -274,8 +274,7 @@ def render_compact_barrier_map(
         getattr(patterns, "wm_3m", None), "NO VALID W/M"
     )
     main_candle = (
-        getattr(patterns, "candle_5m", None)
-        or getattr(patterns, "candle_3m", None)
+        getattr(patterns, "candle_3m", None)
     )
     candle_name, candle_note = pattern_level_text(
         main_candle,
@@ -299,7 +298,7 @@ def render_compact_barrier_map(
             return "NO"
 
         candle_note += (
-            f" · 3M confirm {confirmation_text(getattr(patterns, 'candle_3m', None))}"
+            f" · 5M context {confirmation_text(getattr(patterns, 'candle_5m', None))}"
             f" · 15M confirm {confirmation_text(getattr(patterns, 'candle_15m', None))}"
         )
 
@@ -357,7 +356,7 @@ def render_compact_barrier_map(
             ("Bullish Evidence", f"{core.bullish_score:.1f}/100", "Upar ke completed-candle signals"),
             ("Bearish Evidence", f"{core.bearish_score:.1f}/100", "Neeche ke completed-candle signals"),
             ("Range / Mixed", f"{core_range:.1f}/100", f"Core state {core_state}"),
-            ("Evidence Bharosa", f"{core.confidence:.1f}%", f"Status {core.status}"),
+            ("Core data coverage", f"{core.confidence:.1f}%", f"Status {core.status}; not win probability"),
         ]
     )
     st.info("🧠 **Barrier AI:** " + item.summary)
@@ -639,13 +638,6 @@ def render_evidence_matrix(
     body = []
     detail_rows: list[dict[str, str]] = []
     for row in rows:
-        mix = " · ".join(
-            (
-                score_text(row.get("Bullish %"), "Bull "),
-                score_text(row.get("Bearish %"), "Bear "),
-                score_text(row.get("Neutral %"), "Neutral "),
-            )
-        )
         confidence = (
             f"{float(row['Confidence %']):.0f}%"
             if row.get("Confidence %") is not None
@@ -687,7 +679,7 @@ def render_evidence_matrix(
         '.evt-module{width:38%}.evt-bull,.evt-bear,.evt-neutral{width:14%}.evt-conf{width:20%}'
         '}'
         '</style><div class="evt-wrap"><table class="evt"><thead><tr>'
-        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th><th>Bharosa</th>'
+        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th><th>Evidence quality</th>'
         '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
     )
     st.html(table_html) if hasattr(st, "html") else st.markdown(
@@ -696,7 +688,7 @@ def render_evidence_matrix(
     with st.expander("Weights, result aur last snapshot ka badlav", expanded=False):
         st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
         st.caption(
-            f"Current reference: {reference_name}. Barrier extra weight 0; Big Player max 10 bounded points."
+            f"Current reference: {reference_name}. Barrier extra weight 0; Raw futures 10%; composite Big Player extra 0."
         )
 
 
@@ -889,7 +881,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
     elif snapshot.decision.final_action == "WAIT":
         st.info(
-            f"Final Action WAIT hai—{leader} abhi best available hai, par confirmation ke bina entry nahi."
+            "Final Action WAIT hai—table sirf reference ranking hai, koi entry confirmed nahi."
         )
     st.caption(
         "Decay Edge me SELL ka absolute theta hedge se zyada hona better hai. "
@@ -908,8 +900,8 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
             subtitle = "REFERENCE ONLY — fresh strategy ranking band"
             structure = snapshot.market_session.message
         else:
-            subtitle = f"Best available: {name} · Fit {score:.1f}%"
-            structure = _plan_structure_text(plan)
+            subtitle = "Koi entry confirmed nahi"
+            structure = str(decision.blocker or "Evidence conflict / confirmation pending")
     else:
         css_class = "ready"
         title = decision.final_action
@@ -1009,8 +1001,8 @@ def render_main_ai_market_view(
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
-                ("Structural Rukh", direction, f"Completed evidence {direction_score:.0f}/100 · {direction_note}"),
-                ("Data Quality", f"{data_quality:.0f}%", "Critical live feeds"),
+                ("Structural Direction", direction, f"Completed evidence {direction_score:.0f}/100 · {direction_note}"),
+                ("Feed Availability", f"{data_quality:.0f}%", "Feed ready ≠ prediction accuracy"),
                 ("Direction Agreement", f"{direction_agreement:.0f}%", "Core · OI · price · big player"),
                 (
                     "Entry Confidence" if snapshot.market_session.is_live else "Reference Confidence",
@@ -1024,6 +1016,10 @@ def render_main_ai_market_view(
             "🧠 **AI samajh:** "
             + safe_brain_hinglish_line(snapshot, previous_snapshot)
         )
+        if "greeks_quality" in snapshot.option_chain:
+            invalid_greeks = int(snapshot.option_chain.greeks_quality.ne("READY").sum())
+            if invalid_greeks:
+                st.warning(f"Greeks check: {invalid_greeks} option rows unavailable/model mismatch. In rows se strike/hedge ranking band; OI/quotes alag usable hain. Broker values force-match nahi ki gayi.")
 
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(
@@ -1032,8 +1028,7 @@ def render_main_ai_market_view(
         )
         candle_text, _candle_note = _pattern_compact_text(
             (
-                getattr(patterns, "candle_5m", None)
-                or patterns.candle_3m
+                patterns.candle_3m
                 if patterns is not None
                 else None
             ),
@@ -1056,9 +1051,9 @@ def render_main_ai_market_view(
 
         heavy = snapshot.heavyweights
         top7_move = (
-            f"{heavy.weighted_move_pct:+.2f}%"
-            if heavy.weighted_move_pct is not None
-            else "MISSING"
+            f"15m {heavy.recent_15m_move_pct:+.2f}%"
+            if heavy.recent_15m_move_pct is not None
+            else "15m WARMING UP"
         )
         news_display = normalized_news_display(snapshot.news_context)
         if news_display.status == "READY":
@@ -1067,7 +1062,7 @@ def render_main_ai_market_view(
             news_text = "ZERO LIVE WEIGHT"
         st.caption(
             f"W/M: {wm_text} • Candle: {candle_text} • Top-9: {top7_move} • "
-            f"FII/DII: {inst_text} • News: {news_text}"
+            f"FII/DII background: {inst_text} • News: {news_text}"
         )
         activity = getattr(snapshot, "big_player_activity", None)
         if activity is not None:
@@ -1083,7 +1078,7 @@ def render_main_ai_market_view(
             activity_line = (
                 f"{icon} **Big Player:** {activity.state} {display_direction} "
                 f"{activity.score:.0f}/100 · {confirmation_text} "
-                f"· Reversal {activity.reversal_risk}"
+                f"· Reversal {activity.reversal_risk} · Recent 3m flow"
             )
             if closing_flow and activity.score >= 60:
                 st.warning(activity_line)
@@ -1145,19 +1140,19 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
         direction_class, icon = "mixed", "🟣"
         display_direction = item.direction
     simple_state = {
-        "NORMAL": "NORMAL HALCHAL",
-        "WATCH": "DEKHTE RAHO",
-        "STRONG": "BADI HALCHAL",
-        "VERY STRONG": "PAKKI BADI HALCHAL",
+        "NORMAL": "NORMAL ACTIVITY",
+        "WATCH": "WATCH — MODERATE",
+        "STRONG": "STRONG ACTIVITY",
+        "VERY STRONG": "VERY STRONG ACTIVITY",
         "EXTREME ACTIVITY": "BAHUT TEZ HALCHAL",
         "ABSORPTION": "VOLUME BADA, PRICE RUKI",
         "FADING": "ZOR KAM HO RAHA",
     }.get(item.state, item.state)
     if item.confirmation_count < 2 and item.state not in {"NORMAL", "FADING"}:
-        simple_state = "HALCHAL SHURU — PAKKI NAHI"
+        simple_state = "ACTIVITY WATCH — UNCONFIRMED"
     simple_direction = {
-        "BUYING": "KHARID",
-        "SELLING": "BIKRI",
+        "BUYING": "BUYING",
+        "SELLING": "SELLING",
         "MIXED": "ABHI SAAF NAHI",
         "SHORT COVERING": "PURANE SELLER POSITION BAND KAR RAHE",
         "LONG UNWINDING": "PURANE BUYER POSITION BAND KAR RAHE",
@@ -1171,6 +1166,7 @@ def render_big_player_activity(snapshot: MarketSnapshot) -> None:
     )
     if item.confirmation_count < 2:
         severity = "watch"
+    st.caption(f"Price response: {item.price_response} · Persistence is not activity magnitude")
     volume_text = f"{item.futures_volume_ratio:.2f}x" if item.futures_volume_ratio is not None else "—"
     oi_text = f"{item.futures_oi_change_pct:+.2f}%" if item.futures_oi_change_pct is not None else "—"
     confirmation_text = (
@@ -1974,7 +1970,7 @@ def render_core_evidence(snapshot: MarketSnapshot) -> None:
             "Market": f"{item.market_state} {item.range_score:.0f}%",
             "Bullish": f"{item.bullish_score:.0f}%",
             "Bearish": f"{item.bearish_score:.0f}%",
-            "Bharosa": f"{item.confidence:.0f}%",
+            "Evidence quality": f"{item.confidence:.0f}%",
         }],
         width="stretch",
         hide_index=True,
@@ -2017,7 +2013,7 @@ def render_price_action(snapshot: MarketSnapshot) -> None:
             "Structure": item.structure,
             "Current move": item.event,
             "Invalidation": item.invalidation_level,
-            "Bharosa": f"{item.confidence:.0f}%",
+            "Evidence quality": f"{item.confidence:.0f}%",
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
@@ -2078,7 +2074,7 @@ def _volume_row(item: Any) -> dict[str, Any]:
 
 def render_volume(snapshot: MarketSnapshot) -> None:
     item = snapshot.volume
-    st.write(f"**Volume:** {item.overall_view} • Bharosa {item.confidence:.0f}%")
+    st.write(f"**Volume:** {item.overall_view} • Evidence quality {item.confidence:.0f}%")
     rows = []
     for row in (item.three_minute, item.fifteen_minute):
         rows.append({
@@ -2151,6 +2147,11 @@ def render_option_chain(snapshot: MarketSnapshot) -> None:
 
 
 def render_heavyweights(snapshot: MarketSnapshot) -> None:
+    bundle = snapshot.heavyweights
+    st.info(f"Top-9 combined: {bundle.recent_state} · day basket {bundle.weighted_move_pct}%")
+    st.caption(f"15m basket {bundle.recent_15m_move_pct}%; 3m early change {bundle.recent_3m_move_pct}%; estimated Nifty contribution {bundle.recent_contribution_points} points")
+    st.caption(f"Recent coverage: {bundle.recent_coverage_pct:.2f}/{bundle.covered_weight_pct:.2f}% index weight. Configured weights dated {bundle.weight_date}; estimated, not predictive. Rest of index may offset this.")
+    st.dataframe([{"Stock": r.symbol, "Day %": r.change_pct, "15m %": r.change_15m_pct, "3m %": r.change_3m_pct, "Nifty pts (15m)": r.contribution_15m_points, "Now": r.recent_state} for r in bundle.rows], width="stretch", hide_index=True)
     if not snapshot.heavyweight_quotes:
         st.info("Top-9 quotes are unavailable in this snapshot.")
         return
@@ -2217,7 +2218,7 @@ def render_option_intelligence(snapshot: MarketSnapshot) -> None:
         "Bullish": f"{item.bullish_score:.0f}%",
         "Bearish": f"{item.bearish_score:.0f}%",
         "Mixed": f"{item.range_score:.0f}%",
-        "Bharosa": f"{item.confidence:.0f}%",
+        "Evidence quality": f"{item.confidence:.0f}%",
     }], width="stretch", hide_index=True)
     st.info(
         f"**Reason:** {(item.reasons or ('Option flow mixed',))[0]}  •  "
@@ -2297,6 +2298,8 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
 
 def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
     item = snapshot.heavyweights
+    st.info(f"Recent combined: {item.recent_state} · 15m {item.recent_15m_move_pct}% · 3m {item.recent_3m_move_pct}%")
+    st.caption(f"Estimated 15m Nifty contribution {item.recent_contribution_points} points; data coverage {item.recent_coverage_pct}/{item.covered_weight_pct}% index weight; weights dated {item.weight_date}.")
     remaining_move = (
         f"{item.estimated_remaining_move_pct:+.3f}%"
         if item.estimated_remaining_move_pct is not None

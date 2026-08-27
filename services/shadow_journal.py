@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
 from analysis.position_guardian import create_trade_record, calculate_position_guardian
+from analysis.execution_guard import calculate_execution_guard
 from config import CONFIG
 from models import DisciplineState, MarketSnapshot
 from services.github_journal import GitHubJsonJournal
@@ -31,6 +33,11 @@ class ShadowJournalStore:
         self.path = Path(path or CONFIG.shadow_journal_path)
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         self.cloud = cloud_backend
+        self.last_error = ""
+        self.last_blocker = "Not checked"
+        self.last_checked = ""
+        self.last_saved = ""
+        self.local_read_failed = False
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -53,13 +60,19 @@ class ShadowJournalStore:
             return self._empty()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            self.local_read_failed = True
+            self.last_error = f"Journal read failed: {type(exc).__name__}; original file preserved"
             return self._empty()
         if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+            self.local_read_failed = True
+            self.last_error = "Journal format invalid; original file preserved"
             return self._empty()
         return data
 
     def _write_local(self, data: dict[str, Any]) -> None:
+        if self.local_read_failed:
+            raise ValueError("Refusing to overwrite unreadable journal")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
         temporary.write_text(
@@ -74,9 +87,12 @@ class ShadowJournalStore:
                 try:
                     remote = self.cloud.read().data
                     if isinstance(remote.get("entries"), list):
-                        self._write_local(remote)
-                except Exception:
-                    pass
+                        local = self._read_local()
+                        merged = {str(x.get("trade_id")): x for x in remote["entries"] if isinstance(x, dict)}
+                        merged.update({str(x.get("trade_id")): x for x in local["entries"] if isinstance(x, dict)})
+                        self._write_local({"schema_version": self.SCHEMA_VERSION, "entries": list(merged.values())})
+                except Exception as exc:
+                    self.last_error = f"Cloud read failed: {type(exc).__name__}; local history retained"
             data = self._read_local()
             return [dict(item) for item in data["entries"] if isinstance(item, dict)]
 
@@ -84,13 +100,38 @@ class ShadowJournalStore:
         data = {"schema_version": self.SCHEMA_VERSION, "entries": entries[-500:]}
         with self._locked():
             self._write_local(data)
+            self.last_saved = datetime.now().isoformat()
             if sync_cloud and self.cloud is not None and self.cloud.enabled:
                 try:
                     remote = self.cloud.read()
                     self.cloud.write(data, sha=remote.sha)
-                except Exception:
+                except Exception as exc:
                     # Local journal remains authoritative until cloud recovers.
-                    pass
+                    self.last_error = f"Cloud save failed: {type(exc).__name__}; saved locally"
+
+    def record_check(self, snapshot, reason):
+        self.last_checked = snapshot.created_at.isoformat()
+        self.last_blocker = reason
+        path = self.path.with_suffix(".signals.json")
+        try:
+            history = json.loads(path.read_text()) if path.exists() else []
+            if not isinstance(history, list):
+                history = []
+            record = {"at": self.last_checked, "action": snapshot.decision.final_action,
+                      "candidate": snapshot.trade_plan.selected_setup, "reason": reason,
+                      "score": _strategy_score(snapshot, snapshot.trade_plan.selected_setup),
+                      "confidence": snapshot.decision.decision_confidence}
+            signature = (record["action"], record["candidate"], record["reason"], int(record["score"] // 5))
+            previous = history[-1] if history else {}
+            old = (previous.get("action"), previous.get("candidate"), previous.get("reason"), int(previous.get("score", 0) // 5))
+            if signature != old:
+                history.append(record)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix(".tmp")
+                temporary.write_text(json.dumps(history[-2000:]))
+                os.replace(temporary, path)
+        except (OSError, ValueError, TypeError) as exc:
+            self.last_error = f"Signal log failed: {type(exc).__name__}"
 
 
 def _strategy_score(snapshot: MarketSnapshot, action: str) -> float:
@@ -150,8 +191,8 @@ def _close_open_entries(
                 entry["mae_rupees"] = next_mae
                 entry["last_pnl_rupees"] = next_pnl
                 changed = True
-        if guardian.status in {"TARGET ALERT", "EXIT ALERT"}:
-            gross = float(pnl or 0.0)
+        if guardian.status in {"TARGET ALERT", "EXIT ALERT"} and pnl is not None:
+            gross = float(pnl)
             charges = float(CONFIG.shadow_journal_estimated_charges_per_trade)
             entry["status"] = "CLOSED"
             entry["outcome"] = guardian.instruction
@@ -188,6 +229,11 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
     }.get(action)
     if selected_plan is None or not selected_plan.available:
         return False, "Protected paper plan is unavailable"
+    if snapshot.execution_guard.allowed_lots < 1:
+        return False, "One-lot defined risk exceeds configured paper risk budget"
+    now_time = snapshot.created_at.timetz().replace(tzinfo=None)
+    if not snapshot.risk_profile.entry_start <= now_time <= snapshot.risk_profile.entry_end:
+        return False, "Outside configured paper entry window"
     for feed_name in ("quotes", "candles", "option_chain"):
         feed = snapshot.feed_status.get(feed_name)
         if feed is None or feed.use_state != "LIVE":
@@ -197,7 +243,7 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
     )
     if snapshot.option_intelligence.status != "READY" or ready_windows < 2:
         return False, "Option flow has fewer than two ready windows"
-    if snapshot.option_intelligence.confidence < CONFIG.shadow_journal_min_confidence:
+    if snapshot.option_intelligence.confidence < CONFIG.shadow_journal_min_option_confidence:
         return False, "Option-flow confidence below paper threshold"
     if any(
         str(item.get("status") or "").upper() == "OPEN"
@@ -215,6 +261,24 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
     return True, "READY"
 
 
+def _paper_snapshot(snapshot):
+    """Select a test candidate on a copy; never mutate the real AI/position."""
+    action = snapshot.trade_plan.selected_setup
+    if action == "WAIT":
+        action = snapshot.trade_plan.candidate_setup
+    if action not in {"CE SELL", "PE SELL", "IRON CONDOR"}:
+        return snapshot
+    plan = replace(snapshot.trade_plan, selected_setup=action)
+    guard = calculate_execution_guard(
+        decision=snapshot.decision, trade_plan=plan, market_session=snapshot.market_session,
+        option_intelligence=snapshot.option_intelligence, price_action=snapshot.price_action,
+        risk_profile=snapshot.risk_profile, discipline_state=snapshot.discipline_state,
+        feed_status=snapshot.feed_status, as_of=snapshot.created_at,
+        big_player=snapshot.big_player_activity,
+    )
+    return replace(snapshot, trade_plan=plan, execution_guard=guard)
+
+
 def process_auto_shadow_journal(
     snapshot: MarketSnapshot,
     store: ShadowJournalStore,
@@ -222,8 +286,12 @@ def process_auto_shadow_journal(
     enabled: bool,
 ) -> list[dict[str, Any]]:
     entries = store.load(refresh_cloud=False)
+    if store.local_read_failed:
+        return entries
     changed, cloud_changed = _close_open_entries(entries, snapshot)
-    eligible, _ = _eligible(entries, snapshot)
+    snapshot = _paper_snapshot(snapshot)
+    eligible, reason = _eligible(entries, snapshot)
+    store.record_check(snapshot, reason if enabled else "Auto paper journal OFF")
     if enabled and eligible:
         record = create_trade_record(
             captured_at=snapshot.created_at,
@@ -241,10 +309,11 @@ def process_auto_shadow_journal(
         record.update(
             {
                 "journal_type": "AUTO SHADOW",
+                "real_ai_action": snapshot.decision.final_action,
                 "qualification": (
                     "ENTRY READY SHADOW"
                     if snapshot.execution_guard.readiness == "ENTRY READY"
-                    else "55%+ TEST CANDIDATE"
+                    else f"{CONFIG.shadow_journal_min_confidence:.0f}+ TEST CANDIDATE"
                 ),
                 "trade_id": f"SH-{snapshot.created_at:%Y%m%d-%H%M%S}-{len(entries)+1}",
                 "session_date": snapshot.created_at.date().isoformat(),
@@ -252,6 +321,7 @@ def process_auto_shadow_journal(
                 "action": action,
                 "decision_confidence": snapshot.decision.decision_confidence,
                 "strategy_score": _strategy_score(snapshot, action),
+                "score_band": "45–49" if _strategy_score(snapshot, action) < 50 else "50–54" if _strategy_score(snapshot, action) < 55 else "55+",
                 "big_player_direction": snapshot.big_player_activity.direction,
                 "big_player_score": snapshot.big_player_activity.score,
                 "big_player_confirmations": snapshot.big_player_activity.confirmation_count,

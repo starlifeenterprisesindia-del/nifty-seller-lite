@@ -266,7 +266,7 @@ def _choose_history_sample(
     current_time: datetime,
     target_seconds: int,
 ) -> tuple[dict[str, Any] | None, float | None]:
-    tolerance = target_seconds * CONFIG.option_window_tolerance_ratio
+    tolerance = min(target_seconds * CONFIG.option_window_tolerance_ratio, target_seconds * 0.20)
     minimum_age = max(10.0, target_seconds - tolerance)
     maximum_age = target_seconds + tolerance
     candidates: list[tuple[float, dict[str, Any]]] = []
@@ -700,10 +700,22 @@ def calculate_option_intelligence(
         )
         for label, seconds in (("1 minute", 60), ("3 minute", 180), ("5 minute", 300))
     )
-    bullish, bearish, range_score, _ = _normalized_scores(flow, pcr)
-    bullish, bearish, range_score = _blend_movement_windows(
-        bullish, bearish, range_score, windows
-    )
+    # Five-minute matched contracts are the main vote. 1m/3m remain early
+    # observations and are never averaged back into the same direction vote.
+    main_sample, main_age = _choose_history_sample(history, captured_at, 300)
+    main_ready = False
+    if main_sample is not None:
+        main_flow, _ = _merge_flow(current, _rows_to_frame(main_sample.get("rows") or []), spot)
+        main_ready = not main_flow.empty and int(main_flow.integrity_status.eq("READY").sum()) >= 4
+        if main_ready:
+            flow = main_flow
+            pcr = _pcr(current, flow)
+            basis = f"5M MATCHED FLOW ({main_age:.0f}s); 1m/3m early warning only"
+    if main_ready and flow.oi_delta.abs().sum() > 0:
+        bullish, bearish, range_score, _ = _normalized_scores(flow, pcr)
+    else:
+        bullish = bearish = range_score = 0.0
+        basis = "5M WARMING UP / OI UNCHANGED — no invented range vote"
     preliminary_bias = _bias_from_scores(bullish, bearish, range_score)
     persistence = _persistence(history, current_snapshot, preliminary_bias)
     ready_windows = sum(item.status == "READY" for item in windows)
@@ -716,9 +728,8 @@ def calculate_option_intelligence(
         if persistence.endswith("×3") or "PERSISTENT" in persistence:
             confidence += 8.0
     confidence = round(min(90.0, confidence), 1)
-    bullish, bearish, range_score = _calibrate_scores_for_confidence(
-        bullish, bearish, range_score, confidence
-    )
+    if not main_ready:
+        confidence = min(confidence, 20.0)
     market_bias = _bias_from_scores(bullish, bearish, range_score)
 
     reasons: list[str] = []

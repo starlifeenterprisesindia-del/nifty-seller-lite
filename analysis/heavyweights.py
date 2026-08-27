@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import replace
 from typing import Any
 
 from config import CONFIG
@@ -21,6 +22,7 @@ def calculate_heavyweight_bundle(
     nifty_quote: dict[str, Any] | None = None,
     *,
     reference_only: bool = False,
+    history: list[dict[str, Any]] | None = None,
 ) -> HeavyweightBundle:
     by_symbol = {str(item.get("symbol")): item for item in quotes}
     rows: list[HeavyweightContribution] = []
@@ -94,7 +96,7 @@ def calculate_heavyweight_bundle(
     nifty_change = _change_pct(nifty_quote or {})
     remaining_move = None
     disagreement = "UNAVAILABLE"
-    if nifty_change is not None and remaining_weight > 0 and usable_weight > 0:
+    if nifty_change is not None and remaining_weight > 0 and usable_weight >= covered_weight * 0.99:
         remaining_contribution = nifty_change - contribution_sum
         remaining_move = remaining_contribution / remaining_weight * 100.0
         if weighted_move is not None and weighted_move >= 0.05 and remaining_move <= -0.05:
@@ -104,7 +106,7 @@ def calculate_heavyweight_bundle(
         else:
             disagreement = "ALIGNED / NO CLEAR DISAGREEMENT"
 
-    return HeavyweightBundle(
+    bundle = HeavyweightBundle(
         as_of=captured_at,
         rows=tuple(rows),
         covered_weight_pct=round(covered_weight, 2),
@@ -124,3 +126,47 @@ def calculate_heavyweight_bundle(
         estimated_remaining_move_pct=round(remaining_move, 4) if remaining_move is not None else None,
         market_disagreement=disagreement,
     )
+    if reference_only:
+        return bundle
+    anchors = {}
+    for minutes in (3, 15):
+        candidates = []
+        for observation in history or []:
+            try:
+                age = (captured_at - datetime.fromisoformat(observation["at"])).total_seconds()
+                if minutes * 60 <= age <= minutes * 60 + 45:
+                    candidates.append((age, observation))
+            except (ValueError, KeyError, TypeError):
+                continue
+        anchors[minutes] = min(candidates, key=lambda x: x[0])[1] if candidates else None
+    enriched = []
+    sums = {3: 0.0, 15: 0.0}
+    covered = {3: 0.0, 15: 0.0}
+    points = 0.0
+    for row in rows:
+        changes = {}
+        for minutes in (3, 15):
+            anchor = anchors[minutes]
+            start = (anchor or {}).get("prices", {}).get(row.symbol)
+            change = (row.last_price / float(start) - 1) * 100 if start and row.last_price and row.change_pct is not None else None
+            changes[minutes] = change
+            if change is not None:
+                sums[minutes] += change * row.official_weight_pct
+                covered[minutes] += row.official_weight_pct
+        change = changes[15]
+        contribution = None
+        recent = "WARMING UP"
+        if change is not None:
+            recent = "RECOVERY" if change > 0.03 and (row.change_pct or 0) < 0 else "PULLBACK" if change < -0.03 and (row.change_pct or 0) > 0 else "BUYING SUPPORT" if change > 0.03 else "SELLING PRESSURE" if change < -0.03 else "FLAT"
+            start_nifty = (anchors[15] or {}).get("nifty")
+            if start_nifty:
+                contribution = float(start_nifty) * row.official_weight_pct * change / 10000
+                points += contribution
+        enriched.append(replace(row, change_3m_pct=changes[3], change_15m_pct=change,
+                                contribution_15m_points=contribution, recent_state=recent))
+    move15 = sums[15] / covered[15] if covered[15] else None
+    move3 = sums[3] / covered[3] if covered[3] else None
+    recent_state = "WARMING UP" if move15 is None else "RECOVERY" if move15 > 0.03 and (weighted_move or 0) < 0 else "PULLBACK" if move15 < -0.03 and (weighted_move or 0) > 0 else "BUYING SUPPORT" if move15 > 0.03 else "SELLING PRESSURE" if move15 < -0.03 else "MIXED / FLAT"
+    return replace(bundle, rows=tuple(enriched), recent_15m_move_pct=move15, recent_3m_move_pct=move3,
+                   recent_contribution_points=points if covered[15] else None,
+                   recent_coverage_pct=round(covered[15], 2), recent_state=recent_state)

@@ -128,6 +128,8 @@ def _buy_candidate_rows(frame: pd.DataFrame, side: str, spot: float) -> pd.DataF
     if frame.empty:
         return frame.copy()
     rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    if "greeks_quality" in rows:
+        rows = rows[rows.greeks_quality.eq("READY")]
     rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
     rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
     rows = rows.dropna(subset=["strike", "last_price"])
@@ -413,6 +415,8 @@ def _candidate_rows(frame: pd.DataFrame, side: str, spot: float) -> pd.DataFrame
     if frame.empty:
         return frame.copy()
     rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
+    if "greeks_quality" in rows:
+        rows = rows[rows.greeks_quality.eq("READY")]
     rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
     rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
     rows = rows.dropna(subset=["strike", "last_price"])
@@ -461,6 +465,7 @@ def _select_short_leg(
     target_delta: float = 0.20,
     min_delta: float = 0.08,
     max_delta: float = 0.38,
+    only_strike: float | None = None,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _candidate_rows(frame, side, spot)
     had_directional_rows = not rows.empty
@@ -489,6 +494,10 @@ def _select_short_leg(
         if not in_band.empty:
             rows = in_band.reset_index(drop=True)
 
+    if only_strike is not None:
+        rows = rows[rows["strike"].eq(only_strike)]
+    if rows.empty:
+        return None, 0.0, ("Selected short is outside the eligible risk band",)
     scores: list[tuple[float, pd.Series, float | None, float, str, str]] = []
     oi_series = rows.get("oi", pd.Series(dtype=float))
     volume_series = rows.get("volume", pd.Series(dtype=float))
@@ -564,6 +573,8 @@ def _select_hedge_leg(
     rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
     rows = rows.dropna(subset=["strike", "last_price"])
     rows = rows[rows["last_price"] >= CONFIG.trade_min_hedge_premium]
+    if "greeks_quality" in rows:
+        rows = rows[rows.greeks_quality.eq("READY")]
     if side == "CE":
         rows = rows[rows["strike"] > spot]
     else:
@@ -611,7 +622,10 @@ def _select_hedge_leg(
     target_gap = target_steps * step
     for _, row in eligible.iterrows():
         strike = float(row["strike"])
-        hedge_price = _number(row.get("top_ask_price")) or _number(row.get("last_price"))
+        hedge_price = _number(row.get("top_ask_price"))
+        hedge_spread, _ = _spread_metrics(row)
+        if hedge_spread is None or hedge_spread > 10:
+            continue
         if hedge_price is None or hedge_price <= 0 or hedge_price >= short_price:
             continue
         credit = short_price - hedge_price
@@ -665,7 +679,7 @@ def _buy_price(leg: OptionLeg) -> float | None:
     return leg.ask if leg.ask is not None and leg.ask > 0 else leg.last_price
 
 
-def _vertical_plan(
+def _vertical_plan_for_short(
     *,
     name: str,
     side: str,
@@ -677,6 +691,7 @@ def _vertical_plan(
     min_delta: float = 0.08,
     max_delta: float = 0.38,
     hedge_steps: int = 3,
+    only_strike: float | None = None,
 ) -> SetupPlan:
     short, quality, reasons = _select_short_leg(
         frame,
@@ -687,6 +702,7 @@ def _vertical_plan(
         target_delta=target_delta,
         min_delta=min_delta,
         max_delta=max_delta,
+        only_strike=only_strike,
     )
     if short is None:
         return SetupPlan.unavailable(name, reasons[0])
@@ -704,11 +720,14 @@ def _vertical_plan(
 
     short_price = _sell_price(short)
     hedge_price = _buy_price(hedge)
+    if any(leg.bid is None or leg.ask is None or not 0 < leg.bid <= leg.ask
+           or (leg.ask - leg.bid) / ((leg.ask + leg.bid) / 2) > .10 for leg in (short, hedge)):
+        return SetupPlan.unavailable(name, "Live bid/ask missing, crossed or wider than 10%; no LTP-only entry")
     if short_price is None or hedge_price is None:
         return SetupPlan.unavailable(name, "Executable bid/ask or LTP is missing")
     credit = short_price - hedge_price
     width = abs(hedge.strike - short.strike)
-    if credit < CONFIG.trade_min_credit_points or width <= 0:
+    if credit < CONFIG.trade_min_credit_points or width <= 0 or credit >= width:
         return SetupPlan.unavailable(name, "Estimated spread credit is too small")
 
     max_risk = max(0.0, width - credit)
@@ -754,6 +773,32 @@ def _vertical_plan(
         reasons=(*reasons, theta_reason),
         blocker=blocker,
     )
+
+
+def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28,
+                   min_delta=.08, max_delta=.38, hedge_steps=3):
+    """Rank complete protected pairs, not a short premium in isolation."""
+    candidates = _candidate_rows(frame, side, spot)
+    if candidates.empty:
+        return SetupPlan.unavailable(name, "No eligible short/hedge pair")
+    # Bounded enumeration keeps refresh latency predictable.
+    if "delta" in candidates:
+        band = candidates[pd.to_numeric(candidates.delta, errors="coerce").abs().between(min_delta, max_delta)]
+        if not band.empty:
+            candidates = band
+    strikes = sorted(candidates.strike.unique(), key=lambda value: abs(float(value) - spot))[:6]
+    plans = [_vertical_plan_for_short(name=name, side=side, frame=frame, spot=spot,
+              levels=levels, options=options, target_delta=target_delta, min_delta=min_delta,
+              max_delta=max_delta, hedge_steps=hedge_steps, only_strike=float(strike)) for strike in strikes]
+    usable = [p for p in plans if p.available and p.max_risk_points and p.estimated_credit_points]
+    if not usable:
+        return SetupPlan.unavailable(name, "No liquid short/hedge pair passes credit/book/risk checks")
+    def value(plan):
+        reward_risk = plan.estimated_credit_points / plan.max_risk_points
+        return plan.quality_score * .75 + min(100, reward_risk * 200) * .25
+    chosen = max(usable, key=value)
+    return replace(chosen, reasons=(*chosen.reasons,
+        f"Pair comparison: net credit/risk {chosen.estimated_credit_points / chosen.max_risk_points:.2f}; expiry payoff, not expected return"))
 
 
 def _condor_plan(
@@ -889,8 +934,6 @@ def _candidate_action(decision: FinalDecision, selected: str) -> str:
     if selected in {"CE BUY", "PE BUY", "CE SELL", "PE SELL"}:
         return selected
     evaluations = {
-        "CE BUY": decision.ce_buy,
-        "PE BUY": decision.pe_buy,
         "CE SELL": decision.ce_sell,
         "PE SELL": decision.pe_sell,
     }

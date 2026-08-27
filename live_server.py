@@ -400,3 +400,10 @@ def big_player_alert(
     _authorise(key, x_live_key)
     sent = ALERTS.observe_big_player(payload)
     return {"ok": True, "data": {"accepted": True, "sent": sent}}
+
+
+@app.post("/alerts/pattern")
+def pattern_alert(payload: dict[str, Any] = Body(...), key: str = Query(default=""),
+                  x_live_key: str = Header(default="")) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return {"ok": True, "data": {"sent": ALERTS.observe_pattern(payload)}}

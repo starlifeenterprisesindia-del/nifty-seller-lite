@@ -65,6 +65,8 @@ class TimeframeIndicators:
     rsi14: float | None
     rsi_state: str
     status: str
+    previous_rsi14: float | None = None
+    previous_macd_histogram: float | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,8 @@ class PatternSignal:
     age_candles: int | None
     reasons: tuple[str, ...]
     status: str
+    detected_at: str = ""
+    invalidation_level: float | None = None
 
 
 @dataclass(frozen=True)
@@ -272,6 +276,10 @@ class HeavyweightContribution:
     change_pct: float | None
     index_contribution_pct: float | None
     direction: str
+    change_3m_pct: float | None = None
+    change_15m_pct: float | None = None
+    contribution_15m_points: float | None = None
+    recent_state: str = "WARMING UP"
 
 
 @dataclass(frozen=True)
@@ -290,6 +298,12 @@ class HeavyweightBundle:
     remaining_weight_pct: float = 0.0
     estimated_remaining_move_pct: float | None = None
     market_disagreement: str = "UNAVAILABLE"
+    recent_15m_move_pct: float | None = None
+    recent_3m_move_pct: float | None = None
+    recent_contribution_points: float | None = None
+    recent_coverage_pct: float = 0.0
+    recent_state: str = "WARMING UP"
+    weight_date: str = "2026-07-31"
 
 
 @dataclass(frozen=True)
@@ -514,6 +528,8 @@ class BigPlayerActivity:
     price_shock_state: str = "NONE"
     price_shock_points: float | None = None
     frozen_after_close: bool = False
+    price_response: str = "UNCONFIRMED"
+    futures_price_change_points: float | None = None
 
 
 def _unavailable_strategy(name: str) -> StrategyEvaluation:
