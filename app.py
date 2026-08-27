@@ -41,6 +41,7 @@ from services.live_monitor import (
     monitor_timestamp,
 )
 from services.railway_live_client import RailwayDhanClient, fetch_railway_live_state
+from ui.day_memory import render_day_memory, sync_day_memory
 from ui.components import (
     render_candles,
     render_decision,
@@ -651,6 +652,7 @@ if "snapshot" not in st.session_state or refresh:
         st.stop()
 
 snapshot = st.session_state.snapshot
+sync_day_memory(snapshot, live_server_url, live_server_api_key)
 previous_snapshot = st.session_state.get("previous_snapshot")
 shadow_entries = process_auto_shadow_journal(
     snapshot,
@@ -773,6 +775,7 @@ render_market_session(view_snapshot)
 render_data_health(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
+render_day_memory(snapshot, live_server_url, live_server_api_key)
 render_timeframe_outlook(
     view_snapshot,
     st.session_state.get("fast_live_impulse"),

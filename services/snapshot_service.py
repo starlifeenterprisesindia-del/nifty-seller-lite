@@ -51,6 +51,16 @@ IST = ZoneInfo(IST_TIMEZONE)
 
 
 class SnapshotService:
+    @classmethod
+    def background_observer(cls, client, root):
+        """Same analysis, separate runtime state; no app journal/cloud configuration."""
+        return cls(client,
+            option_state_store=OptionStateStore(root / "options.json"),
+            activity_state_store=ActivityStateStore(root / "activity.json"),
+            discipline_store=DisciplineStore(root / "background_signals.json"),
+            context_store=MarketContextStore(root / "background_context.json"),
+            recent_quotes_path=str(root / "top9.json"))
+
     def __init__(
         self,
         client: DhanClient,
@@ -60,6 +70,7 @@ class SnapshotService:
         discipline_store: DisciplineStore | None = None,
         news_service: MarketNewsService | None = None,
         activity_state_store: ActivityStateStore | None = None,
+        recent_quotes_path: str = "data/recent_top9.json",
     ):
         self.client = client
         self.master = instrument_master or InstrumentMaster()
@@ -69,6 +80,7 @@ class SnapshotService:
         self.activity_state_store = activity_state_store or ActivityStateStore()
         # Kept injectable so unit tests and offline analysis never need public internet.
         self.news_service = news_service
+        self.recent_quotes_path = recent_quotes_path
 
     @staticmethod
     def _extract_quote(
@@ -727,7 +739,7 @@ class SnapshotService:
         top9_history = []
         if market_session.is_live and statuses["heavyweights"].use_state == "LIVE":
             try:
-                top9_history = record_quotes(analysis_heavyweight_quotes, nifty_quote, current)
+                top9_history = record_quotes(analysis_heavyweight_quotes, nifty_quote, current, path=self.recent_quotes_path)
             except OSError:
                 top9_history = []  # no fabricated recent direction if storage unavailable
         heavyweights = calculate_heavyweight_bundle(
@@ -1041,6 +1053,7 @@ class SnapshotService:
             decision=decision,
             market_session=market_session,
             indicators=indicators,
+            risk_profile=profile,
         )
 
         fresh_signal = (
@@ -1204,6 +1217,8 @@ class SnapshotService:
                 "vix_resolved": bool(vix_quote),
                 "vix_security_id": vix_ref.security_id,
                 "future_resolved": bool(future_quote),
+                "future_security_id": future_ref.security_id if future_ref else None,
+                "future_expiry": future_ref.expiry if future_ref else None,
                 "future_volume_resolved": future_candle_available,
                 "option_state_prior_snapshots": len(option_history),
                 "option_state_current_stored": state_appended,

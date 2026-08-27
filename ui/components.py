@@ -61,8 +61,8 @@ def _barrier_state_hinglish(level: Any) -> str:
     state = str(level.state).upper()
     mapping = {
         "TESTING": "ABHI TEST HO RAHA",
-        "HOLDING / STRONG": "MAJBOOT / BACH RAHA",
-        "HOLDING": "FILHAAL BACH RAHA",
+        "HOLDING / STRONG": "LEVEL STRONG — REACTION DEKHO",
+        "HOLDING": "LEVEL STRONG — REACTION DEKHO",
         "WEAKENING / BREAK RISK": "KAMZOR / TOOTNE KA RISK",
         "APPROACHING": "MARKET PAAS AA RAHA",
         "AHEAD": "AAGE KA LEVEL",
@@ -119,12 +119,12 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
         f'<span class="bm-state">{state}</span></div>'
         f'<div class="bm-zone">{level.lower:,.0f}–{level.upper:,.0f}</div>'
         f'<div class="bm-bars">'
-        f'<div><span>Na tootne ki majbooti</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>'
+        f'<div><span>Level strength</span><b>{level.strength:.0f}/100</b><div class="bm-track"><div class="bm-fill" style="width:{strength_width:.0f}%"></div></div></div>'
         f'<div><span>Tootne ka pressure</span><b>{level.break_pressure:.0f}/100 · {escape(_pressure_label(float(level.break_pressure)))}</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>'
         f'</div>'
         f'<div class="bm-verdict">Faisla: {escape(_barrier_verdict(level))}</div>'
-        f'<div class="bm-small">Confirm: {confirmation}</div>'
-        f'<div class="bm-small">{level.distance_points:,.0f} pts door · Kyun: {sources}</div>'
+        f'<div class="bm-small">Break watch: {confirmation}. History mein completed 3m reaction dekho.</div>'
+        f'<div class="bm-small">{"Price zone ke andar hai" if level.distance_points == 0 else f"{level.distance_points:,.0f} pts door"} · Kyun: {sources}</div>'
         f'</div>'
     )
 
@@ -325,7 +325,7 @@ def render_compact_barrier_map(
         f'<div class="cbm sup"><div class="cbm-l">AGLA SAHARA</div><div class="cbm-v">{escape(support)}</div><div class="cbm-n">{escape(support_note)}</div></div>'
         '</div><div class="cbm-patterns">'
         f'<div class="cbm pattern wm"><div class="cbm-l">3-MINUTE W/M @ NEAREST LEVEL</div><div class="cbm-v">{escape(wm_name)}</div><div class="cbm-n">{escape(wm_note)}</div></div>'
-        f'<div class="cbm pattern candle"><div class="cbm-l">5-MINUTE CANDLE @ NEAREST LEVEL</div><div class="cbm-v">{escape(candle_name)}</div><div class="cbm-n">{escape(candle_note)}</div></div>'
+        f'<div class="cbm pattern candle"><div class="cbm-l">3-MINUTE CANDLE @ NEAREST LEVEL</div><div class="cbm-v">{escape(candle_name)}</div><div class="cbm-n">{escape(candle_note)}</div></div>'
         '</div>'
     )
     if hasattr(st, "html"):
@@ -366,7 +366,10 @@ def render_compact_barrier_map(
 
 def render_barrier_map(snapshot: MarketSnapshot) -> None:
     item = snapshot.barrier_map
-    st.subheader("🧭 Live Barrier + Range Map")
+    st.subheader("🧭 " + ("Live Barrier + Range Map" if snapshot.market_session.is_live else "Last Available Barrier Map"))
+    if not snapshot.market_session.is_live:
+        st.caption("Neeche ke levels aur testing labels last snapshot ke hain, abhi ki live activity nahi.")
+    st.caption("Level strong hona confirmed rejection nahi. Price zone tak aaye, phir completed candle reaction dekho.")
     st.caption(
         "Yeh top live road-map Support/Resistance, OI flow, price structure, volume, Top-9, "
         "market speed aur India VIX ko ek hi view me dikhata hai. Strength aur Break Pressure "
@@ -1016,10 +1019,19 @@ def render_main_ai_market_view(
             "🧠 **AI samajh:** "
             + safe_brain_hinglish_line(snapshot, previous_snapshot)
         )
+        memory = snapshot.metadata.get("history_context", {})
+        for line in memory.get("lines", []):
+            st.caption("History context: " + line)
         if "greeks_quality" in snapshot.option_chain:
-            invalid_greeks = int(snapshot.option_chain.greeks_quality.ne("READY").sum())
+            invalid_greeks = int((~snapshot.option_chain.greeks_quality.isin(["READY", "IV WARNING"])).sum())
             if invalid_greeks:
                 st.warning(f"Greeks check: {invalid_greeks} option rows unavailable/model mismatch. In rows se strike/hedge ranking band; OI/quotes alag usable hain. Broker values force-match nahi ki gayi.")
+            iv_warnings = int(snapshot.option_chain.greeks_quality.eq("IV WARNING").sum())
+            if iv_warnings:
+                st.warning(f"{iv_warnings} rows: CE/PE IV difference — conditional candidates only, not verified model prices. Independent retest premium estimate disabled for these rows.")
+            if "greeks_reason" in snapshot.option_chain:
+                with st.expander("Strike-wise Greeks checks"):
+                    st.dataframe(snapshot.option_chain[["strike", "side", "greeks_quality", "greeks_reason"]], hide_index=True, width="stretch")
 
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(

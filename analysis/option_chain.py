@@ -126,7 +126,9 @@ def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
         frame.side.eq("PE") & frame.delta.lt(0)
     )
     frame["greeks_quality"] = "UNAVAILABLE"
+    frame["greeks_reason"] = "Missing/non-finite Greeks, invalid sign or bounds"
     frame.loc[valid, "greeks_quality"] = "READY"
+    frame.loc[valid, "greeks_reason"] = "Basic Greeks checks passed; not model accuracy certification"
     for _, pair in frame.groupby("strike"):
         ce, pe = pair[pair.side.eq("CE")], pair[pair.side.eq("PE")]
         if len(ce) != 1 or len(pe) != 1:
@@ -141,9 +143,14 @@ def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
             and pd.notna(p.delta)
             and abs(c.delta - p.delta - 1) > 0.15
         )
-        if suspicious_iv or suspicious_delta:
+        if suspicious_iv:
+            good_pair_rows = pair.index.intersection(frame.index[valid])
+            frame.loc[good_pair_rows, "greeks_quality"] = "IV WARNING"
+            frame.loc[good_pair_rows, "greeks_reason"] = "CE/PE IV difference; model/time assumptions unverified; quote/hedge/risk checks required"
+        if suspicious_delta:
             frame.loc[pair.index, "greeks_quality"] = "MODEL MISMATCH"
-    frame.loc[frame.greeks_quality.ne("READY"), ["delta", "gamma", "theta", "vega"]] = (
+            frame.loc[pair.index, "greeks_reason"] = "CE/PE delta consistency outside tolerance; excluded pending source check"
+    frame.loc[~frame.greeks_quality.isin(["READY", "IV WARNING"]), ["delta", "gamma", "theta", "vega"]] = (
         float("nan")
     )
     return frame

@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.38.1_SHARED_ACTIVITY_GATE"
+    version: str = "2.40.0_EXPIRY_CYCLE_MEMORY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -218,7 +218,7 @@ class AppConfig:
     execution_required_confirmations: int = 3
     execution_min_flow_confidence: float = 75.0
     execution_required_flow_windows: int = 3
-    risk_default_capital: float = 250000.0
+    risk_default_capital: float = 900000.0
     risk_default_pct: float = 0.5
     risk_default_lot_size: int = 65
     risk_default_max_lots: int = 1

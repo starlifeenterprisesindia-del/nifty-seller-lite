@@ -14,6 +14,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Query
 from services.dhan_gateway import DhanGateway
 from services.railway_alert_store import PremiumAlertMonitor, RailwayAlertStore
 from services.telegram_alerts import LiveAlertEngine
+from services.day_recorder import DayRecorder
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -194,6 +195,7 @@ ALERTS = LiveAlertEngine(
 GATEWAY: DhanGateway | None = None
 PREMIUM_STORE = RailwayAlertStore()
 PREMIUM_MONITOR: PremiumAlertMonitor | None = None
+DAY_RECORDER = DayRecorder(lambda: _gateway())
 
 
 def _authorise(key: str, header_key: str) -> None:
@@ -227,6 +229,10 @@ async def lifespan(_: FastAPI):
     global PREMIUM_MONITOR
     STATE.start()
     try:
+        DAY_RECORDER.start()
+    except Exception as exc:
+        DAY_RECORDER.status = "START FAILED — " + type(exc).__name__
+    try:
         PREMIUM_MONITOR = PremiumAlertMonitor(
             PREMIUM_STORE,
             _gateway().market_quote,
@@ -237,12 +243,26 @@ async def lifespan(_: FastAPI):
     except Exception:
         PREMIUM_MONITOR = None
     yield
+    DAY_RECORDER.stop()
     if PREMIUM_MONITOR is not None:
         PREMIUM_MONITOR.stop()
     STATE.stop()
 
 
 app = FastAPI(title="Nifty Seller Live Feed", version="1.0.0", lifespan=lifespan)
+
+
+@app.post("/day-memory")
+def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Header(default="")):
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
+    _authorise("", x_live_key)
+    if payload.get("event") and DAY_RECORDER.store:
+        try:
+            DAY_RECORDER.store.app_event(datetime.now(IST), payload["event"])
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(status_code=400, detail="Invalid history event")
+    return {"ok": True, "data": DAY_RECORDER.report()}
 
 
 @app.get("/")

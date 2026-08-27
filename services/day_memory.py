@@ -1,0 +1,312 @@
+"""Expiry-cycle evidence archive. No orders, alerts, or strategy votes."""
+from __future__ import annotations
+
+import json
+import math
+import sqlite3
+from contextlib import contextmanager
+from datetime import date, datetime, time
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def clean(value):
+    if isinstance(value, dict):
+        return {str(k): clean(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [clean(v) for v in value]
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if hasattr(value, "item"):
+        return clean(value.item())
+    return value
+
+
+def encode(value):
+    return json.dumps(clean(value), separators=(",", ":"), allow_nan=False)
+
+
+def recording_time(now):
+    now = now.astimezone(IST)
+    return now.weekday() < 5 and time(9, 15) <= now.time().replace(tzinfo=None) <= time(15, 31)
+
+
+def candle_reaction(level, candle):
+    """A retest requires a previously observed break, never a first-touch inference."""
+    lo, hi = level["lower"], level["upper"]
+    close, high, low = (float(candle[k]) for k in ("close", "high", "low"))
+    resistance = level["side"] == "RESISTANCE"
+    crossed = close > hi if resistance else close < lo
+    touched = low <= hi and high >= lo
+    rejected = touched and (close < lo if resistance else close > hi)
+    broken = level.get("broken", False)
+    if crossed:
+        return ("RETEST HOLD — 3m CLOSE" if broken and touched else "BREAK KE BAAD HOLD" if broken else "BREAK — 3m CLOSE"), True
+    if broken and (close < lo if resistance else close > hi):
+        return "BREAK FAILED — 3m CLOSE", False
+    return ("REJECTION — 3m CLOSE" if rejected else "TESTING" if touched else "LEVEL SE DOOR"), broken
+
+
+def compact(snapshot, tracked_strikes=()):
+    """Keep contracts within 500 points plus no credentials/raw HTTP payloads."""
+    summary = snapshot.public_summary()
+    spot = summary.get("nifty_last_price")
+    frame = snapshot.option_chain
+    if getattr(snapshot.feed_status.get("option_chain"), "use_state", "") != "LIVE":
+        frame = frame.iloc[:0]
+    if spot is not None and "strike" in frame:
+        relevant = (frame["strike"] - float(spot)).abs() <= 500
+        relevant |= frame["strike"].isin(tracked_strikes)
+        for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
+            zone = summary["barrier_map"].get(name)
+            if zone:
+                relevant |= (frame["strike"] - (zone["lower"] + zone["upper"]) / 2).abs() <= 50
+        for name in ("ce_sell", "pe_sell", "iron_condor"):
+            plan = summary.get("trade_plan", {}).get(name, {})
+            for leg in plan.get("short_legs", []) + plan.get("hedge_legs", []):
+                relevant |= frame["strike"] == leg.get("strike")
+        frame = frame[relevant]
+    fields = [x for x in ("security_id", "strike", "side", "last_price", "oi", "volume",
+                          "implied_volatility", "top_bid_price", "top_ask_price",
+                          "delta", "gamma", "theta", "vega", "greeks_quality", "greeks_reason") if x in frame]
+    frame = frame.copy()
+    if "greeks_quality" in frame:
+        for field in ("delta", "gamma", "theta", "vega"):
+            if field in frame:
+                frame.loc[~frame.greeks_quality.isin(["READY", "IV WARNING"]), field] = None
+    else:
+        for field in ("delta", "gamma", "theta", "vega"):
+            if field in frame:
+                frame[field] = None
+    def quotes(rows):
+        return [{k: row.get(k) for k in ("symbol", "security_id", "last_price", "volume", "oi",
+                                        "last_trade_time", "timestamp")} for row in rows]
+    return clean({
+        "at": summary["created_at"], "spot": spot, "expiry": summary["expiry"],
+        "version": snapshot.metadata.get("version"), "session": summary["market_session"],
+        "feeds": {k: {f: v.get(f) for f in ("ok", "use_state", "fetched_at", "age_seconds")}
+                  for k, v in summary["feeds"].items()},
+        "options": frame[fields].to_dict("records"),
+        "quotes": quotes([snapshot.nifty_future_quote or {}, snapshot.vix_quote or {}]
+                         + list(snapshot.heavyweight_quotes)),
+        "indicators": summary["indicators"], "barriers": summary["barrier_map"],
+        "activity": summary["big_player_activity"],
+        "direction": summary["decision"].get("market_direction"),
+        "background_action": summary["decision"].get("final_action"),
+        "days_to_expiry": (date.fromisoformat(str(summary["expiry"])) - snapshot.created_at.astimezone(IST).date()).days,
+        "hours_to_expiry": max(0,(datetime.combine(date.fromisoformat(str(summary["expiry"])),time(15,30),IST)-snapshot.created_at.astimezone(IST)).total_seconds()/3600),
+        "future_contract": {"security_id": snapshot.metadata.get("future_security_id"), "expiry": snapshot.metadata.get("future_expiry")},
+        "institutional_context": summary.get("institutional_context", {}),
+    })
+
+
+class DayMemory:
+    def __init__(self, path):
+        self.pathpath = Path(path)
+        self.pathpath.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+                CREATE TABLE IF NOT EXISTS samples (at TEXT PRIMARY KEY, body TEXT);
+                CREATE TABLE IF NOT EXISTS candles (instrument TEXT, at TEXT, body TEXT,
+                    PRIMARY KEY(instrument, at));
+                CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, at TEXT, kind TEXT,
+                    identity TEXT, body TEXT);
+                CREATE TABLE IF NOT EXISTS state (identity TEXT PRIMARY KEY, body TEXT);
+                CREATE TABLE IF NOT EXISTS zones (identity TEXT PRIMARY KEY, body TEXT);
+                CREATE TABLE IF NOT EXISTS cycle_summaries (expiry TEXT PRIMARY KEY, body TEXT);
+                CREATE TABLE IF NOT EXISTS signals (id INTEGER PRIMARY KEY, at TEXT, body TEXT);
+                CREATE TABLE IF NOT EXISTS outcomes (signal_id INTEGER, horizon INTEGER, body TEXT,
+                    PRIMARY KEY(signal_id,horizon));
+                CREATE INDEX IF NOT EXISTS events_time ON events(at);
+            """)
+
+    @contextmanager
+    def connect(self):
+        db = sqlite3.connect(self.pathpath, timeout=10)
+        db.execute("PRAGMA busy_timeout=10000")
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def _roll(self, db, day, expiry):
+        if date.fromisoformat(expiry) < date.fromisoformat(day):
+            raise ValueError("Expired contract cannot start a new recording session")
+        row = db.execute("SELECT value FROM meta WHERE key='day'").fetchone()
+        if row and day < row[0]:
+            raise ValueError("Older session cannot replace current memory")
+        cycle = db.execute("SELECT value FROM meta WHERE key='cycle'").fetchone()
+        if not cycle:
+            # Migrate the one-day database without erasing existing data.
+            last = db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 1").fetchone()
+            prior_expiry = json.loads(last[0]).get("expiry") if last else expiry
+            date.fromisoformat(str(prior_expiry))
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('cycle',?)", (prior_expiry,))
+            cycle = (prior_expiry,)
+        if day > cycle[0]:
+            from services.cycle_outcomes import cycle_summary
+            summary = cycle_summary(db, cycle[0])
+            db.execute("INSERT OR REPLACE INTO cycle_summaries VALUES (?,?)", (cycle[0], encode(summary)))
+            # Archive + purge are one transaction. Failure rolls both back.
+            db.execute("DELETE FROM cycle_summaries WHERE expiry NOT IN (SELECT expiry FROM cycle_summaries ORDER BY expiry DESC LIMIT 8)")
+            for table in ("samples", "candles", "events", "state", "zones", "signals", "outcomes"):
+                db.execute(f"DELETE FROM {table}")
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('cycle',?)", (expiry,))
+        if not row or day != row[0]:
+            # Preserve historical observations; restart live pattern phases each session.
+            for table in ("state", "zones"):
+                db.execute(f"DELETE FROM {table}")
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('day',?)", (day,))
+
+    def _event(self, db, at, kind, identity, body):
+        encoded = encode(body)
+        key = kind + ":" + identity
+        previous = db.execute("SELECT body FROM state WHERE identity=?", (key,)).fetchone()
+        if previous and previous[0] == encoded:
+            return
+        db.execute("INSERT INTO events(at,kind,identity,body) VALUES (?,?,?,?)", (at, kind, identity, encoded))
+        db.execute("INSERT OR REPLACE INTO state VALUES (?,?)", (key, encoded))
+
+    def gap(self, now, reason):
+        # Do not clear yesterday on a holiday/token failure without fresh session evidence.
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('last_error',?)", (encode({"at": now.isoformat(), "reason": reason}),))
+            day = db.execute("SELECT value FROM meta WHERE key='day'").fetchone()
+            if day and day[0] == now.astimezone(IST).date().isoformat():
+                self._event(db, now.isoformat(), "DATA", "feed", {"status": "GAP", "reason": reason})
+
+    def record(self, snapshot):
+        from analysis.technical_utils import completed_candles
+        at = snapshot.created_at.astimezone(IST)
+        if not recording_time(at):
+            return False
+        # Fresh price and current-day completed candles required, not merely wall clock.
+        if not all(snapshot.feed_status.get(k) and snapshot.feed_status[k].use_state == "LIVE"
+                   for k in ("quotes", "candles")):
+            self.gap(at, "Price/candle data fresh nahi; sample skip hua")
+            return False
+        with self.connect() as db:
+            tracked = {leg["strike"] for raw, in db.execute("SELECT body FROM signals WHERE (SELECT COUNT(*) FROM outcomes WHERE signal_id=signals.id)<3")
+                       for leg in json.loads(raw).get("legs", [])}
+        body = compact(snapshot, tracked)
+        stamp = at.isoformat()
+        slot = at.replace(second=0, microsecond=0).isoformat()
+        with self.connect() as db:
+            self._roll(db, at.date().isoformat(), str(body["expiry"]))
+            if db.execute("SELECT 1 FROM samples WHERE at=?", (slot,)).fetchone():
+                return False
+            last = db.execute("SELECT at FROM samples ORDER BY at DESC LIMIT 1").fetchone()
+            if last and last[0][:10] == stamp[:10] and (at - datetime.fromisoformat(last[0])).total_seconds() > 120:
+                self._event(db, stamp, "DATA", "interval", {"status": "GAP", "from": last[0], "to": stamp})
+                # Missed observations cannot support a subsequent retest claim.
+                for identity, raw in db.execute("SELECT identity,body FROM zones").fetchall():
+                    zone = json.loads(raw)
+                    zone["broken"] = False
+                    zone["recovery_after"] = stamp
+                    db.execute("UPDATE zones SET body=? WHERE identity=?", (encode(zone), identity))
+            db.execute("INSERT INTO samples VALUES (?,?)", (slot, encode(body)))
+            db.execute("DELETE FROM meta WHERE key='last_error'")
+            self._event(db, stamp, "DATA", "feed", {"status": "RECORDING"})
+            for name, frame in (("NIFTY", snapshot.candles_1m), ("FUTURES", snapshot.future_candles_1m)):
+                if name == "FUTURES" and snapshot.metadata.get("future_security_id") is not None:
+                    name += ":" + str(snapshot.metadata["future_security_id"])
+                for row in completed_candles(frame).to_dict("records"):
+                    raw = row.get("timestamp")
+                    if raw is None:
+                        continue
+                    dt = datetime.fromisoformat(str(raw))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=IST)
+                    dt = dt.astimezone(IST)
+                    if dt.date() != at.date() or not time(9,15) <= dt.time().replace(tzinfo=None) < time(15,30):
+                        continue
+                    fields = {k: row.get(k) for k in ("open", "high", "low", "close", "volume", "open_interest")}
+                    db.execute("INSERT OR IGNORE INTO candles VALUES (?,?,?)", (name, dt.isoformat(), encode(fields)))
+            # Preserve old zones even when nearest level changes after a break.
+            for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
+                level = body["barriers"].get(name)
+                if not level or body["spot"] is None:
+                    continue
+                lo, hi = level["lower"], level["upper"]
+                identity = f'{level["side"]}:{lo}:{hi}'
+                db.execute("INSERT OR IGNORE INTO zones VALUES (?,?)", (identity, encode({"lower": lo, "upper": hi, "side": level["side"], "first_seen": stamp})))
+            for identity, raw in db.execute("SELECT identity,body FROM zones"):
+                level = json.loads(raw)
+                lo, hi = level["lower"], level["upper"]
+                p = body["spot"]
+                status = "ZONE KE ANDAR" if lo <= p <= hi else "ZONE KE UPAR" if p > hi else "ZONE KE NEECHE"
+                self._event(db, stamp, "BARRIER", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": status})
+                candles = completed_candles(snapshot.candles_3m)
+                if not candles.empty:
+                    candle = candles.iloc[-1]
+                    candle_at = datetime.fromisoformat(str(candle["timestamp"]))
+                    if candle_at.tzinfo is None:
+                        candle_at = candle_at.replace(tzinfo=IST)
+                    # Only evaluate a candle formed after the zone was first observed.
+                    evidence_start = level.get("recovery_after", level["first_seen"])
+                    if candle_at >= datetime.fromisoformat(evidence_start) and candle_at.isoformat() != level.get("last_candle"):
+                        reaction, broken = candle_reaction(level, candle)
+                        level.update(broken=broken, last_candle=candle_at.isoformat())
+                        db.execute("UPDATE zones SET body=? WHERE identity=?", (encode(level), identity))
+                        self._event(db, stamp, "3m REACTION", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": reaction})
+            from analysis.pattern_alerts import aligned_pattern_alert
+            pattern = aligned_pattern_alert(snapshot)
+            if pattern:
+                self._event(db, stamp, "STRONG PATTERN", "background", {k: pattern[k] for k in ("direction", "names", "pattern_ids")})
+            activity = body.get("activity") or {}
+            self._event(db, stamp, "FLOW", "background", {k: activity.get(k) for k in ("direction", "state", "confirmation_count")})
+            self._event(db, stamp, "DIRECTION", "background", {"direction": body["direction"], "source": "Background reference; app AI nahi"})
+            from services.cycle_outcomes import update_outcomes
+            update_outcomes(db, body)
+        return True
+
+    def app_event(self, now, body):
+        at = datetime.fromisoformat(str(body["at"]))
+        if at.tzinfo is None or not 0 <= (now - at).total_seconds() <= 120 or not recording_time(now):
+            return False
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM meta WHERE key='day'").fetchone()
+            if not row or row[0] != at.astimezone(IST).date().isoformat():
+                return False
+            self._event(db, at.isoformat(), "APP AI", "actual", {"action": str(body.get("action", ""))[:80],
+                "reason": str(body.get("reason", ""))[:400], "version": str(body.get("version", ""))[:80]})
+            from services.cycle_outcomes import record_signal
+            record_signal(db, body)
+        return True
+
+    def report(self):
+        with self.connect() as db:
+            meta = dict(db.execute("SELECT key,value FROM meta"))
+            counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("samples", "candles", "events")}
+            span = db.execute("SELECT MIN(at),MAX(at) FROM samples").fetchone()
+            events = [{"at": a, "kind": k, **json.loads(b)} for a, k, b in db.execute(
+                "SELECT at,kind,body FROM events ORDER BY id DESC LIMIT 100")]
+            summaries = [json.loads(r[0]) for r in db.execute("SELECT body FROM cycle_summaries ORDER BY expiry DESC")]
+            outcomes = [{"at": a, "horizon_minutes": h, **json.loads(b)} for a,h,b in db.execute(
+                "SELECT signals.at,outcomes.horizon,outcomes.body FROM outcomes JOIN signals ON signals.id=outcomes.signal_id ORDER BY signals.id DESC,horizon LIMIT 30")]
+            recent = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 16")]
+            zone_history = []
+            if recent:
+                for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
+                    zone = recent[0].get("barriers", {}).get(name)
+                    if not zone:
+                        continue
+                    key = f'{zone["side"]}:{zone["lower"]}:{zone["upper"]}'
+                    reactions = [(a,json.loads(b)) for a,b in db.execute("SELECT at,body FROM events WHERE kind='3m REACTION' AND identity=? ORDER BY at", (key,))]
+                    zone_history.append({"side": zone["side"], "lower": zone["lower"], "upper": zone["upper"],
+                        "rejections": sum(r.get("status") == "REJECTION — 3m CLOSE" for _,r in reactions),
+                        "breaks": sum(r.get("status") == "BREAK — 3m CLOSE" for _,r in reactions),
+                        "retest_holds": sum(r.get("status") == "RETEST HOLD — 3m CLOSE" for _,r in reactions),
+                        "last": reactions[-1][0] if reactions else None})
+        return {"day": meta.get("day"), "counts": counts, "first": span[0], "last": span[1],
+                "last_error": json.loads(meta.get("last_error", "null")), "events": events,
+                "cycle_expiry": meta.get("cycle"), "cycle_summaries": summaries, "outcomes": outcomes,
+                "zone_history": zone_history,
+                "recent_context": [{k: s.get(k) for k in ("at", "expiry", "version", "spot", "direction", "activity", "feeds")} for s in recent],
+                "bytes": self.pathpath.stat().st_size}
