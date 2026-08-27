@@ -254,7 +254,8 @@ class DayMemory:
                         reaction, broken = candle_reaction(level, candle)
                         level.update(broken=broken, last_candle=candle_at.isoformat())
                         db.execute("UPDATE zones SET body=? WHERE identity=?", (encode(level), identity))
-                        self._event(db, stamp, "3m REACTION", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": reaction})
+                        self._event(db, stamp, "3m REACTION", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": reaction,
+                            "expiry": body["expiry"], "version": body["version"]})
             from analysis.pattern_alerts import aligned_pattern_alert
             pattern = aligned_pattern_alert(snapshot)
             if pattern:
@@ -285,12 +286,12 @@ class DayMemory:
             meta = dict(db.execute("SELECT key,value FROM meta"))
             counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("samples", "candles", "events")}
             span = db.execute("SELECT MIN(at),MAX(at) FROM samples").fetchone()
-            events = [{"at": a, "kind": k, **json.loads(b)} for a, k, b in db.execute(
-                "SELECT at,kind,body FROM events ORDER BY id DESC LIMIT 100")]
+            events = [{"at": a, "kind": k, "identity": identity, **json.loads(b)} for a, k, identity, b in db.execute(
+                "SELECT at,kind,identity,body FROM events ORDER BY id DESC LIMIT 100")]
             summaries = [json.loads(r[0]) for r in db.execute("SELECT body FROM cycle_summaries ORDER BY expiry DESC")]
             outcomes = [{"at": a, "horizon_minutes": h, **json.loads(b)} for a,h,b in db.execute(
                 "SELECT signals.at,outcomes.horizon,outcomes.body FROM outcomes JOIN signals ON signals.id=outcomes.signal_id ORDER BY signals.id DESC,horizon LIMIT 30")]
-            recent = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 16")]
+            recent = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 20")]
             zone_history = []
             if recent:
                 for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
@@ -308,5 +309,5 @@ class DayMemory:
                 "last_error": json.loads(meta.get("last_error", "null")), "events": events,
                 "cycle_expiry": meta.get("cycle"), "cycle_summaries": summaries, "outcomes": outcomes,
                 "zone_history": zone_history,
-                "recent_context": [{k: s.get(k) for k in ("at", "expiry", "version", "spot", "direction", "activity", "feeds")} for s in recent],
+                "recent_context": [{k: s.get(k) for k in ("at", "expiry", "version", "spot", "direction", "activity", "feeds", "barriers", "future_contract")} for s in recent],
                 "bytes": self.pathpath.stat().st_size}

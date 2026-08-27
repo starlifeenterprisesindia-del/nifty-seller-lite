@@ -6,6 +6,7 @@ import hashlib
 import streamlit as st
 
 from analysis.history_context import history_context
+from analysis.recent_history import recent_history
 from services.day_memory import clean
 from services.railway_live_client import RailwayDhanClient
 
@@ -57,6 +58,7 @@ def sync_day_memory(snapshot, url, key):
         st.session_state.day_memory_fetch_at = now
     report = st.session_state.get("day_memory_report") if not st.session_state.get("day_memory_error") and url and key else None
     snapshot.metadata["history_context"] = history_context(snapshot,report)
+    snapshot.metadata["recent_history"] = recent_history(snapshot, report)
 
 
 def render_day_memory(snapshot, url, key):
@@ -76,6 +78,19 @@ def render_day_memory(snapshot, url, key):
         st.caption(f"First: {cached.get('first') or '—'} · Last: {cached.get('last') or '—'}")
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
+        recent = snapshot.metadata.get("recent_history", {})
+        st.markdown("### Recent History — Price, Big Player aur Barrier")
+        st.caption(recent.get("message", "Fresh records ka wait"))
+        for window in recent.get("windows", []):
+            st.write(f"**{window['Window']} · {window.get('Observed', 'PENDING')}**")
+            if "Nifty change" in window:
+                st.write(f"Nifty change: {window['Nifty change']:+.2f} points")
+            st.write(window["Price reaction"])
+            st.caption(window["Flow"])
+        for barrier in recent.get("barriers", []):
+            st.write(f"**{barrier['Level']}** · {barrier['Last recorded price']}")
+            st.caption(barrier["Latest recorded reaction"])
+        st.caption("Observed history only. 4-point flat band / 10-score flow gap display filters hain, trade rules nahi. Final AI score/action unchanged. Barrier events limited recent log se hain; no event ka matlab no test nahi.")
         for line in snapshot.metadata.get("history_context",{}).get("lines",[]):
             st.write(line)
         for zone in cached.get("zone_history",[]):
