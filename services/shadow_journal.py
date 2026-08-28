@@ -178,6 +178,11 @@ def _close_open_entries(
             as_of=snapshot.created_at,
         )
         pnl = guardian.unrealized_pnl_rupees
+        entry["last_guardian_check_at"] = snapshot.created_at.isoformat()
+        entry["guardian_status"] = guardian.status
+        changed = True
+        if guardian.status == "EXIT DUE":
+            entry["exit_due_at"] = entry.get("exit_due_at") or snapshot.created_at.isoformat()
         if pnl is not None:
             next_mfe = round(max(float(entry.get("mfe_rupees") or 0.0), pnl), 2)
             next_mae = round(min(float(entry.get("mae_rupees") or 0.0), pnl), 2)
@@ -197,6 +202,7 @@ def _close_open_entries(
             entry["status"] = "CLOSED"
             entry["outcome"] = guardian.instruction
             entry["closed_at"] = snapshot.created_at.isoformat()
+            entry["fill_basis"] = "First observed executable quote, not a guaranteed deadline fill"
             entry["exit_debit_points"] = guardian.current_debit_points
             entry["gross_pnl_rupees"] = round(gross, 2)
             entry["estimated_charges_rupees"] = round(charges, 2)

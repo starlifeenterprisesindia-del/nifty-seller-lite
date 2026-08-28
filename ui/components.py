@@ -846,6 +846,16 @@ def _plan_structure_text(plan: Any | None) -> str:
     return f"SELL {short_text} · HEDGE {hedge_text}"
 
 
+def _render_pair_comparison(plan_map):
+    with st.expander("Strike + hedge comparison — top protected pairs", expanded=False):
+        st.caption("Pair score suitability hai, win probability nahi. Credit/loss per unit; rupees ke liye quantity se multiply. Expiry scenarios intraday estimates nahi.")
+        for pair_name in ("CE SELL", "PE SELL"):
+            pair_plan = plan_map.get(pair_name)
+            if pair_plan and getattr(pair_plan, "pair_comparison", ()):
+                st.write(pair_name)
+                st.dataframe(list(pair_plan.pair_comparison), hide_index=True, use_container_width=True)
+
+
 def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     """Rank all One-Brain strategies with strike and premium-value context."""
 
@@ -930,6 +940,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
 
     styled = frame.style.apply(_strategy_style, axis=1)
     st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
+    _render_pair_comparison(plan_map)
     if not snapshot.market_session.is_live:
         st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
     elif snapshot.decision.final_action == "WAIT":
@@ -1794,6 +1805,7 @@ def render_trade_plan(
     st.dataframe(styled, width="stretch", hide_index=True, row_height=40)
 
     chosen = plan_map.get(selected)
+    _render_pair_comparison(plan_map)
     if chosen and chosen.available:
         st.write("**Selected-plan evidence**")
         for reason in chosen.reasons or ("No candidate reason available",):

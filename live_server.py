@@ -265,6 +265,36 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
     return {"ok": True, "data": DAY_RECORDER.report()}
 
 
+@app.post("/day-memory-export")
+def day_memory_export(x_live_key: str = Header(default="")):
+    import base64
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
+    _authorise("", x_live_key)
+    if not DAY_RECORDER.store:
+        raise HTTPException(status_code=503, detail="Persistent recorder unavailable")
+    try:
+        content = DAY_RECORDER.store.export_bytes()
+    except (ValueError, OSError):
+        raise HTTPException(status_code=503, detail="Export unavailable; existing records preserved")
+    return {"ok": True, "data": {"content_base64": base64.b64encode(content).decode("ascii"),
+                                  "filename": "nifty-evidence.jsonl.gz"}}
+
+
+@app.post("/paper-monitor")
+def paper_monitor(payload: dict[str, Any] = Body(default={}), x_live_key: str = Header(default="")):
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required")
+    _authorise("", x_live_key)
+    if not DAY_RECORDER.paper_monitor:
+        raise HTTPException(status_code=503, detail="Persistent paper monitor unavailable")
+    try:
+        entries = DAY_RECORDER.paper_monitor.register(payload.get("entries", []))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid paper records")
+    return {"ok": True, "data": {"entries": entries}}
+
+
 @app.post("/market-history")
 def market_history(payload: dict[str, Any] = Body(default={}), x_live_key: str = Header(default="")):
     if not os.getenv("LIVE_API_KEY", "").strip():

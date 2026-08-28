@@ -495,13 +495,15 @@ def _select_short_leg(
         if not in_band.empty:
             rows = in_band.reset_index(drop=True)
 
+    # Keep one common liquidity population when comparing individual pairs.
+    # Ranking a single row against itself falsely awards every strike full OI/volume rank.
+    oi_series = rows.get("oi", pd.Series(dtype=float))
+    volume_series = rows.get("volume", pd.Series(dtype=float))
     if only_strike is not None:
         rows = rows[rows["strike"].eq(only_strike)]
     if rows.empty:
         return None, 0.0, ("Selected short is outside the eligible risk band",)
     scores: list[tuple[float, pd.Series, float | None, float, str, str]] = []
-    oi_series = rows.get("oi", pd.Series(dtype=float))
-    volume_series = rows.get("volume", pd.Series(dtype=float))
     for _, row in rows.iterrows():
         strike = float(row["strike"])
         distance_pct = abs(strike - spot) / max(spot, 1.0) * 100.0
@@ -561,6 +563,7 @@ def _select_hedge_leg(
     spot: float,
     target_steps: int = 3,
     max_risk_points: float | None = None,
+    only_hedge: float | None = None,
 ) -> OptionLeg | None:
     """Choose the best farther-OTM hedge, not merely the first available strike.
 
@@ -601,6 +604,8 @@ def _select_hedge_leg(
         ].copy()
     if eligible.empty:
         return None
+    if only_hedge is not None:
+        eligible = eligible[eligible["strike"].eq(only_hedge)]
 
     short_price = _sell_price(short)
     if short_price is None or short_price <= 0:
@@ -697,6 +702,7 @@ def _vertical_plan_for_short(
     hedge_steps: int = 3,
     only_strike: float | None = None,
     max_risk_points: float | None = None,
+    only_hedge: float | None = None,
 ) -> SetupPlan:
     short, quality, reasons = _select_short_leg(
         frame,
@@ -719,6 +725,7 @@ def _vertical_plan_for_short(
         spot=spot,
         target_steps=hedge_steps,
         max_risk_points=max_risk_points,
+        only_hedge=only_hedge,
     )
     if hedge is None:
         return SetupPlan.unavailable(
@@ -797,10 +804,16 @@ def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28
         if not band.empty:
             candidates = band
     strikes = sorted(candidates.strike.unique(), key=lambda value: abs(float(value) - spot))[:6]
+    step = _strike_step(frame)
+    # Hedge candidates need not satisfy the short delta band.
+    hedge_strikes = pd.to_numeric(frame.loc[frame.side.astype(str).str.upper().eq(side), "strike"], errors="coerce").dropna().unique()
+    pairs = [(float(strike), float(hedge)) for strike in strikes for hedge in hedge_strikes
+             if step and step*(1 if max_risk_points is not None else CONFIG.trade_hedge_steps)
+             <= (float(hedge)-float(strike))*(1 if side=="CE" else -1) <= step*CONFIG.trade_max_hedge_steps]
     plans = [_vertical_plan_for_short(name=name, side=side, frame=frame, spot=spot,
               levels=levels, options=options, target_delta=target_delta, min_delta=min_delta,
               max_delta=max_delta, hedge_steps=hedge_steps, only_strike=float(strike),
-              max_risk_points=max_risk_points) for strike in strikes]
+              max_risk_points=max_risk_points, only_hedge=hedge) for strike,hedge in pairs]
     usable = [p for p in plans if p.available and p.max_risk_points and p.estimated_credit_points]
     if not usable:
         detail = f"; one-lot budget limit {max_risk_points:.2f} points" if max_risk_points is not None else ""
@@ -809,7 +822,16 @@ def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28
         reward_risk = plan.estimated_credit_points / plan.max_risk_points
         return plan.quality_score * .75 + min(100, reward_risk * 200) * .25
     chosen = max(usable, key=value)
-    return replace(chosen, reasons=(*chosen.reasons,
+    comparison = tuple({"short": p.short_legs[0].strike, "hedge": p.hedge_legs[0].strike,
+        "credit_points": p.estimated_credit_points, "max_loss_points": p.max_risk_points,
+        "credit_risk": round(p.estimated_credit_points/p.max_risk_points,3),
+        "spot_buffer_points": round(abs(p.short_legs[0].strike-spot),2),
+        "pair_score": round(value(p),1), "quality": p.status,
+        "expiry_pnl_at_short": p.estimated_credit_points,
+        "expiry_pnl_at_hedge": -p.max_risk_points}
+        for p in sorted(usable,key=value,reverse=True)[:3])
+    return replace(chosen, pair_comparison=comparison, reasons=(*chosen.reasons,
+        f"Compared {len(usable)} executable pairs; balanced quality 75% + credit/risk 25%, not win probability",
         f"Pair comparison: net credit/risk {chosen.estimated_credit_points / chosen.max_risk_points:.2f}; expiry payoff, not expected return"))
 
 

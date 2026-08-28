@@ -659,6 +659,17 @@ shadow_entries = process_auto_shadow_journal(
     shadow_journal_store,
     enabled=bool(shadow_journal_enabled),
 )
+if live_server_url and live_server_api_key and shadow_entries:
+    # Server only monitors registered paper positions; local entry qualification stays unchanged.
+    from services.railway_live_client import RailwayDhanClient
+    try:
+        remote = RailwayDhanClient(live_server_url, live_server_api_key, timeout_seconds=3)._post(
+            "/paper-monitor", {"entries": shadow_entries})
+        if remote.get("entries") != shadow_entries:
+            shadow_entries = remote["entries"]
+            shadow_journal_store.save(shadow_entries, sync_cloud=False)
+    except Exception:
+        st.warning("Paper server sync pending — local journal safe; background exit monitoring not confirmed.")
 # Presentation copy only: scores, strikes, final action and execution readiness remain
 # authoritative. It normalizes contradictory labels/reasons for screen and PDF output.
 view_snapshot = prepare_snapshot_for_presentation(snapshot)

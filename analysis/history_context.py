@@ -4,6 +4,8 @@ from datetime import datetime
 
 def history_context(snapshot, report):
     result = {"status": "UNAVAILABLE", "extra_weight": 0, "lines": []}
+    if report and not snapshot.market_session.is_live:
+        return {**result, "status": "REFERENCE", "lines": ["Market closed: saved history reference-only hai."]}
     if not report or report.get("last_error"):
         result["lines"] = ["History unavailable/data gap — current evidence se decision."]
         return result

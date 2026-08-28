@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import gzip
+import os
+import tempfile
 from contextlib import contextmanager
 from datetime import date, datetime, time
 from pathlib import Path
@@ -65,9 +68,9 @@ def compact(snapshot, tracked_strikes=()):
             zone = summary["barrier_map"].get(name)
             if zone:
                 relevant |= (frame["strike"] - (zone["lower"] + zone["upper"]) / 2).abs() <= 50
-        for name in ("ce_sell", "pe_sell", "iron_condor"):
+        for name in ("ce_sell", "pe_sell", "iron_condor", "ce_buy", "pe_buy"):
             plan = summary.get("trade_plan", {}).get(name, {})
-            for leg in plan.get("short_legs", []) + plan.get("hedge_legs", []):
+            for leg in list(plan.get("short_legs", [])) + list(plan.get("hedge_legs", [])) + list(plan.get("long_legs", [])):
                 relevant |= frame["strike"] == leg.get("strike")
         frame = frame[relevant]
     fields = [x for x in ("security_id", "strike", "side", "last_price", "oi", "volume",
@@ -105,6 +108,7 @@ def compact(snapshot, tracked_strikes=()):
         "hours_to_expiry": max(0,(datetime.combine(date.fromisoformat(str(summary["expiry"])),time(15,30),IST)-snapshot.created_at.astimezone(IST)).total_seconds()/3600),
         "future_contract": {"security_id": snapshot.metadata.get("future_security_id"), "expiry": snapshot.metadata.get("future_expiry")},
         "institutional_context": summary.get("institutional_context", {}),
+        "history_analytics": snapshot.metadata.get("history_analytics", {}),
         # Canonical background inputs/results for later diagnosis, not extra votes.
         "evidence": {k: summary.get(k) for k in (
             "core_evidence", "price_action", "patterns", "option_intelligence",
@@ -114,6 +118,45 @@ def compact(snapshot, tracked_strikes=()):
 
 
 class DayMemory:
+    EXPORT_TABLES = ("meta", "samples", "candles", "events", "zones", "cycle_summaries", "signals", "outcomes")
+
+    def _write_export(self, db, destination):
+        """Allowlisted market evidence, transaction-consistent, no runtime secrets."""
+        with gzip.open(destination, "wt", encoding="utf-8") as output:
+            output.write(encode({"format": "nifty-evidence-jsonl", "schema": 1}) + "\n")
+            for table in self.EXPORT_TABLES:
+                cursor = db.execute(f"SELECT * FROM {table}")
+                columns = [d[0] for d in cursor.description]
+                for row in cursor:
+                    output.write(encode({"table": table, "row": dict(zip(columns, row))}) + "\n")
+
+    def export_bytes(self):
+        # Stream into a temporary file to avoid building the uncompressed DB in RAM.
+        with tempfile.TemporaryDirectory(prefix="nifty-export-") as directory:
+            target = Path(directory) / "evidence.jsonl.gz"
+            with self.connect() as db:
+                db.execute("BEGIN")
+                self._write_export(db, target)
+            if target.stat().st_size > 40 * 1024 * 1024:
+                raise ValueError("Export exceeds 40 MB; use the persistent-volume archive")
+            return target.read_bytes()
+
+    def _archive_cycle(self, db, expiry):
+        # An archive failure must abort the rollover BEFORE deleting any rows.
+        directory = self.pathpath.parent / "archives"
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, raw = tempfile.mkstemp(prefix=expiry + "-", suffix=".jsonl.gz", dir=directory)
+        os.close(fd)
+        target = Path(raw)
+        try:
+            self._write_export(db, target)
+            with target.open("rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(target, directory / (expiry + "-evidence.jsonl.gz"))
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+
     def __init__(self, path):
         self.pathpath = Path(path)
         self.pathpath.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +205,7 @@ class DayMemory:
             from services.cycle_outcomes import cycle_summary
             summary = cycle_summary(db, cycle[0])
             db.execute("INSERT OR REPLACE INTO cycle_summaries VALUES (?,?)", (cycle[0], encode(summary)))
+            self._archive_cycle(db, cycle[0])
             # Archive + purge are one transaction. Failure rolls both back.
             db.execute("DELETE FROM cycle_summaries WHERE expiry NOT IN (SELECT expiry FROM cycle_summaries ORDER BY expiry DESC LIMIT 8)")
             for table in ("samples", "candles", "events", "state", "zones", "signals", "outcomes"):
@@ -286,6 +330,7 @@ class DayMemory:
                 return False
             self._event(db, at.isoformat(), "APP AI", "actual", {"action": str(body.get("action", ""))[:80],
                 "reason": str(body.get("reason", ""))[:400], "version": str(body.get("version", ""))[:80]})
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('app_heartbeat',?)", (at.isoformat(),))
             from services.cycle_outcomes import record_signal
             record_signal(db, body)
         return True
@@ -313,6 +358,14 @@ class DayMemory:
             }
             last_app = db.execute("SELECT MAX(at) FROM events WHERE kind='APP AI'").fetchone()[0]
             coverage["last_app_ai_at"] = last_app
+            coverage["last_app_heartbeat_at"] = meta.get("app_heartbeat")
+            coverage["archive_files"] = len(list((self.pathpath.parent / "archives").glob("*-evidence.jsonl.gz")))
+            slots = [a for (a,) in db.execute("SELECT at FROM samples WHERE at LIKE ? ORDER BY at", (str(meta.get("day", "")) + "%",))]
+            if slots:
+                expected = int((datetime.fromisoformat(slots[-1]) - datetime.fromisoformat(slots[0])).total_seconds() // 60) + 1
+                coverage.update(session_samples=len(slots), observed_span_slots=expected,
+                                missing_slots=max(0, expected-len(slots)),
+                                slot_coverage_pct=round(100*len(slots)/max(1,expected), 1))
             zone_history = []
             if recent:
                 for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):

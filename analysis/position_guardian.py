@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, time
 from typing import Any
+from math import isfinite
 
 import pandas as pd
 
@@ -124,7 +125,7 @@ def _number(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if pd.isna(number):
+    if not isfinite(number):
         return None
     return number
 
@@ -137,13 +138,14 @@ def _find_row(frame: pd.DataFrame, side: str, strike: float) -> pd.Series | None
         frame["side"].astype(str).str.upper().eq(side.upper())
         & strike_values.sub(float(strike)).abs().le(0.01)
     ]
-    return None if rows.empty else rows.iloc[0]
+    return rows.iloc[0] if len(rows) == 1 else None
 
 
 def _close_price(role: str, row: pd.Series) -> float | None:
-    if role == "SHORT":
-        return _number(row.get("top_ask_price")) or _number(row.get("last_price"))
-    return _number(row.get("top_bid_price")) or _number(row.get("last_price"))
+    bid, ask = _number(row.get("top_bid_price")), _number(row.get("top_ask_price"))
+    if bid is None or ask is None or not 0 < bid <= ask:
+        return None
+    return ask if role == "SHORT" else bid
 
 
 def _forced_exit_reached(as_of: datetime, raw: Any) -> bool:
@@ -314,7 +316,12 @@ def calculate_position_guardian(
                     clamp(pnl_points / target_capture * 100.0, -200.0, 200.0), 1
                 )
 
-    if blockers:
+    if _forced_exit_reached(as_of, record.get("forced_exit_time")) and (blockers or not option_chain_live or not market_session.is_live):
+        instruction = "EXIT DUE — PRICE UNVERIFIED"
+        status = "EXIT DUE"
+        pnl_rupees = None
+        reasons.append("Time limit reached; no fresh executable price, so no invented exit fill")
+    elif blockers:
         instruction = "DATA BLOCKED"
         status = "DATA BLOCKED"
     elif not market_session.is_live:

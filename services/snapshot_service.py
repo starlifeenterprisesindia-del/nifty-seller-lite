@@ -34,6 +34,7 @@ from analysis.position_guardian import calculate_position_guardian
 from analysis.pre_touch_barriers import calculate_pre_touch_barriers
 from analysis.trade_plan import calculate_trade_plan
 from analysis.volume import calculate_volume_bundle
+from analysis.history_features import oi_history, futures_vwap, institutional_trends
 from config import CONFIG, IST_TIMEZONE
 from models import BigPlayerActivity, DisciplineState, FeedStatus, MarketSnapshot, NewsContext, RiskProfile
 from services.dhan_client import DhanClient
@@ -1229,6 +1230,12 @@ class SnapshotService:
             patterns=patterns,
             metadata={
                 "version": CONFIG.version,
+                "history_analytics": {
+                    "oi": oi_history(option_history, option_state_snapshot, live=market_session.is_live and statuses["option_chain"].use_state == "LIVE"),
+                    "vwap": futures_vwap(future_candles_1m, current),
+                    "institutions": institutional_trends(context_entries, current.date()),
+                    "mode": "OBSERVATION ONLY — existing OI votes unchanged; no automatic training",
+                },
                 "read_only": True,
                 "live_trading_ready": market_session.is_live
                 and statuses["quotes"].use_state == "LIVE"

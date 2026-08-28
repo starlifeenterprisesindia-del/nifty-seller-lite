@@ -619,6 +619,7 @@ class SetupPlan:
     # Buy plans use one primary long leg and a debit instead of short+hedge credit.
     long_legs: tuple[OptionLeg, ...] = ()
     estimated_debit_points: float | None = None
+    pair_comparison: tuple[dict, ...] = ()
 
     @property
     def available(self) -> bool:

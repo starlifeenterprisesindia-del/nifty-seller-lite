@@ -2,6 +2,7 @@
 from datetime import datetime
 from dataclasses import asdict
 import hashlib
+import base64
 
 import streamlit as st
 
@@ -44,7 +45,7 @@ def sync_day_memory(snapshot, url, key):
     now = datetime.now().timestamp()
     connection = hashlib.sha256(f"{url}|{key}".encode()).hexdigest()
     if st.session_state.get("day_memory_connection") != connection:
-        for name in ("day_memory_report", "day_memory_error", "day_memory_fetch_at"):
+        for name in ("day_memory_report", "day_memory_error", "day_memory_fetch_at", "evidence_download"):
             st.session_state.pop(name,None)
         st.session_state.day_memory_connection = connection
     if url and key and now-st.session_state.get("day_memory_fetch_at",0)>=60:
@@ -92,7 +93,8 @@ def render_day_memory(snapshot, url, key):
         if coverage:
             st.caption(f"Record schema {coverage.get('record_schema')} · Option rows {coverage.get('option_rows', 0)} · Raw Greeks rows {coverage.get('raw_greeks_rows', 0)}")
             st.caption("Saved modules: " + ", ".join(coverage.get("evidence_fields_saved", [])))
-            st.caption(f"Last app AI event: {coverage.get('last_app_ai_at') or 'Abhi recorded nahi'}; background record alag hai.")
+            st.caption(f"Last AI decision change: {coverage.get('last_app_ai_at') or '—'} · App heartbeat: {coverage.get('last_app_heartbeat_at') or '—'}")
+            st.caption(f"Observed-span coverage: {coverage.get('slot_coverage_pct', '—')}% · Missing minute slots: {coverage.get('missing_slots', '—')}. Yeh data coverage hai, accuracy nahi.")
         else:
             st.caption("Detailed recording coverage unavailable — Railway recorder version check karo.")
         history_feed = snapshot.feed_status.get("analysis_history")
@@ -100,6 +102,29 @@ def render_day_memory(snapshot, url, key):
             st.caption("Calculation history: " + str(history_feed.message))
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
+        if st.button("Prepare full evidence download", key="prepare_evidence_export"):
+            try:
+                export = RailwayDhanClient(url,key,timeout_seconds=30)._post("/day-memory-export", {})
+                st.session_state.evidence_download = base64.b64decode(export["content_base64"], validate=True)
+            except Exception:
+                st.error("Export nahi mila; Railway par matching version aur volume check karo. Records delete nahi kiye.")
+        if st.session_state.get("evidence_download"):
+            st.download_button("Download full recorded evidence", st.session_state.evidence_download,
+                               file_name="nifty-evidence.jsonl.gz", mime="application/gzip")
+        analytics = snapshot.metadata.get("history_analytics", {})
+        st.write("**OI history — pehle aur ab**")
+        st.caption("Extra vote 0: existing OI engine already uses rolling history. Labels inference hain, trader counts nahi.")
+        for window in analytics.get("oi", {}).get("windows", []):
+            st.caption(f"{window['minutes']}m: {window['status']} · Nifty change {window.get('spot_change', '—')}")
+            if window.get("inferred_pressure"):
+                st.caption(f"Pressure: {window['inferred_pressure']} · Price support: {window['price_supports_pressure']} — trader count nahi")
+            if window.get("rows"):
+                st.dataframe(window["rows"], hide_index=True, use_container_width=True)
+        st.write("**Futures VWAP — same instrument**")
+        st.json(analytics.get("vwap", {}), expanded=False)
+        st.write("**FII/DII — prior reported sessions**")
+        st.caption(analytics.get("institutions", {}).get("note", "Pending"))
+        st.dataframe(analytics.get("institutions", {}).get("rows", []), hide_index=True, use_container_width=True)
         recent = snapshot.metadata.get("recent_history", {})
         st.markdown("### Recent History — Price, Big Player aur Barrier")
         st.caption(recent.get("message", "Fresh records ka wait"))

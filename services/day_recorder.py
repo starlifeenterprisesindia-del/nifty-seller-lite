@@ -6,6 +6,7 @@ import os
 import threading
 from datetime import datetime
 from pathlib import Path
+import time as clock
 
 from services.day_memory import DayMemory, IST, recording_time
 
@@ -46,6 +47,9 @@ class DayRecorder:
         self.thread = None
         self.lock_file = None
         self.status = "OFF — DAY_MEMORY_ENABLED=1 aur volume chahiye"
+        self.last_build_seconds = None
+        self.paper_monitor = None
+        self.paper_status = "NOT REGISTERED"
 
     def start(self):
         if os.getenv("DAY_MEMORY_ENABLED") != "1":
@@ -66,6 +70,8 @@ class DayRecorder:
             self.status = "BLOCKED — recorder already running; use one replica"
             return
         self.store = DayMemory(root / "session.sqlite3")
+        from services.paper_monitor import PaperMonitor
+        self.paper_monitor = PaperMonitor(root / "paper_monitor.json")
         self.history_root = root
         self.status = "READY — market-session ka wait"
         self.thread = threading.Thread(target=self._run, args=(root,), daemon=True)
@@ -77,20 +83,31 @@ class DayRecorder:
         while not self.stop_event.is_set():
             now = datetime.now(IST)
             if recording_time(now):
+                started = clock.monotonic()
                 try:
                     if service is None:
                         service = SnapshotService.background_observer(GatewayReader(self.gateway_factory()), root)
                     snapshot = service.build()
                     stored = self.store.record(snapshot)
+                    if self.paper_monitor:
+                        try:
+                            self.paper_monitor.observe(snapshot)
+                            self.paper_status = "OBSERVING REGISTERED PAPER POSITIONS"
+                        except Exception as exc:
+                            self.paper_status = "PAPER MONITOR GAP — " + type(exc).__name__
                     self.status = "RECORDING" if stored else "WAIT — duplicate / data not fresh"
                 except Exception as exc:
                     # Never persist credentials, API error bodies or arbitrary exception text.
                     self.status = "DATA GAP — " + type(exc).__name__
                     self.store.gap(now, self.status)
+                finally:
+                    self.last_build_seconds = round(clock.monotonic() - started, 2)
             else:
                 self.status = "SESSION CLOSED — saved record available"
             # No overlapping builds or catch-up bursts. One sample per minute maximum.
-            self.stop_event.wait(60)
+            # Align to the next wall-clock minute; build time must not accumulate
+            # into a 70/80-second sampling interval. Never replay missed slots.
+            self.stop_event.wait(max(1.0, 60.0 - clock.time() % 60.0))
 
     def stop(self):
         self.stop_event.set()
@@ -114,5 +131,7 @@ class DayRecorder:
                 pass
         health = "NO SAVED SAMPLE" if age is None else "REFERENCE — SESSION CLOSED" if not recording_time(now) else "RECENT SAMPLE" if 0 <= age <= 180 else "RECORDING GAP / STALE"
         return {**data, "recorder_status": self.status, "interval_seconds": 60,
+                "last_build_seconds": self.last_build_seconds,
+                "paper_monitor_status": self.paper_status,
                 "recording_health": health, "last_sample_age_seconds": age,
                 "note": "Background reference, app AI alag. Samples/events limited to observation times; no full replay."}
