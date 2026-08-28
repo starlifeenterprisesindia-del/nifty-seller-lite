@@ -498,6 +498,25 @@ def render_header(snapshot: MarketSnapshot) -> None:
     c4.metric("Created", snapshot.created_at.strftime("%H:%M:%S IST"))
 
 
+def render_greeks_health(frame: pd.DataFrame) -> None:
+    """Contract-specific diagnostics; never changes the snapshot or AI votes."""
+    if "greeks_quality" not in frame:
+        return
+    invalid = ~frame.greeks_quality.isin(["READY", "IV WARNING"])
+    conditional = frame.greeks_quality.eq("IV WARNING")
+    if not (invalid.any() or conditional.any()):
+        return
+    st.caption(f"Greeks: {int(invalid.sum())} contracts unavailable · {int(conditional.sum())} conditional. Detail neeche; market direction ka alag check hai.")
+    with st.expander("Strike-wise Greeks checks", expanded=False):
+        st.write("Sirf affected strike/hedge par restriction hai. Valid Price Action, RSI, OI aur Top-9 analysis chalta rahega. Suitable safe strike na mile to trade WAIT reh sakta hai.")
+        if invalid.any():
+            st.warning("Invalid/missing Greeks: in contracts ki Greek-based ranking aur future premium estimate band. Live quote/OI alag usable hain.")
+        if conditional.any():
+            st.info("CE/PE IV difference: source values retained. Candidate conditional; automatic retest premium disabled. Manual calculator sirf labelled scenario deta hai, exact entry/SL nahi.")
+        columns = [name for name in ("expiry", "strike", "side", "source_implied_volatility", "source_delta", "source_gamma", "source_theta", "source_vega", "iv_pair_ratio", "delta_pair_gap", "greeks_quality", "greeks_reason") if name in frame]
+        st.dataframe(frame.loc[invalid | conditional, columns], hide_index=True, width="stretch")
+
+
 def compact_evidence_note(snapshot: MarketSnapshot, row: dict[str, Any]) -> str:
     """Display-only context; breadth counts never come from evidence scores."""
     if row["Module"] == "NIFTY Top-9":
@@ -1054,18 +1073,7 @@ def render_main_ai_market_view(
         memory = snapshot.metadata.get("history_context", {})
         for line in memory.get("lines", []):
             st.caption("History context: " + line)
-        if "greeks_quality" in snapshot.option_chain:
-            invalid_greeks = int((~snapshot.option_chain.greeks_quality.isin(["READY", "IV WARNING"])).sum())
-            if invalid_greeks:
-                st.warning(f"Greeks check: {invalid_greeks} option rows unavailable/model mismatch. In rows se strike/hedge ranking band; OI/quotes alag usable hain. Broker values force-match nahi ki gayi.")
-            iv_warnings = int(snapshot.option_chain.greeks_quality.eq("IV WARNING").sum())
-            if iv_warnings:
-                st.warning(f"{iv_warnings} rows: CE/PE IV ratio 1.35 se zyada. Yeh API aur Dhan screen mismatch ka proof nahi. Source Greeks retained; candidates conditional, automatic retest estimate disabled.")
-            if "greeks_reason" in snapshot.option_chain:
-                with st.expander("Strike-wise Greeks checks"):
-                    columns = [name for name in ("strike", "side", "source_implied_volatility", "source_delta", "source_gamma", "source_theta", "source_vega", "iv_pair_ratio", "delta_pair_gap", "greeks_quality", "greeks_reason") if name in snapshot.option_chain.columns]
-                    st.caption("Source values API se hain; broker screen se same timestamp par compare karein. Mismatch ko force-match nahi kiya gaya.")
-                    st.dataframe(snapshot.option_chain[columns], hide_index=True, width="stretch")
+        render_greeks_health(snapshot.option_chain)
 
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(

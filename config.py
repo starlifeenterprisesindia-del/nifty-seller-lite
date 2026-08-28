@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.40.5_COMPACT_NOTES"
+    version: str = "2.40.6_LOCAL_GREEKS_GUARD"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5

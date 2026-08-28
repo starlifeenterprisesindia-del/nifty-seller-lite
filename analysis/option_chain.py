@@ -131,11 +131,16 @@ def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
     frame["greeks_reason"] = "Missing/non-finite Greeks, invalid sign or bounds"
     frame.loc[valid, "greeks_quality"] = "READY"
     frame.loc[valid, "greeks_reason"] = "Basic Greeks checks passed; not model accuracy certification"
-    for _, pair in frame.groupby("strike"):
+    pair_keys = [key for key in ("expiry", "strike") if key in frame]
+    for _, pair in frame.groupby(pair_keys):
         ce, pe = pair[pair.side.eq("CE")], pair[pair.side.eq("PE")]
         if len(ce) != 1 or len(pe) != 1:
             continue
         c, p = ce.iloc[0], pe.iloc[0]
+        # An invalid opposite leg must not invalidate a healthy contract.
+        # Pair checks require two individually usable contracts of one expiry.
+        if not valid.loc[pair.index].all():
+            continue
         ivs = [c.implied_volatility, p.implied_volatility]
         if all(pd.notna(v) and isfinite(v) and v > 0 for v in ivs):
             frame.loc[pair.index, "iv_pair_ratio"] = max(ivs) / min(ivs)
