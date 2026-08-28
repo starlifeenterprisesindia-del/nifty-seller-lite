@@ -45,6 +45,7 @@ from services.option_state_store import OptionStateStore
 from services.activity_state_store import ActivityStateStore
 from services.news_service import MarketNewsService
 from services.recent_quotes import record_quotes
+from services.shared_history import bounded
 
 
 IST = ZoneInfo(IST_TIMEZONE)
@@ -736,12 +737,31 @@ class SnapshotService:
             market_session,
             future_volume_live=statuses["future_volume"].use_state == "LIVE",
         )
+        shared = {}
+        history_message = "Local observations"
+        if market_session.is_live and callable(getattr(self.client, "market_history", None)):
+            try:
+                shared = self.client.market_history(expiry or "")
+                if not isinstance(shared, dict):
+                    raise ValueError("Invalid history response")
+                if not all(isinstance(shared.get(k, []), list) for k in ("top9", "options")):
+                    raise ValueError("Invalid history observations")
+                history_message = "Railway + local observations; timestamps checked"
+            except Exception:
+                shared = {}
+                history_message = "Railway history unavailable; local observations only"
         top9_history = []
         if market_session.is_live and statuses["heavyweights"].use_state == "LIVE":
             try:
                 top9_history = record_quotes(analysis_heavyweight_quotes, nifty_quote, current, path=self.recent_quotes_path)
             except OSError:
                 top9_history = []  # no fabricated recent direction if storage unavailable
+        top9_history = bounded(shared.get("top9", []) + top9_history, current, "at")
+        statuses["analysis_history"] = FeedStatus(
+            name="analysis_history", ok=bool(top9_history or shared.get("options")),
+            fetched_at=current, age_seconds=None,
+            message=f"{history_message}; Top-9 samples={len(top9_history)}; oldest={top9_history[0]['at'] if top9_history else 'missing'}; latest={top9_history[-1]['at'] if top9_history else 'missing'}",
+            source="Timestamp-checked market observations", use_state="READY" if top9_history or shared.get("options") else "WARMING UP")
         heavyweights = calculate_heavyweight_bundle(
             analysis_heavyweight_quotes,
             current,
@@ -781,6 +801,7 @@ class SnapshotService:
                 option_state_error = str(exc)
                 option_history = []
 
+        option_history = bounded(shared.get("options", []) + option_history, current, "captured_at", expiry)
         option_intelligence = calculate_option_intelligence(
             current_frame=validated_option_frame,
             spot=float(current_price) if current_price is not None else 0.0,

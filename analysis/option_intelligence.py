@@ -268,7 +268,9 @@ def _choose_history_sample(
 ) -> tuple[dict[str, Any] | None, float | None]:
     tolerance = min(target_seconds * CONFIG.option_window_tolerance_ratio, target_seconds * 0.20)
     minimum_age = max(10.0, target_seconds - tolerance)
-    maximum_age = target_seconds + tolerance
+    # A 60s timer plus fetch latency commonly yields 75-90s observations.
+    # Report actual age; never stretch a one-minute comparison beyond 90s.
+    maximum_age = target_seconds + max(tolerance, min(90.0, target_seconds * 0.5))
     candidates: list[tuple[float, dict[str, Any]]] = []
     for item in history:
         captured_at = _snapshot_time(item)

@@ -110,6 +110,11 @@ class RailwayDhanClient:
     def market_quote(self, instruments: dict[str, list[int]]) -> dict[str, Any]:
         return self._post("/dhan/market-quote", {"instruments": instruments})
 
+    def market_history(self, expiry: str) -> dict[str, Any]:
+        # No Dhan request: read existing recorder observations only.
+        client = RailwayDhanClient(self.base_url, self.api_key, timeout_seconds=3)
+        return client._post("/market-history", {"expiry": expiry})
+
     def intraday_candles(
         self,
         *,

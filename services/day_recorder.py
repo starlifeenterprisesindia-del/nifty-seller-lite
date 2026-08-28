@@ -41,6 +41,7 @@ class DayRecorder:
     def __init__(self, gateway_factory):
         self.gateway_factory = gateway_factory
         self.store = None
+        self.history_root = None
         self.stop_event = threading.Event()
         self.thread = None
         self.lock_file = None
@@ -65,6 +66,7 @@ class DayRecorder:
             self.status = "BLOCKED — recorder already running; use one replica"
             return
         self.store = DayMemory(root / "session.sqlite3")
+        self.history_root = root
         self.status = "READY — market-session ka wait"
         self.thread = threading.Thread(target=self._run, args=(root,), daemon=True)
         self.thread.start()

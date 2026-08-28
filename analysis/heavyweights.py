@@ -134,7 +134,8 @@ def calculate_heavyweight_bundle(
         for observation in history or []:
             try:
                 age = (captured_at - datetime.fromisoformat(observation["at"])).total_seconds()
-                if minutes * 60 <= age <= minutes * 60 + 45:
+                stamp = datetime.fromisoformat(observation["at"])
+                if stamp.date() == captured_at.date() and minutes * 60 <= age <= minutes * 60 + 90:
                     candidates.append((age, observation))
             except (ValueError, KeyError, TypeError):
                 continue

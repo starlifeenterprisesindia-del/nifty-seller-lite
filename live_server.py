@@ -265,6 +265,17 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
     return {"ok": True, "data": DAY_RECORDER.report()}
 
 
+@app.post("/market-history")
+def market_history(payload: dict[str, Any] = Body(default={}), x_live_key: str = Header(default="")):
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
+    _authorise("", x_live_key)
+    from services.shared_history import read_history
+    root = DAY_RECORDER.history_root
+    data = read_history(root, datetime.now(IST), str(payload.get("expiry", ""))) if root else {"options": [], "top9": []}
+    return {"ok": True, "data": data}
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {"service": "nifty-seller-live", "message": "Railway live server is running"}
