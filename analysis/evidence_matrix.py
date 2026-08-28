@@ -244,7 +244,7 @@ def build_module_impact_audit(
 
     The selected setup is used when available; during WAIT the highest existing
     strategy score is the reference architecture. Active points are a display audit
-    of that module's current dominant evidence and confidence, never an order signal.
+    of that module's current dominant evidence, never an order signal.
     """
 
     decision = getattr(snapshot, "decision", None)
@@ -319,8 +319,7 @@ def build_module_impact_audit(
                 else "NORMAL" if points > 0
                 else "NO LIVE NEWS"
             )
-            signed = -points if bias == "BEARISH" else points if bias == "BULLISH" else 0
-            audit[module] = f"{bias} · {severity} · Asar {signed:+d}/9"
+            audit[module] = f"{bias} · {severity} · Risk context; net score effect neeche"
             continue
         elif module == "VIX / Data Integrity":
             vix = getattr(snapshot, "vix_context", None)
@@ -328,18 +327,11 @@ def build_module_impact_audit(
             change = getattr(vix, "change_pct", None)
             regime = str(getattr(vix, "regime", "UNAVAILABLE")).upper()
             movement = str(getattr(vix, "movement", "UNAVAILABLE")).upper()
-            risk_points = (
-                9 if regime == "HIGH" or movement == "RISING FAST"
-                else 6 if regime == "ELEVATED" or movement == "RISING"
-                else 3 if regime == "LOW"
-                else 2 if regime == "NORMAL"
-                else 0
-            )
             value_text = f"{float(value):.2f}" if value is not None else "NA"
             change_text = f"{float(change):+.2f}%" if change is not None else "NA"
             audit[module] = (
                 f"VIX {value_text} ({change_text}) · {regime}/{movement}"
-                f" · Risk {risk_points}/{weights[module]:.0f}"
+                " · Risk context; extra direction weight 0"
             )
             continue
         else:
@@ -358,9 +350,7 @@ def build_module_impact_audit(
             audit[module] = max_text
             continue
         direction, score = max(usable.items(), key=lambda item: item[1])
-        confidence = float(row.get("Confidence %") or 0.0) / 100.0
-        active = maximum * score / 100.0 * confidence
-        audit[module] = f"{max_text} · Abhi {active:.1f} pts {direction}"
+        audit[module] = f"{max_text} · {direction} evidence {score:.1f}/100; actual points neeche"
     return reference, audit
 
 

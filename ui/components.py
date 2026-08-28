@@ -693,6 +693,12 @@ def render_evidence_matrix(
         st.caption(
             f"Current reference: {reference_name}. Barrier extra weight 0; Raw futures 10%; composite Big Player extra 0."
         )
+        actual = getattr(snapshot.decision, "score_audit", {}).get(reference_name, {})
+        if actual:
+            st.write(f"Actual AI calculation — {reference_name}")
+            st.dataframe(pd.DataFrame([{"Calculation": key, "Points": round(value, 2)}
+                                      for key, value in actual.items()]), hide_index=True, width="stretch")
+            st.caption("Base + net adjustments = final fit. Net includes level/risk adjustments, caps and rounding. Evidence quality is separate, not multiplied again. Fit is not profit probability.")
 
 
 
@@ -1004,7 +1010,7 @@ def render_main_ai_market_view(
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
-                ("Structural Direction", direction, f"Completed evidence {direction_score:.0f}/100 · {direction_note}"),
+                ("Main Trend (Core)", direction, f"Core evidence {direction_score:.0f}/100 · {direction_note}"),
                 ("Feed Availability", f"{data_quality:.0f}%", "Feed ready ≠ prediction accuracy"),
                 ("Direction Agreement", f"{direction_agreement:.0f}%", "Core · OI · price · big player"),
                 (
@@ -1031,7 +1037,9 @@ def render_main_ai_market_view(
                 st.warning(f"{iv_warnings} rows: CE/PE IV difference — conditional candidates only, not verified model prices. Independent retest premium estimate disabled for these rows.")
             if "greeks_reason" in snapshot.option_chain:
                 with st.expander("Strike-wise Greeks checks"):
-                    st.dataframe(snapshot.option_chain[["strike", "side", "greeks_quality", "greeks_reason"]], hide_index=True, width="stretch")
+                    columns = [name for name in ("strike", "side", "source_iv", "source_delta", "source_theta", "greeks_quality", "greeks_reason") if name in snapshot.option_chain.columns]
+                    st.caption("Source values API se hain; broker screen se same timestamp par compare karein. Mismatch ko force-match nahi kiya gaya.")
+                    st.dataframe(snapshot.option_chain[columns], hide_index=True, width="stretch")
 
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(

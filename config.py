@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.40.2_SHARED_HISTORY"
+    version: str = "2.40.3_SCORE_AUDIT"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -225,8 +225,8 @@ class AppConfig:
     risk_default_target_capture_pct: float = 35.0
     risk_default_stop_loss_pct: float = 40.0
     risk_default_entry_start: time = time(10, 15)
-    risk_default_entry_end: time = time(11, 30)
-    risk_default_forced_exit: time = time(14, 30)
+    risk_default_entry_end: time = time(15, 0)
+    risk_default_forced_exit: time = time(15, 15)
 
     # Manual post-entry position guardian. Alerts are deterministic and read-only.
     position_profit_protect_pct: float = 70.0

@@ -1369,6 +1369,23 @@ def calculate_final_decision(
     execution_status = "READY" if final_action != "WAIT" else "BLOCKED"
     status = "REFERENCE ONLY" if not market_session.is_live else "READY"
 
+    score_audit = {}
+    for name, evaluation in evaluation_map.items():
+        side = 0 if name in {"PE SELL", "CE BUY"} else 1 if name in {"CE SELL", "PE BUY"} else 2
+        contributions = {
+            "Core (Price + Indicators) 45%": (core.bullish_score, core.bearish_score, core.range_score)[side] * .45,
+            "OI / Options 35%": (options.bullish_score, options.bearish_score, options.range_score)[side] * .35,
+            "Raw Futures 10%": (futures_bull, futures_bear, futures_range)[side] * .10,
+            "Top-9 10%": (heavy_bull, heavy_bear, heavy_range)[side] * .10,
+        }
+        # Capture values from the canonical inputs and final evaluation. Never
+        # multiply evidence quality again in the presentation layer.
+        subtotal = sum(contributions.values())
+        contributions["Base total"] = subtotal
+        contributions["Net adjustments / caps / rounding"] = evaluation.score - subtotal
+        contributions["Final fit"] = evaluation.score
+        score_audit[name] = contributions
+
     return FinalDecision(
         ce_sell=ce_eval,
         pe_sell=pe_eval,
@@ -1378,6 +1395,7 @@ def calculate_final_decision(
         final_action=final_action,
         signal_state=signal_state,
         market_direction=direction,
+        score_audit=score_audit,
         execution_status=execution_status,
         decision_confidence=confidence,
         hedge_required=leader in {"CE SELL", "PE SELL", "IRON CONDOR"},

@@ -676,6 +676,15 @@ def _range_context(
             explanation="Support aur resistance dono reliable tarah resolve nahi hue.",
         )
 
+    if support.upper >= resistance.lower:
+        return BarrierRangeContext(
+            lower=None, upper=None, confidence=0.0, position_pct=None,
+            state="OVERLAPPING ZONES", upside_next_lower=None, upside_next_upper=None,
+            downside_next_lower=None, downside_next_upper=None,
+            breakout_bias="UNCLEAR",
+            explanation="Support/resistance zones overlap — clear trading range nahi. Original levels unchanged; outer boundary reaction ka wait.",
+        )
+
     lower = support.midpoint
     upper = resistance.midpoint
     position = clamp((spot - lower) / max(upper - lower, 1.0) * 100.0, 0.0, 100.0)
@@ -837,6 +846,9 @@ def calculate_barrier_map(
         )
     else:
         summary = f"Barrier map partial hai | Market speed {speed.state} {speed.score:.0f}/100."
+
+    if trading_range.state == "OVERLAPPING ZONES":
+        summary = trading_range.explanation
 
     return BarrierMap(
         current_price=round(spot, 2),

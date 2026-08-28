@@ -558,6 +558,7 @@ class FinalDecision:
     instant_action: str = ""
     signal_state: str = "UNAVAILABLE"
     market_direction: str = "RANGE"
+    score_audit: dict[str, dict[str, float]] = field(default_factory=dict)
     outlook: MarketOutlook = field(
         default_factory=lambda: MarketOutlook(
             bullish_path_pct=33.4,

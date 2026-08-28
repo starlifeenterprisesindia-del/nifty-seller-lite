@@ -121,9 +121,11 @@ def market_rukh_display(snapshot: Any) -> tuple[str, float, str]:
 
     canonical = _upper(getattr(getattr(snapshot, "decision", None), "market_direction", ""))
     if canonical in {"BULLISH", "BEARISH", "RANGE", "MIXED"}:
-        label = {"BULLISH": "UP", "BEARISH": "DOWN"}.get(canonical, canonical)
-        score = {"BULLISH": bullish, "BEARISH": bearish, "RANGE": range_score}.get(canonical, max(bullish, bearish, range_score))
-        return label, score, f"Combined direction {canonical} · Core {core_state}"
+        # This card is structural: do not pair combined direction with core score.
+        core_direction = "BEARISH" if "BEAR" in core_state else "BULLISH" if "BULL" in core_state else "MIXED"
+        label = {"BULLISH": "UP", "BEARISH": "DOWN"}.get(core_direction, "MIXED")
+        score = {"BULLISH": bullish, "BEARISH": bearish}.get(core_direction, range_score)
+        return label, score, f"Core {core_state} · Combined AI direction {canonical}; entry alag check hoti hai"
 
     mixed = (
         "MIXED" in core_state
