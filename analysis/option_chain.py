@@ -126,6 +126,8 @@ def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
         frame.side.eq("PE") & frame.delta.lt(0)
     )
     frame["greeks_quality"] = "UNAVAILABLE"
+    frame["iv_pair_ratio"] = float("nan")
+    frame["delta_pair_gap"] = float("nan")
     frame["greeks_reason"] = "Missing/non-finite Greeks, invalid sign or bounds"
     frame.loc[valid, "greeks_quality"] = "READY"
     frame.loc[valid, "greeks_reason"] = "Basic Greeks checks passed; not model accuracy certification"
@@ -135,6 +137,10 @@ def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
             continue
         c, p = ce.iloc[0], pe.iloc[0]
         ivs = [c.implied_volatility, p.implied_volatility]
+        if all(pd.notna(v) and isfinite(v) and v > 0 for v in ivs):
+            frame.loc[pair.index, "iv_pair_ratio"] = max(ivs) / min(ivs)
+        if all(pd.notna(v) and isfinite(v) for v in (c.delta, p.delta)):
+            frame.loc[pair.index, "delta_pair_gap"] = abs(c.delta - p.delta - 1)
         suspicious_iv = (
             all(pd.notna(v) and v > 0 for v in ivs) and max(ivs) / min(ivs) > 1.35
         )
@@ -146,7 +152,7 @@ def validate_greeks(frame: pd.DataFrame) -> pd.DataFrame:
         if suspicious_iv:
             good_pair_rows = pair.index.intersection(frame.index[valid])
             frame.loc[good_pair_rows, "greeks_quality"] = "IV WARNING"
-            frame.loc[good_pair_rows, "greeks_reason"] = "CE/PE IV difference; model/time assumptions unverified; quote/hedge/risk checks required"
+            frame.loc[good_pair_rows, "greeks_reason"] = "CE/PE IV ratio > 1.35: source values retained; this is not an API-versus-screen mismatch. Pricing assumptions unverified; conditional use only."
         if suspicious_delta:
             frame.loc[pair.index, "greeks_quality"] = "MODEL MISMATCH"
             frame.loc[pair.index, "greeks_reason"] = "CE/PE delta consistency outside tolerance; excluded pending source check"

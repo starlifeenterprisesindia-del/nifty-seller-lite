@@ -909,8 +909,9 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
             subtitle = "REFERENCE ONLY — fresh strategy ranking band"
             structure = snapshot.market_session.message
         else:
-            subtitle = "Koi entry confirmed nahi"
-            structure = str(decision.blocker or "Evidence conflict / confirmation pending")
+            subtitle = f"Reference: {name} · Fit {score:.1f}% — entry confirmed nahi" if plan is not None and plan.available and score > 0 else "Koi usable strike setup nahi — entry confirmed nahi"
+            reference = _plan_structure_text(plan) + " · " if plan is not None and plan.available and score > 0 else ""
+            structure = reference + str(decision.blocker or "Evidence conflict / confirmation pending")
     else:
         css_class = "ready"
         title = decision.final_action
@@ -1034,10 +1035,10 @@ def render_main_ai_market_view(
                 st.warning(f"Greeks check: {invalid_greeks} option rows unavailable/model mismatch. In rows se strike/hedge ranking band; OI/quotes alag usable hain. Broker values force-match nahi ki gayi.")
             iv_warnings = int(snapshot.option_chain.greeks_quality.eq("IV WARNING").sum())
             if iv_warnings:
-                st.warning(f"{iv_warnings} rows: CE/PE IV difference — conditional candidates only, not verified model prices. Independent retest premium estimate disabled for these rows.")
+                st.warning(f"{iv_warnings} rows: CE/PE IV ratio 1.35 se zyada. Yeh API aur Dhan screen mismatch ka proof nahi. Source Greeks retained; candidates conditional, automatic retest estimate disabled.")
             if "greeks_reason" in snapshot.option_chain:
                 with st.expander("Strike-wise Greeks checks"):
-                    columns = [name for name in ("strike", "side", "source_iv", "source_delta", "source_theta", "greeks_quality", "greeks_reason") if name in snapshot.option_chain.columns]
+                    columns = [name for name in ("strike", "side", "source_implied_volatility", "source_delta", "source_gamma", "source_theta", "source_vega", "iv_pair_ratio", "delta_pair_gap", "greeks_quality", "greeks_reason") if name in snapshot.option_chain.columns]
                     st.caption("Source values API se hain; broker screen se same timestamp par compare karein. Mismatch ko force-match nahi kiya gaya.")
                     st.dataframe(snapshot.option_chain[columns], hide_index=True, width="stretch")
 

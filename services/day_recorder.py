@@ -102,5 +102,17 @@ class DayRecorder:
 
     def report(self):
         data = self.store.report() if self.store else {"events": [], "counts": {}}
+        now = datetime.now(IST)
+        last = (data.get("recording_coverage") or {}).get("sample_at") or data.get("last")
+        age = None
+        if last:
+            try:
+                stamp = datetime.fromisoformat(last)
+                if stamp.tzinfo is not None:
+                    age = (now - stamp).total_seconds()
+            except (TypeError, ValueError):
+                pass
+        health = "NO SAVED SAMPLE" if age is None else "REFERENCE — SESSION CLOSED" if not recording_time(now) else "RECENT SAMPLE" if 0 <= age <= 180 else "RECORDING GAP / STALE"
         return {**data, "recorder_status": self.status, "interval_seconds": 60,
+                "recording_health": health, "last_sample_age_seconds": age,
                 "note": "Background reference, app AI alag. Samples/events limited to observation times; no full replay."}

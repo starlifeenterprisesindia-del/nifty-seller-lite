@@ -59,6 +59,17 @@ def sync_day_memory(snapshot, url, key):
     report = st.session_state.get("day_memory_report") if not st.session_state.get("day_memory_error") and url and key else None
     snapshot.metadata["history_context"] = history_context(snapshot,report)
     snapshot.metadata["recent_history"] = recent_history(snapshot, report)
+    # Explicit allowlist: no connection URL/key or arbitrary metadata exported.
+    snapshot.metadata["recording_diagnostics"] = clean({
+        "checked_at": datetime.fromtimestamp(now).astimezone().isoformat(),
+        "report_fetched_at_epoch": st.session_state.get("day_memory_fetch_at"),
+        "available": report is not None,
+        "error": st.session_state.get("day_memory_error"),
+        **({k: report.get(k) for k in ("recorder_status", "recording_health", "last_sample_age_seconds", "interval_seconds", "counts", "first", "last", "cycle_expiry", "bytes", "last_error", "recording_coverage")} if report else {}),
+        "recent_history": snapshot.metadata["recent_history"],
+        "history_context": snapshot.metadata["history_context"],
+        "usage": "OI/Top9 history supplies rolling calculations via analysis_history feed. Diary supplies context only; no extra vote or automatic training.",
+    })
 
 
 def render_day_memory(snapshot, url, key):
@@ -73,9 +84,20 @@ def render_day_memory(snapshot, url, key):
         if not cached:
             return
         st.write(cached.get("recorder_status","Status unavailable"))
+        st.caption("Recording check: " + str(cached.get("recording_health", "Detailed health unavailable")))
         counts = cached.get("counts",{})
         st.caption(f"Cycle expiry: {cached.get('cycle_expiry') or 'Pending'} · Last session: {cached.get('day') or '—'} · Samples {counts.get('samples',0)} · DB {cached.get('bytes',0)/1048576:.2f} MB")
         st.caption(f"First: {cached.get('first') or '—'} · Last: {cached.get('last') or '—'}")
+        coverage = cached.get("recording_coverage") or {}
+        if coverage:
+            st.caption(f"Record schema {coverage.get('record_schema')} · Option rows {coverage.get('option_rows', 0)} · Raw Greeks rows {coverage.get('raw_greeks_rows', 0)}")
+            st.caption("Saved modules: " + ", ".join(coverage.get("evidence_fields_saved", [])))
+            st.caption(f"Last app AI event: {coverage.get('last_app_ai_at') or 'Abhi recorded nahi'}; background record alag hai.")
+        else:
+            st.caption("Detailed recording coverage unavailable — Railway recorder version check karo.")
+        history_feed = snapshot.feed_status.get("analysis_history")
+        if history_feed:
+            st.caption("Calculation history: " + str(history_feed.message))
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
         recent = snapshot.metadata.get("recent_history", {})

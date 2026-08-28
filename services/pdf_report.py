@@ -2233,6 +2233,8 @@ def build_support_bundle(
         archive.writestr("README.txt", "Nifty Seller Lite Support Bundle\n\nSend this single ZIP with the requested brokerage screenshots. It contains no credentials.\n")
         archive.writestr("support_manifest.json", json.dumps(manifest, indent=2, ensure_ascii=True))
         archive.writestr("current_snapshot.json", json.dumps(snapshot.public_summary(), indent=2, ensure_ascii=True))
+        from services.day_memory import clean
+        archive.writestr("recording_diagnostics.json", json.dumps(clean(snapshot.metadata.get("recording_diagnostics", {"available": False, "reason": "Recording report not fetched; live persistence not verified"})), indent=2, ensure_ascii=True))
         if previous_snapshot is not None:
             archive.writestr("previous_snapshot.json", json.dumps(previous_snapshot.public_summary(), indent=2, ensure_ascii=True))
         if shadow_entries is not None:

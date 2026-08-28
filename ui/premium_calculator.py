@@ -175,6 +175,12 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
         if chain_price <= 0:
             st.warning("Selected strike ka premium available nahi hai.")
             return
+        quality = str(row.get("greeks_quality", ""))
+        if quality and quality not in {"READY", "IV WARNING"}:
+            st.warning(f"Current premium ₹{chain_price:,.2f}; Greeks invalid/unavailable hain. Future premium calculation blocked; live bid/ask broker par check karo.")
+            return
+        if quality == "IV WARNING":
+            st.warning("CE/PE IV difference: neeche premiums sirf conditional scenarios hain, verified entry/SL prices nahi. Automatic retest estimate disabled; source values force-match nahi ki gayi.")
         chain_state = snapshot.feed_status.get("option_chain")
         feed_state = str(getattr(chain_state, "use_state", "UNAVAILABLE") or "UNAVAILABLE").upper()
 
@@ -525,5 +531,5 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
                 f"Gamma {detail.current_gamma if detail.current_gamma is not None else '—'} • "
                 f"Theta {detail.current_theta if detail.current_theta is not None else '—'} • "
                 f"Vega {detail.current_vega if detail.current_vega is not None else '—'} • "
-                f"IV {detail.current_iv if detail.current_iv is not None else '—'} • Bharosa {detail.overall_reliability:.0f}/100"
+                f"IV {detail.current_iv if detail.current_iv is not None else '—'} • Estimate quality {detail.overall_reliability:.0f}/100 (win probability nahi) • {detail.status}"
             )

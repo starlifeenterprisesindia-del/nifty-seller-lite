@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 from typing import Any
 
@@ -696,6 +696,9 @@ def calculate_spot_premium_range(
 
     frame = option_chain.copy() if isinstance(option_chain, pd.DataFrame) else pd.DataFrame()
     row = _contract_row(frame, strike=float(strike), side=side)
+    quality = str(row.get("greeks_quality", "")) if row is not None else ""
+    if quality and quality not in {"READY", "IV WARNING"}:
+        raise ValueError("Selected strike Greeks invalid/unavailable; premium projection blocked. Live bid/ask alag check karo.")
     chain_contract_price = _number(row.get("last_price")) if row is not None else None
     bid = _number(row.get("top_bid_price")) if row is not None else None
     ask = _number(row.get("top_ask_price")) if row is not None else None
@@ -785,6 +788,15 @@ def calculate_spot_premium_range(
 
     overall_reliability = round(min(lower.reliability, upper.reliability), 1)
     status = "LIVE ESTIMATE" if feed_state == "LIVE" else "REFERENCE ONLY"
+    if quality == "IV WARNING":
+        # Display ceiling only, not a calibrated probability or a new trade vote.
+        caution = "CE/PE IV ratio warning: unverified source-model scenario, not an entry price."
+        lower = replace(lower, reliability=min(lower.reliability, 35), notes=(*lower.notes, caution))
+        upper = replace(upper, reliability=min(upper.reliability, 35), notes=(*upper.notes, caution))
+        current = replace(current, reliability=min(current.reliability, 35), notes=(*current.notes, caution))
+        decay_scenarios = tuple(replace(item, reliability=min(item.reliability, 35), note=item.note + " · " + caution) for item in decay_scenarios)
+        overall_reliability = min(overall_reliability, 35)
+        status = "CONDITIONAL SCENARIO" if feed_state == "LIVE" else "REFERENCE ONLY"
     favorable = max((lower, upper), key=lambda item: item.total_pnl)
     adverse = min((lower, upper), key=lambda item: item.total_pnl)
     action_word = "sell-exit" if position == "BUY" else "buyback"
@@ -804,6 +816,8 @@ def calculate_spot_premium_range(
         "Demand/OI/volume ko exact rupee contribution nahi diya gaya; live chain/smile adjustment uska market-price proxy hai.",
         "Calculator Main AI ke BUY/SELL/WAIT decision ko change nahi karta.",
     ]
+    if quality == "IV WARNING":
+        warnings.insert(0, "CE/PE IV ratio > 1.35: source Greeks unverified. Conditional scenario only; 35/100 display cap win probability nahi. Automatic retest entry price disabled.")
     if raw_iv is not None and iv is None:
         warnings.append("Dhan chain IV invalid/out-of-range tha; IV ko ignore karke safe fallback use hua.")
     if raw_delta is not None and delta is None:
