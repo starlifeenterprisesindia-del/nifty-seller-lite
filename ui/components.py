@@ -498,6 +498,29 @@ def render_header(snapshot: MarketSnapshot) -> None:
     c4.metric("Created", snapshot.created_at.strftime("%H:%M:%S IST"))
 
 
+def compact_evidence_note(snapshot: MarketSnapshot, row: dict[str, Any]) -> str:
+    """Display-only context; breadth counts never come from evidence scores."""
+    if row["Module"] == "NIFTY Top-9":
+        from math import isfinite
+        values = [getattr(item, "change_15m_pct", None)
+                  for item in snapshot.heavyweights.rows]
+        values = [float(value) for value in values
+                  if value is not None and isfinite(float(value))]
+        if not values:
+            return "15m: warming / data missing"
+        up = sum(value > 0.03 for value in values)
+        down = sum(value < -0.03 for value in values)
+        note = f"15m: {up} Up · {down} Down · {len(values) - up - down} Flat"
+        missing = len(snapshot.heavyweights.rows) - len(values)
+        if missing:
+            note += f" · {missing} pending"
+        return note
+    if row["Module"] in {"3M W/M Pattern", "Special Candle", "Big Player Activity"}:
+        note = str(row.get("Result") or "—").split(" · ")[0]
+        return note if len(note) <= 60 else note[:57] + "…"
+    return "—"
+
+
 def render_evidence_matrix(
     snapshot: MarketSnapshot,
     previous_snapshot: MarketSnapshot | None = None,
@@ -666,23 +689,25 @@ def render_evidence_matrix(
             f'<td class="evt-bear">{score_text(row.get("Bearish %"), "")}</td>'
             f'<td class="evt-neutral">{score_text(row.get("Neutral %"), "")}</td>'
             f'<td class="evt-conf">{confidence}</td>'
+            f'<td class="evt-note">{escape(compact_evidence_note(snapshot, row))}</td>'
             '</tr>'
         )
     table_html = (
         '<style>'
-        '.evt-wrap{overflow:hidden;border:1px solid rgba(127,127,127,.24);border-radius:10px}'
+        '.evt-wrap{overflow-x:auto;border:1px solid rgba(127,127,127,.24);border-radius:10px}'
         '.evt{width:100%;border-collapse:collapse;table-layout:fixed;font-size:.82rem}'
         '.evt th,.evt td{padding:8px;border-bottom:1px solid rgba(127,127,127,.20);text-align:left;vertical-align:middle;overflow-wrap:anywhere}'
         '.evt th{background:rgba(127,127,127,.09);font-weight:800}'
         '.evt tr:last-child td{border-bottom:0}'
-        '.evt-module{width:40%;font-weight:800}.evt-bull,.evt-bear,.evt-neutral{width:13%;text-align:center}.evt-conf{width:21%;text-align:center}'
+        '.evt-module{font-weight:800}.evt-bull,.evt-bear,.evt-neutral{text-align:center}.evt-conf{text-align:center}'
         '.evt-bull{color:#22c55e}.evt-bear{color:#ef4444}.evt-neutral{color:#a3a3a3}'
+        '.evt{min-width:560px}'
         '@media(max-width:760px){'
         '.evt{font-size:.68rem}.evt th,.evt td{padding:7px 3px}'
-        '.evt-module{width:38%}.evt-bull,.evt-bear,.evt-neutral{width:14%}.evt-conf{width:20%}'
         '}'
-        '</style><div class="evt-wrap"><table class="evt"><thead><tr>'
-        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th><th>Evidence quality</th>'
+        '</style><div class="evt-wrap"><table class="evt">'
+        '<colgroup><col style="width:25%"><col style="width:8%"><col style="width:8%"><col style="width:10%"><col style="width:16%"><col style="width:33%"></colgroup><thead><tr>'
+        '<th>Module</th><th class="evt-bull">Bull</th><th class="evt-bear">Bear</th><th class="evt-neutral">Neutral</th><th>Evidence quality</th><th>Short note</th>'
         '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
     )
     st.html(table_html) if hasattr(st, "html") else st.markdown(
