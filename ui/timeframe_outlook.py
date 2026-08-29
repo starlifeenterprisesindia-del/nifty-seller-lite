@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from math import isfinite
 
 import streamlit as st
 
@@ -8,11 +9,21 @@ from models import MarketSnapshot
 
 
 def _pick(bull: float, bear: float, neutral: float) -> tuple[str, float]:
+    def safe(value):
+        try:
+            value = float(value)
+            return max(0.0, value) if isfinite(value) else 0.0
+        except (ValueError, TypeError):
+            return 0.0
     values = {
-        "BULLISH": max(0.0, float(bull)),
-        "BEARISH": max(0.0, float(bear)),
-        "NEUTRAL": max(0.0, float(neutral)),
+        "BULLISH": safe(bull),
+        "BEARISH": safe(bear),
+        "NEUTRAL": safe(neutral),
     }
+    if sum(values.values()) == 0:
+        return "INSUFFICIENT DATA", 0.0
+    if list(values.values()).count(max(values.values())) > 1:
+        return "MIXED", round(max(values.values()) / sum(values.values()) * 100, 1)
     total = sum(values.values()) or 1.0
     direction, raw = max(values.items(), key=lambda item: item[1])
     return direction, round(raw / total * 100.0, 1)
@@ -45,11 +56,8 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
 
     five = _pick(pa3.bullish_score, pa3.bearish_score, pa3.range_score)
     five_reason = _short_reason("3m price action", pa3.structure, _price_action_move(pa3))
-    if live_impulse is not None and getattr(live_impulse, "direction", "RANGE") in {"BULLISH", "BEARISH"}:
-        impulse_score = float(getattr(live_impulse, "score", 0.0) or 0.0)
-        if impulse_score >= 55:
-            five = (str(live_impulse.direction), round(impulse_score, 1))
-            five_reason = _short_reason("Live impulse", live_impulse.state, *(live_impulse.reasons[:2]))
+    # Fast impulse remains a separate early alert. A cached impulse must never
+    # overwrite this snapshot's canonical completed-candle horizon view.
 
     fifteen = _pick(pa15.bullish_score, pa15.bearish_score, pa15.range_score)
     fifteen_reason = _short_reason("15m structure", pa15.structure, _price_action_move(pa15))
@@ -60,20 +68,30 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
     hourly = _pick(core.bullish_score, core.bearish_score, core.range_score)
     hourly_reason = _short_reason("Core structure", core.market_state, core.move_stage, *(core.reasons[:1]))
 
-    return [
-        {"Time": "5 min", "Direction": f"{five[0]} {five[1]:.1f}%", "Kyun": five_reason},
-        {"Time": "15 min", "Direction": f"{fifteen[0]} {fifteen[1]:.1f}%", "Kyun": fifteen_reason},
-        {"Time": "30 min", "Direction": f"{thirty[0]} {thirty[1]:.1f}%", "Kyun": thirty_reason},
-        {"Time": "1 hour", "Direction": f"{hourly[0]} {hourly[1]:.1f}%", "Kyun": hourly_reason},
-    ]
+    rows = [{"Time": label, "Direction": pick[0], "Evidence /100": pick[1], "Kyun": reason}
+            for label, pick, reason in (("5 min", five, five_reason), ("15 min", fifteen, fifteen_reason),
+                                        ("30 min", thirty, thirty_reason), ("1 hour", hourly, hourly_reason))]
+    # Explicit next-session context, not a new weighted model or calibrated forecast.
+    days = snapshot.metadata.get("cycle_recorded_days", 0)
+    direction = str(snapshot.decision.market_direction)
+    agrees = direction in {"BULLISH", "BEARISH"} and hourly[0] == direction
+    rows.append({"Time": "1 day", "Direction": direction if days >= 2 and agrees else "PENDING / MIXED",
+                 "Evidence /100": None,
+                 "Kyun": f"Agle trading session ka provisional context · {days} recorded days · "
+                         + ("Current One-Brain + core agree; gap/news se badal sakta hai" if days >= 2 and agrees
+                            else "History kam ya core/direction conflict; daily prediction verified nahi")})
+    return rows
 
 
 def render_timeframe_outlook(snapshot: MarketSnapshot, live_impulse: Any | None = None) -> None:
     st.subheader("🧭 One-Brain Timeframe Outlook")
     st.caption(
         "Yeh same One-Brain evidence ka horizon view hai—alag signal engine nahi. "
-        "Percent conditional hai, guarantee nahi; final entry status wahi ek One-Brain deta hai."
+        "Score normalized evidence hai, success probability nahi; final entry status wahi ek One-Brain deta hai. "
+        "1 day = agla trading session, abhi provisional context; naya daily-trained model nahi."
     )
+    if not snapshot.market_session.is_live:
+        st.info("Last-session outlook — market closed; live prediction nahi.")
     st.dataframe(
         build_timeframe_rows(snapshot, live_impulse),
         width="stretch",

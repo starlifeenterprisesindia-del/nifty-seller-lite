@@ -211,6 +211,7 @@ class DayMemory:
             for table in ("samples", "candles", "events", "state", "zones", "signals", "outcomes"):
                 db.execute(f"DELETE FROM {table}")
             db.execute("INSERT OR REPLACE INTO meta VALUES ('cycle',?)", (expiry,))
+            db.execute("DELETE FROM meta WHERE key='cycle_price_strikes'")
         if not row or day != row[0]:
             # Preserve historical observations; restart live pattern phases each session.
             for table in ("state", "zones"):
@@ -247,11 +248,21 @@ class DayMemory:
         with self.connect() as db:
             tracked = {leg["strike"] for raw, in db.execute("SELECT body FROM signals WHERE (SELECT COUNT(*) FROM outcomes WHERE signal_id=signals.id)<3")
                        for leg in json.loads(raw).get("legs", [])}
+            pinned = db.execute("SELECT value FROM meta WHERE key='cycle_price_strikes'").fetchone()
+            if pinned:
+                saved = json.loads(pinned[0])
+                if saved.get("expiry") == str(snapshot.public_summary()["expiry"]):
+                    tracked.update(saved.get("strikes", []))
         body = compact(snapshot, tracked)
         stamp = at.isoformat()
         slot = at.replace(second=0, microsecond=0).isoformat()
         with self.connect() as db:
             self._roll(db, at.date().isoformat(), str(body["expiry"]))
+            if body["options"] and not db.execute("SELECT 1 FROM meta WHERE key='cycle_price_strikes'").fetchone():
+                # Retain the initial observed strike set when spot moves away.
+                # No extra broker request; absent source rows still remain missing.
+                strikes = sorted({r["strike"] for r in body["options"] if r.get("strike") is not None})[:64]
+                db.execute("INSERT INTO meta VALUES ('cycle_price_strikes',?)", (encode({"expiry": str(body["expiry"]), "strikes": strikes}),))
             if db.execute("SELECT 1 FROM samples WHERE at=?", (slot,)).fetchone():
                 return False
             last = db.execute("SELECT at FROM samples ORDER BY at DESC LIMIT 1").fetchone()
@@ -346,6 +357,12 @@ class DayMemory:
             outcomes = [{"at": a, "horizon_minutes": h, **json.loads(b)} for a,h,b in db.execute(
                 "SELECT signals.at,outcomes.horizon,outcomes.body FROM outcomes JOIN signals ON signals.id=outcomes.signal_id ORDER BY signals.id DESC,horizon LIMIT 30")]
             recent = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 20")]
+            from analysis.cycle_prices import cycle_prices
+            # Read only price fields, not full evidence payloads; no new feed calls.
+            cycle_view = cycle_prices((json.loads(r[0]) for r in db.execute(
+                "SELECT json_object('at',json_extract(body,'$.at'),'expiry',json_extract(body,'$.expiry'),"
+                "'spot',json_extract(body,'$.spot'),'feeds',json_extract(body,'$.feeds'),"
+                "'options',json_extract(body,'$.options')) FROM samples ORDER BY at")), meta.get("cycle"))
             latest = recent[0] if recent else {}
             latest_options = latest.get("options", [])
             coverage = {
@@ -383,6 +400,7 @@ class DayMemory:
                 "last_error": json.loads(meta.get("last_error", "null")), "events": events,
                 "cycle_expiry": meta.get("cycle"), "cycle_summaries": summaries, "outcomes": outcomes,
                 "zone_history": zone_history,
+                "cycle_prices": cycle_view,
                 "recording_coverage": coverage,
                 "recent_context": [{k: s.get(k) for k in ("at", "expiry", "version", "spot", "direction", "activity", "feeds", "barriers", "future_contract")} for s in recent],
                 "bytes": self.pathpath.stat().st_size}

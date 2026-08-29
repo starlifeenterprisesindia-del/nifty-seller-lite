@@ -60,6 +60,7 @@ def sync_day_memory(snapshot, url, key):
     report = st.session_state.get("day_memory_report") if not st.session_state.get("day_memory_error") and url and key else None
     snapshot.metadata["history_context"] = history_context(snapshot,report)
     snapshot.metadata["recent_history"] = recent_history(snapshot, report)
+    snapshot.metadata["cycle_recorded_days"] = len((report or {}).get("cycle_prices", {}).get("days", []))
     # Explicit allowlist: no connection URL/key or arbitrary metadata exported.
     snapshot.metadata["recording_diagnostics"] = clean({
         "checked_at": datetime.fromtimestamp(now).astimezone().isoformat(),
@@ -87,6 +88,7 @@ def render_day_memory(snapshot, url, key):
         st.write(cached.get("recorder_status","Status unavailable"))
         st.caption("Recording check: " + str(cached.get("recording_health", "Detailed health unavailable")))
         counts = cached.get("counts",{})
+        render_cycle_prices(cached.get("cycle_prices", {}))
         st.caption(f"Cycle expiry: {cached.get('cycle_expiry') or 'Pending'} · Last session: {cached.get('day') or '—'} · Samples {counts.get('samples',0)} · DB {cached.get('bytes',0)/1048576:.2f} MB")
         st.caption(f"First: {cached.get('first') or '—'} · Last: {cached.get('last') or '—'}")
         coverage = cached.get("recording_coverage") or {}
@@ -164,3 +166,43 @@ def render_day_memory(snapshot, url, key):
             st.write("Completed expiry cycles")
             st.json(cached["cycle_summaries"],expanded=False)
         st.caption("Latest 30 events shown; diary retains current-cycle detail. Background direction app ke manual context se different ho sakti hai. App AI events sirf app fetch hone par.")
+
+
+def render_cycle_prices(view):
+    from analysis.cycle_prices import selected_rows
+    import pandas as pd
+    with st.expander("Expiry-cycle Price History — 9:30 / 3:30 CE + PE", expanded=False):
+        st.caption(f"Expiry: {view.get('expiry') or 'Pending'} · Recorded observations only; extra AI vote 0.")
+        if not view.get("contracts"):
+            st.info("Valid option history abhi nahi. Missing records backfill nahi kiye jayenge.")
+            return
+        choices = {side: [c for c in view["contracts"] if c["side"] == side] for side in ("CE", "PE")}
+        selected = {}
+        for side in ("CE", "PE"):
+            if not choices[side]:
+                selected[side] = None
+                continue
+            labels = {c["key"]: f"{c['strike']:,.0f} {side} · ID {c['security_id']}" for c in choices[side]}
+            selected[side] = st.selectbox(f"{side} contract", list(labels), format_func=labels.get,
+                                         key=f"cycle_price_{view.get('expiry')}_{side}")
+        rows = selected_rows(view, selected["CE"], selected["PE"])
+        st.dataframe(pd.DataFrame(rows).drop(columns="Observed at"), hide_index=True, use_container_width=True)
+        st.caption("Blank = Data missing. Exact target-minute snapshot only; 15:28 ko 15:30 nahi banaya. LTP last trade hai, executable bid/ask ya official settlement nahi.")
+        with st.expander("Daily change, OI / IV aur observed high-low"):
+            detail = []
+            for day in view.get("days", []):
+                pair = [r for r in rows if r["Din"] == day["day"]]
+                record = {"Din": day["day"], "Nifty observed high": day["observed_high"], "Nifty observed low": day["observed_low"], "Samples": day["samples"]}
+                for label in ("Nifty LTP", "CE LTP", "PE LTP"):
+                    start, end = pair[0][label], pair[1][label]
+                    record[label + " change"] = round(end-start, 2) if start is not None and end is not None else None
+                    record[label + " change %"] = round((end-start)/start*100, 2) if start and end is not None else None
+                for side in ("CE", "PE"):
+                    record[side+" observed high"] = day["contracts"].get(selected[side], {}).get("observed_high")
+                    record[side+" observed low"] = day["contracts"].get(selected[side], {}).get("observed_low")
+                detail.append(record)
+            st.dataframe(detail, hide_index=True, use_container_width=True)
+            for row in view.get("rows", []):
+                st.caption(f"{row['day']} {row['time']} · Observed: {row['observed_at'] or 'Data missing'}")
+                st.json({side: row["options"].get(selected[side], {}) for side in ("CE", "PE")}, expanded=False)
+            st.caption("High/low saved minute LTP ka hai, tick-level daily high/low nahi. Missing days/strikes ka data invent nahi hota. OI/IV change se cause prove nahi hota.")
