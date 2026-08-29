@@ -365,17 +365,29 @@ class DayMemory:
                 "'options',json_extract(body,'$.options')) FROM samples ORDER BY at")), meta.get("cycle"))
             latest = recent[0] if recent else {}
             latest_options = latest.get("options", [])
+            qualities = {}
+            for option in latest_options:
+                quality = str(option.get("greeks_quality") or "UNAVAILABLE")
+                qualities[quality] = qualities.get(quality, 0) + 1
             coverage = {
                 "record_schema": latest.get("record_schema", 1) if latest else None,
                 "sample_at": latest.get("at"),
                 "option_rows": len(latest_options),
                 "raw_greeks_rows": sum(all(r.get("source_" + key) is not None for key in ("implied_volatility", "delta", "gamma", "theta", "vega")) for r in latest_options),
+                "usable_greeks_rows": sum(r.get("greeks_quality") in ("READY", "IV WARNING") for r in latest_options),
+                "greeks_quality_counts": qualities,
                 "evidence_fields_saved": [k for k, v in (latest.get("evidence") or {}).items() if v is not None],
                 "note": "Saved fields != valid/fresh evidence. Feed states and module status must also pass. Older records are not backfilled.",
             }
             last_app = db.execute("SELECT MAX(at) FROM events WHERE kind='APP AI'").fetchone()[0]
             coverage["last_app_ai_at"] = last_app
             coverage["last_app_heartbeat_at"] = meta.get("app_heartbeat")
+            coverage["last_recorder_snapshot_at"] = latest.get("at")
+            coverage["last_recorder_direction"] = latest.get("direction")
+            coverage["last_recorder_action"] = latest.get("background_action")
+            last_top9 = (latest.get("evidence") or {}).get("heavyweights") or {}
+            coverage["last_recorded_top9_state"] = last_top9.get("recent_state") or last_top9.get("state")
+            coverage["last_recorded_top9_move_pct"] = last_top9.get("recent_weighted_move_pct", last_top9.get("weighted_move_pct"))
             coverage["archive_files"] = len(list((self.pathpath.parent / "archives").glob("*-evidence.jsonl.gz")))
             slots = [a for (a,) in db.execute("SELECT at FROM samples WHERE at LIKE ? ORDER BY at", (str(meta.get("day", "")) + "%",))]
             if slots:
@@ -383,6 +395,9 @@ class DayMemory:
                 coverage.update(session_samples=len(slots), observed_span_slots=expected,
                                 missing_slots=max(0, expected-len(slots)),
                                 slot_coverage_pct=round(100*len(slots)/max(1,expected), 1))
+            gap_events = [event for event in events if event.get("kind") == "DATA" and event.get("status") == "GAP"]
+            coverage["recent_gap_events"] = len(gap_events)
+            coverage["coverage_note"] = "Missing minutes are never backfilled; they cannot be used as observed evidence."
             zone_history = []
             if recent:
                 for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
