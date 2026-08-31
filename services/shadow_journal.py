@@ -317,9 +317,13 @@ def process_auto_shadow_journal(
                 "journal_type": "AUTO SHADOW",
                 "real_ai_action": snapshot.decision.final_action,
                 "qualification": (
-                    "ENTRY READY SHADOW"
+                    "QUALIFIED AI TRADE"
                     if snapshot.execution_guard.readiness == "ENTRY READY"
-                    else f"{CONFIG.shadow_journal_min_confidence:.0f}+ TEST CANDIDATE"
+                    else f"EXPERIMENTAL {CONFIG.shadow_journal_min_confidence:.0f}+"
+                ),
+                "counts_for_ai_accuracy": (
+                    snapshot.execution_guard.readiness == "ENTRY READY"
+                    and snapshot.decision.final_action != "WAIT"
                 ),
                 "trade_id": f"SH-{snapshot.created_at:%Y%m%d-%H%M%S}-{len(entries)+1}",
                 "session_date": snapshot.created_at.date().isoformat(),
@@ -327,7 +331,7 @@ def process_auto_shadow_journal(
                 "action": action,
                 "decision_confidence": snapshot.decision.decision_confidence,
                 "strategy_score": _strategy_score(snapshot, action),
-                "score_band": "45–49" if _strategy_score(snapshot, action) < 50 else "50–54" if _strategy_score(snapshot, action) < 55 else "55+",
+                "score_band": "50–54" if _strategy_score(snapshot, action) < 55 else "55–61" if _strategy_score(snapshot, action) < 62 else "62+",
                 "big_player_direction": snapshot.big_player_activity.direction,
                 "big_player_score": snapshot.big_player_activity.score,
                 "big_player_confirmations": snapshot.big_player_activity.confirmation_count,

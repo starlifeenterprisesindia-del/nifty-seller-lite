@@ -31,17 +31,19 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
     dates = sorted({session_date, *(str(x.get("session_date")) for x in entries)}, reverse=True)
     selected_date = st.selectbox("Journal date", dates, key="shadow_history_date")
     today = [item for item in entries if str(item.get("session_date")) == selected_date]
-    closed = [item for item in today if str(item.get("status")).upper() == "CLOSED"]
+    qualified = [item for item in today if bool(item.get("counts_for_ai_accuracy"))]
+    experimental = [item for item in today if not bool(item.get("counts_for_ai_accuracy"))]
+    closed = [item for item in qualified if str(item.get("status")).upper() == "CLOSED"]
     open_items = [item for item in today if str(item.get("status")).upper() == "OPEN"]
     net = sum(float(item.get("net_pnl_rupees") or 0.0) for item in closed)
     wins = sum(float(item.get("net_pnl_rupees") or 0.0) > 0 for item in closed)
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Paper Trades", f"{len(today)}/{CONFIG.shadow_journal_max_trades_per_day}")
+    c1.metric("Qualified / Experimental", f"{len(qualified)} / {len(experimental)}")
     c2.metric("Open", len(open_items))
     c3.metric("Closed", len(closed))
     c4.metric("Wins", wins)
-    c5.metric("Est. Net P&L", f"₹{net:,.0f}")
+    c5.metric("Qualified Net P&L", f"₹{net:,.0f}")
 
     if not today:
         st.info(

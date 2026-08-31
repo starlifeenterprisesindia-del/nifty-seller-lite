@@ -967,10 +967,19 @@ def _apply_runtime_status(
 def _candidate_action(decision: FinalDecision, selected: str) -> str:
     if selected in {"CE BUY", "PE BUY", "CE SELL", "PE SELL"}:
         return selected
-    evaluations = {
-        "CE SELL": decision.ce_sell,
-        "PE SELL": decision.pe_sell,
-    }
+    # A reference candidate must never contradict the same One-Brain direction.
+    # When the final action is WAIT we still show the best compatible protected
+    # idea, but it remains WATCH ONLY until the execution guard becomes ready.
+    direction = str(decision.market_direction or "").upper()
+    if direction == "BULLISH":
+        evaluations = {"PE SELL": decision.pe_sell}
+    elif direction == "BEARISH":
+        evaluations = {"CE SELL": decision.ce_sell}
+    else:
+        evaluations = {
+            "CE SELL": decision.ce_sell,
+            "PE SELL": decision.pe_sell,
+        }
     return max(evaluations, key=lambda name: float(evaluations[name].score))
 
 

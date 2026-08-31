@@ -1,0 +1,17 @@
+NIFTY SELLER LITE v2.41.0 — UPDATE ONLY
+
+This package contains only the production files changed in v2.41.0.
+Upload/replace them at the same paths in the GitHub repository.
+
+Files:
+1. config.py
+2. analysis/trade_plan.py
+3. services/day_memory.py
+4. services/shadow_journal.py
+5. ui/day_memory.py
+6. ui/shadow_journal.py
+7. RELEASE_NOTES_2.41.0.txt
+
+Do not delete other repository files. Commit these replacements together and
+wait for Railway deployment. After deployment, the sidebar version must show:
+2.41.0_TOP9_DIRECTION_JOURNAL_FIX

@@ -93,16 +93,17 @@ def render_day_memory(snapshot, url, key):
         st.caption(f"First: {cached.get('first') or '—'} · Last: {cached.get('last') or '—'}")
         coverage = cached.get("recording_coverage") or {}
         if coverage:
-            st.caption(f"Record schema {coverage.get('record_schema')} · Option rows {coverage.get('option_rows', 0)} · Raw Greeks complete {coverage.get('raw_greeks_rows', 0)} · Greeks usable {coverage.get('usable_greeks_rows', 0)}")
-            quality = coverage.get("greeks_quality_counts") or {}
-            if quality:
-                st.caption("Greeks quality: " + " · ".join(f"{name} {count}" for name, count in sorted(quality.items())))
+            st.caption(f"Record schema {coverage.get('record_schema')} · Option rows {coverage.get('option_rows', 0)} · Raw Greeks rows {coverage.get('raw_greeks_rows', 0)}")
             st.caption("Saved modules: " + ", ".join(coverage.get("evidence_fields_saved", [])))
-            st.caption(f"Background recorder latest: {coverage.get('last_recorder_snapshot_at') or '—'} · Direction {coverage.get('last_recorder_direction') or '—'} · Candidate {coverage.get('last_recorder_action') or '—'}")
-            st.caption(f"Opened app ka last AI sync: {coverage.get('last_app_ai_at') or '—'} · Opened app heartbeat: {coverage.get('last_app_heartbeat_at') or '—'}")
-            if coverage.get("last_recorded_top9_state"):
-                st.caption(f"Last recorded Top-9: {coverage.get('last_recorded_top9_state')} · Move {coverage.get('last_recorded_top9_move_pct', '—')}% (history reference; live vote nahi)")
+            st.caption(f"Last AI decision change: {coverage.get('last_app_ai_at') or '—'} · App heartbeat: {coverage.get('last_app_heartbeat_at') or '—'}")
             st.caption(f"Observed-span coverage: {coverage.get('slot_coverage_pct', '—')}% · Missing minute slots: {coverage.get('missing_slots', '—')}. Yeh data coverage hai, accuracy nahi.")
+            top9 = coverage.get("last_valid_top9") or {}
+            if top9:
+                st.caption(
+                    f"Last valid Top-9: {top9.get('state')} · "
+                    f"15m move {float(top9.get('move_pct') or 0):+.2f}% · "
+                    f"{top9.get('at')} · history reference only"
+                )
         else:
             st.caption("Detailed recording coverage unavailable — Railway recorder version check karo.")
         history_feed = snapshot.feed_status.get("analysis_history")
@@ -193,7 +194,7 @@ def render_cycle_prices(view):
                                          key=f"cycle_price_{view.get('expiry')}_{side}")
         rows = selected_rows(view, selected["CE"], selected["PE"])
         st.dataframe(pd.DataFrame(rows).drop(columns="Observed at"), hide_index=True, use_container_width=True)
-        st.caption("9:30 exact snapshot hai. 15:30 par feed band ho to final 2 minute ka last genuinely-live checkpoint dikh sakta hai; actual time aur Quality column hamesha dikhte hain. Yeh official settlement nahi. LTP last trade hai, executable bid/ask nahi.")
+        st.caption("Blank = Data missing. Exact target-minute snapshot only; 15:28 ko 15:30 nahi banaya. LTP last trade hai, executable bid/ask ya official settlement nahi.")
         with st.expander("Daily change, OI / IV aur observed high-low"):
             detail = []
             for day in view.get("days", []):
