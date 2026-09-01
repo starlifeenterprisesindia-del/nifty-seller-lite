@@ -239,6 +239,44 @@ class SnapshotService:
             return None
 
     @staticmethod
+    def _spot_flatline_run(frame: pd.DataFrame, current: datetime) -> int:
+        """Count contiguous identical current-session 1m bars at the tail.
+
+        A changing fetch/last-trade timestamp is not proof that the underlying
+        price series progressed.  Some expiry-close responses repeat the exact
+        OHLC and cumulative volume on newly timestamped rows.  Keep this as a
+        diagnostic feed guard; it never fabricates a replacement price.
+        """
+
+        required = {"timestamp", "open", "high", "low", "close", "volume"}
+        if frame is None or frame.empty or not required.issubset(frame.columns):
+            return 0
+        tail = frame.copy()
+        stamps = pd.to_datetime(tail["timestamp"], errors="coerce")
+        if getattr(stamps.dt, "tz", None) is None:
+            stamps = stamps.dt.tz_localize(IST_TIMEZONE)
+        else:
+            stamps = stamps.dt.tz_convert(IST_TIMEZONE)
+        tail = tail.loc[stamps.dt.date.eq(current.date())].copy()
+        if tail.empty:
+            return 0
+        tail["_stamp"] = stamps.loc[tail.index]
+        last = tail.iloc[-1]
+        signature = tuple(last.get(key) for key in ("open", "high", "low", "close", "volume"))
+        count = 0
+        previous_stamp = None
+        for _, row in tail.iloc[::-1].iterrows():
+            row_signature = tuple(row.get(key) for key in ("open", "high", "low", "close", "volume"))
+            stamp = row["_stamp"]
+            if row_signature != signature:
+                break
+            if previous_stamp is not None and (previous_stamp - stamp).total_seconds() != 60:
+                break
+            count += 1
+            previous_stamp = stamp
+        return count
+
+    @staticmethod
     def _positive_number(value: Any) -> float | None:
         try:
             number = float(value)
@@ -496,6 +534,13 @@ class SnapshotService:
             quote_candle_divergence is not None
             and quote_candle_divergence <= quote_candle_limit
         )
+        spot_flatline_run = self._spot_flatline_run(candles_1m, current)
+        spot_progression_ok = spot_flatline_run < CONFIG.spot_flatline_min_candles
+        # Before the normal no-new-entry/expiry-close window, a repeated synthetic
+        # price series is a hard live-data failure.  Later it remains recorded as
+        # limited/reference diagnostics so expiry-cycle LTP history is not erased.
+        if current.time().replace(tzinfo=None) < CONFIG.expiry_close_quality_start:
+            quote_candle_aligned = quote_candle_aligned and spot_progression_ok
         market_session = classify_market_session(
             current,
             quote_age_seconds=quote_age,
@@ -595,6 +640,19 @@ class SnapshotService:
                 max_live_age_seconds=CONFIG.candle_max_age_minutes * 60,
             ),
         )
+        statuses["price_progression"] = FeedStatus(
+            name="price_progression",
+            ok=spot_progression_ok,
+            fetched_at=current,
+            age_seconds=latest_1m_age,
+            message=(
+                "NIFTY 1m price series is progressing"
+                if spot_progression_ok
+                else f"SOURCE FLATLINE — last {spot_flatline_run} completed 1m bars repeat exact OHLC and volume"
+            ),
+            source="DhanHQ completed NIFTY 1m candles",
+            use_state=("LIVE" if spot_progression_ok and market_session.is_live else "STALE" if not spot_progression_ok else "REFERENCE"),
+        )
         future_candle_available = (
             not future_candles_3m.empty and not future_candles_15m.empty
         )
@@ -687,6 +745,24 @@ class SnapshotService:
                         if option_integrity_ok
                         else "UNAVAILABLE"
                     ),
+                )
+                expiry_date = pd.Timestamp(expiry).date()
+                expiry_close_limited = (
+                    expiry_date == current.date()
+                    and current.time().replace(tzinfo=None) >= CONFIG.expiry_close_quality_start
+                )
+                statuses["expiry_close_quality"] = FeedStatus(
+                    name="expiry_close_quality",
+                    ok=not expiry_close_limited,
+                    fetched_at=current,
+                    age_seconds=None,
+                    message=(
+                        "EXPIRY CLOSE LIMITED — after 15:15 broker chart/Greeks may stop progressing; option LTP/OI remains observation-only"
+                        if expiry_close_limited
+                        else "Normal intraday evidence window"
+                    ),
+                    source="Expiry date + market clock safety policy",
+                    use_state="LIMITED / REFERENCE" if expiry_close_limited else "READY",
                 )
             else:
                 statuses["option_chain"] = FeedStatus(
@@ -1240,7 +1316,12 @@ class SnapshotService:
                 "live_trading_ready": market_session.is_live
                 and statuses["quotes"].use_state == "LIVE"
                 and statuses["candles"].use_state == "LIVE"
-                and statuses["option_chain"].use_state == "LIVE",
+                and statuses["option_chain"].use_state == "LIVE"
+                and statuses["price_progression"].ok
+                and (
+                    statuses.get("expiry_close_quality") is None
+                    or statuses["expiry_close_quality"].ok
+                ),
                 "top7_configured": list(CONFIG.top7_symbols),
                 "vix_resolved": bool(vix_quote),
                 "vix_security_id": vix_ref.security_id,

@@ -144,6 +144,173 @@ def _futures_activity_scores(
     return 0.0, 0.0, 0.0
 
 
+def _volume_scores(volume: VolumeBundle | None) -> tuple[float, float, float]:
+    """Directional participation only; OI and price structure are not reused."""
+
+    if volume is None or volume.status not in {"READY", "PARTIAL"}:
+        return 0.0, 0.0, 0.0
+    bull = bear = neutral = 0.0
+    ready = 0
+    for item in (volume.three_minute, volume.fifteen_minute):
+        if item.status != "READY":
+            continue
+        ready += 1
+        text = f"{item.move_support} {item.price_direction}".upper()
+        strength = clamp(float(item.confidence), 0.0, 100.0)
+        if "BULLISH" in text and "BEARISH" not in text:
+            bull += strength
+        elif "BEARISH" in text and "BULLISH" not in text:
+            bear += strength
+        else:
+            neutral += strength
+    if not ready:
+        return 0.0, 0.0, 0.0
+    return bull / ready, bear / ready, neutral / ready
+
+
+def _pattern_scores(
+    patterns: PatternEvidenceBundle | None,
+) -> tuple[float, float, float]:
+    """Completed special candle/W-M confirmation as one bounded module."""
+
+    if patterns is None or patterns.status != "READY":
+        return 0.0, 0.0, 0.0
+    bull = bear = 0.0
+    for item in (
+        patterns.wm_3m,
+        patterns.candle_3m,
+        getattr(patterns, "candle_5m", None),
+        getattr(patterns, "candle_15m", None),
+    ):
+        if (
+            item is None
+            or item.status != "READY"
+            or item.direction not in {"BULLISH", "BEARISH"}
+            or item.confidence < CONFIG.pattern_min_brain_confidence
+        ):
+            continue
+        stage = str(item.stage or "").upper()
+        factor = 1.0 if stage == "CONFIRMED" else 0.35 if stage in {"DETECTED", "FORMING", "BREAK DETECTED"} else 0.0
+        points = float(item.confidence) * factor
+        if item.direction == "BULLISH":
+            bull += points
+        else:
+            bear += points
+    bull = clamp(bull, 0.0, 100.0)
+    bear = clamp(bear, 0.0, 100.0)
+    neutral = min(bull, bear) if bull and bear else 0.0
+    if bull and bear:
+        bull *= 0.60
+        bear *= 0.60
+    return bull, bear, neutral
+
+
+def _barrier_scores(
+    levels: LevelBundle,
+    price_action: PriceActionBundle | None,
+) -> tuple[float, float, float]:
+    """Convert directional room into a volatility-aware 0–100 component."""
+
+    if levels.status != "READY":
+        return 0.0, 0.0, 0.0
+    atr = None
+    if price_action is not None:
+        atr = price_action.three_minute.atr14
+    unit = max(18.0, float(atr or 0.0))
+
+    def score(room: float | None) -> float:
+        if room is None or room <= 0:
+            return 0.0
+        return clamp(float(room) / (1.5 * unit) * 100.0, 0.0, 100.0)
+
+    bull = score(levels.upside_room)
+    bear = score(levels.downside_room)
+    range_score = min(bull, bear)
+    return bull, bear, range_score
+
+
+def _combined_activity_scores(
+    futures: tuple[float, float, float],
+    heavy: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Combine raw futures and Top-9 once, without composite Big Player reuse."""
+
+    available = [item for item in (futures, heavy) if any(value > 0 for value in item)]
+    if not available:
+        return 0.0, 0.0, 0.0
+    return tuple(sum(item[index] for item in available) / len(available) for index in range(3))
+
+
+def _timeframe_state(item: Any) -> str:
+    if item is None or str(getattr(item, "status", "")).upper() != "READY":
+        return "UNAVAILABLE"
+    bull = float(getattr(item, "bullish_score", 0.0) or 0.0)
+    bear = float(getattr(item, "bearish_score", 0.0) or 0.0)
+    range_score = float(getattr(item, "range_score", 0.0) or 0.0)
+    if bull >= bear + 8 and bull >= range_score:
+        return "BULLISH"
+    if bear >= bull + 8 and bear >= range_score:
+        return "BEARISH"
+    return "MIXED"
+
+
+def _entry_alignment_blocker(
+    *,
+    setup: str,
+    price_action: PriceActionBundle | None,
+    levels: LevelBundle,
+    volume: VolumeBundle | None,
+    patterns: PatternEvidenceBundle | None,
+) -> str | None:
+    """Hard permission gates: 15m direction, 3m trigger and usable room."""
+
+    desired = _DIRECTION_FROM_ACTION.get(setup)
+    if desired not in {"BULLISH", "BEARISH"}:
+        return None
+    if price_action is None:
+        return "15m/3m alignment unavailable"
+    fifteen = _timeframe_state(price_action.fifteen_minute)
+    three = _timeframe_state(price_action.three_minute)
+    if fifteen != desired:
+        return f"15m permission is {fifteen}; {desired} setup blocked"
+    if three != desired:
+        return f"3m trigger is {three}; {desired} entry not confirmed"
+
+    atr = max(18.0, float(price_action.three_minute.atr14 or 0.0))
+    room = levels.upside_room if desired == "BULLISH" else levels.downside_room
+    if levels.status != "READY" or room is None or float(room) < atr:
+        side = "resistance" if desired == "BULLISH" else "support"
+        shown = "unavailable" if room is None else f"{float(room):.1f} pts"
+        return f"Barrier space to {side} is {shown}; minimum {atr:.1f} pts required"
+
+    if volume is not None and volume.status in {"READY", "PARTIAL"}:
+        view = str(volume.overall_view or "").upper()
+        if desired == "BULLISH" and "BEARISH" in view:
+            return "Futures volume confirms the opposite bearish move"
+        if desired == "BEARISH" and "BULLISH" in view:
+            return "Futures volume confirms the opposite bullish move"
+
+    if patterns is not None and patterns.status == "READY":
+        confirmed_opposite = [
+            item
+            for item in (
+                patterns.wm_3m,
+                patterns.candle_3m,
+                getattr(patterns, "candle_5m", None),
+                getattr(patterns, "candle_15m", None),
+            )
+            if item is not None
+            and str(item.stage).upper() == "CONFIRMED"
+            and item.confidence >= CONFIG.pattern_min_brain_confidence
+            and item.direction in {"BULLISH", "BEARISH"}
+            and item.direction != desired
+        ]
+        if confirmed_opposite:
+            strongest = max(confirmed_opposite, key=lambda item: item.confidence)
+            return f"Confirmed special candle/pattern is {strongest.direction}: {strongest.name}"
+    return None
+
+
 def _buy_level_adjustments(levels: LevelBundle) -> tuple[float, float, list[str], list[str]]:
     ce_adjust = pe_adjust = 0.0
     ce_cautions: list[str] = []
@@ -883,13 +1050,39 @@ def calculate_final_decision(
     heavy_bull, heavy_bear, heavy_range = _heavyweight_scores(heavyweights)
 
     futures_bull, futures_bear, futures_range = _futures_activity_scores(big_player)
+    volume_bull, volume_bear, volume_range = _volume_scores(volume)
+    pattern_bull, pattern_bear, pattern_range = _pattern_scores(patterns)
+    barrier_bull, barrier_bear, barrier_range = _barrier_scores(levels, price_action)
+    activity_bull, activity_bear, activity_range = _combined_activity_scores(
+        (futures_bull, futures_bear, futures_range),
+        (heavy_bull, heavy_bear, heavy_range),
+    )
 
-    def base(core_value, option_value, future_value, heavy_value):
-        return core_value * 0.45 + option_value * 0.35 + future_value * 0.10 + heavy_value * 0.10
+    unified_inputs_ready = price_action is not None and volume is not None and patterns is not None
 
-    base_bull = base(core.bullish_score, options.bullish_score, futures_bull, heavy_bull)
-    base_bear = base(core.bearish_score, options.bearish_score, futures_bear, heavy_bear)
-    base_range = base(core.range_score, options.range_score, futures_range, heavy_range)
+    def unified_base(side: int) -> float:
+        values = (
+            (core.bullish_score, core.bearish_score, core.range_score),
+            (options.bullish_score, options.bearish_score, options.range_score),
+            (volume_bull, volume_bear, volume_range),
+            (activity_bull, activity_bear, activity_range),
+            (barrier_bull, barrier_bear, barrier_range),
+            (pattern_bull, pattern_bear, pattern_range),
+        )
+        weights = (0.40, 0.15, 0.10, 0.10, 0.15, 0.10)
+        return sum(group[side] * weight for group, weight in zip(values, weights))
+
+    if unified_inputs_ready:
+        base_bull, base_bear, base_range = (
+            unified_base(0), unified_base(1), unified_base(2)
+        )
+    else:
+        # Backward-compatible safe fallback for old reports/tests that do not
+        # contain the newer raw modules. Production snapshots always use the
+        # unified path above.
+        base_bull = core.bullish_score * 0.45 + options.bullish_score * 0.35 + futures_bull * 0.10 + heavy_bull * 0.10
+        base_bear = core.bearish_score * 0.45 + options.bearish_score * 0.35 + futures_bear * 0.10 + heavy_bear * 0.10
+        base_range = core.range_score * 0.45 + options.range_score * 0.35 + futures_range * 0.10 + heavy_range * 0.10
     pe = ce_buy = base_bull
     ce = pe_buy = base_bear
     condor = base_range
@@ -911,16 +1104,18 @@ def calculate_final_decision(
     )
 
     (
-        ce_adjust,
-        pe_adjust,
-        condor_adjust,
+        _ce_adjust,
+        _pe_adjust,
+        _condor_adjust,
         ce_level_cautions,
         pe_level_cautions,
         condor_level_cautions,
     ) = _level_adjustments(levels)
-    ce += ce_adjust
-    pe += pe_adjust
-    condor += condor_adjust
+    # In the unified path barrier room already owns 15%; do not add it twice.
+    if not unified_inputs_ready:
+        ce += _ce_adjust
+        pe += _pe_adjust
+        condor += _condor_adjust
 
     (
         ce_buy_level_adjust,
@@ -928,8 +1123,9 @@ def calculate_final_decision(
         ce_buy_level_cautions,
         pe_buy_level_cautions,
     ) = _buy_level_adjustments(levels)
-    ce_buy += ce_buy_level_adjust
-    pe_buy += pe_buy_level_adjust
+    if not unified_inputs_ready:
+        ce_buy += ce_buy_level_adjust
+        pe_buy += pe_buy_level_adjust
 
     (
         ce_buy_momentum_adjust,
@@ -939,8 +1135,9 @@ def calculate_final_decision(
     ) = _directional_momentum_adjustments(
         core=core, price_action=price_action, volume=volume
     )
-    ce_buy += ce_buy_momentum_adjust
-    pe_buy += pe_buy_momentum_adjust
+    if not unified_inputs_ready:
+        ce_buy += ce_buy_momentum_adjust
+        pe_buy += pe_buy_momentum_adjust
 
     # Iron Condor is a range structure, not a generic fallback. A clearly
     # directional core or option-flow read must reduce its fit before ranking.
@@ -964,13 +1161,15 @@ def calculate_final_decision(
             "Core and option flow agree directionally",
         )
 
-    # Patterns trigger aligned alerts/entry timing; no repeated price vote.
-    pattern_ce = pattern_pe = pattern_wait = 0.0
-    pattern_conflict = False
-    # Bullish pattern evidence supports CE BUY; bearish supports PE BUY. The same
-    # bounded source is reused, not double-counted as another independent brain.
-    ce_buy += pattern_pe
-    pe_buy += pattern_ce
+    # Patterns own one explicit 10% component in the unified path.  Legacy
+    # snapshots retain the old bounded adjustment for report compatibility.
+    pattern_ce, pattern_pe, pattern_condor, pattern_wait, pattern_conflict, pattern_notes = _pattern_adjustments(patterns)
+    if not unified_inputs_ready:
+        ce += pattern_ce
+        pe += pattern_pe
+        condor += pattern_condor
+        ce_buy += pattern_pe
+        pe_buy += pattern_ce
 
     # Composite Big Player is confirmation-only.  Its raw futures classification
     # is already represented once above; no composite +points are allowed.
@@ -1229,6 +1428,21 @@ def calculate_final_decision(
     direction = evidence_direction if option_data_available else "UNAVAILABLE"
     score_gap = max(0.0, leader_score - runner_up)
 
+    alignment_blocker = (
+        _entry_alignment_blocker(
+            setup=leader,
+            price_action=price_action,
+            levels=levels,
+            volume=volume,
+            patterns=patterns,
+        )
+        if unified_inputs_ready
+        else None
+    )
+    if alignment_blocker:
+        wait = max(wait, CONFIG.decision_wait_block_threshold)
+        blockers.append(alignment_blocker)
+
     # Same policy as the execution guard; never a duplicate direction vote.
     activity_blocked, activity_note = activity_gate(leader, big_player)
     if market_session.is_live and activity_blocked:
@@ -1236,7 +1450,7 @@ def calculate_final_decision(
         blockers.append(activity_note)
     wait = round(clamp(wait, 0, 100), 1)
 
-    if wait >= CONFIG.decision_wait_block_threshold:
+    if wait >= CONFIG.decision_wait_block_threshold or alignment_blocker:
         instant_action = "WAIT"
     elif (
         leader_score < CONFIG.decision_minimum_score
@@ -1331,9 +1545,17 @@ def calculate_final_decision(
         cautions=(),
     )
 
-    coverage = core.confidence * .45 + options.confidence * .35
-    coverage += 10 if big_player is not None and big_player.status == "READY" else 0
-    coverage += min(10., heavyweights.recent_coverage_pct / max(heavyweights.covered_weight_pct, .01) * 10)
+    if unified_inputs_ready:
+        coverage = core.confidence * .40 + options.confidence * .15
+        coverage += (volume.confidence if volume is not None else 0.0) * .10
+        activity_ready = any(value > 0 for value in (activity_bull, activity_bear, activity_range))
+        coverage += 10.0 if activity_ready else 0.0
+        coverage += 15.0 if levels.status == "READY" else 0.0
+        coverage += 10.0 if patterns is not None and patterns.status == "READY" else 0.0
+    else:
+        coverage = core.confidence * .45 + options.confidence * .35
+        coverage += 10 if big_player is not None and big_player.status == "READY" else 0
+        coverage += min(10., heavyweights.recent_coverage_pct / max(heavyweights.covered_weight_pct, .01) * 10)
     # One risk discount, not two penalties for the same evidence.
     confidence = coverage * max(.35, 1 - max(wait_eval.score, fake_move_risk) / 180)
     confidence = round(clamp(confidence, 0, 95), 1)
@@ -1372,12 +1594,22 @@ def calculate_final_decision(
     score_audit = {}
     for name, evaluation in evaluation_map.items():
         side = 0 if name in {"PE SELL", "CE BUY"} else 1 if name in {"CE SELL", "PE BUY"} else 2
-        contributions = {
-            "Core (Price + Indicators) 45%": (core.bullish_score, core.bearish_score, core.range_score)[side] * .45,
-            "OI / Options 35%": (options.bullish_score, options.bearish_score, options.range_score)[side] * .35,
-            "Raw Futures 10%": (futures_bull, futures_bear, futures_range)[side] * .10,
-            "Top-9 10%": (heavy_bull, heavy_bear, heavy_range)[side] * .10,
-        }
+        if unified_inputs_ready:
+            contributions = {
+                "15m permission + 3m trigger + indicators 40%": (core.bullish_score, core.bearish_score, core.range_score)[side] * .40,
+                "OI / Options flow 15%": (options.bullish_score, options.bearish_score, options.range_score)[side] * .15,
+                "Futures volume 10%": (volume_bull, volume_bear, volume_range)[side] * .10,
+                "Buying/Selling activity (Futures + Top-9) 10%": (activity_bull, activity_bear, activity_range)[side] * .10,
+                "Barrier space 15%": (barrier_bull, barrier_bear, barrier_range)[side] * .15,
+                "Special candle / W-M 10%": (pattern_bull, pattern_bear, pattern_range)[side] * .10,
+            }
+        else:
+            contributions = {
+                "Legacy Core 45%": (core.bullish_score, core.bearish_score, core.range_score)[side] * .45,
+                "Legacy OI / Options 35%": (options.bullish_score, options.bearish_score, options.range_score)[side] * .35,
+                "Legacy Raw Futures 10%": (futures_bull, futures_bear, futures_range)[side] * .10,
+                "Legacy Top-9 10%": (heavy_bull, heavy_bear, heavy_range)[side] * .10,
+            }
         # Capture values from the canonical inputs and final evaluation. Never
         # multiply evidence quality again in the presentation layer.
         subtotal = sum(contributions.values())

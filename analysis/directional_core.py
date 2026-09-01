@@ -1,4 +1,4 @@
-"""Canonical 45-point core. Missing evidence never becomes a range vote."""
+"""Canonical timeframe core. Missing evidence never becomes a range vote."""
 from models import CoreMarketEvidence
 
 
@@ -27,18 +27,21 @@ def indicator_scores(indicators):
 
 
 def calculate_core_market_evidence(price_action, indicators, levels, volume, market_session, *, future_volume_live=True):
-    # Final points: PA25 + EMA3 + MACD8 + RSI9. PA: 15m80/3m20.
+    # Permission/timing core: completed 15m PA 15 + completed 15m
+    # EMA/MACD/RSI 10 + completed 3m trigger 15 = 40 points.  The returned
+    # values remain normalized to 0–100 so the One-Brain can assign its 40%
+    # canonical weight without hidden/double weighting.
     pa3, pa15 = price_action.three_minute, price_action.fifteen_minute
     scores = [0.0, 0.0, 0.0]
     coverage = 0.0
-    for pa, weight in ((pa15, 0.8), (pa3, 0.2)):
+    for pa, points in ((pa15, 15.0), (pa3, 15.0)):
         if pa.status == "READY":
             for idx, value in enumerate((pa.bullish_score, pa.bearish_score, pa.range_score)):
-                scores[idx] += value * weight * 25 / 45
-            coverage += weight * 25 / 45 * 100
-    scores = [a + b * 20 / 45 for a, b in zip(scores, indicator_scores(indicators))]
+                scores[idx] += value * points / 40.0
+            coverage += points / 40.0 * 100
+    scores = [a + b * 10 / 40 for a, b in zip(scores, indicator_scores(indicators))]
     if indicators.fifteen_minute.status == "READY":
-        coverage += 20 / 45 * 100
+        coverage += 10 / 40 * 100
     ordered = sorted(zip(("BULLISH", "BEARISH", "RANGE / MIXED"), scores), key=lambda x: x[1], reverse=True)
     state = ordered[0][0] if ordered[0][1] - ordered[1][1] >= 8 else "MIXED / NO CLEAR CORE EDGE"
     blockers = []

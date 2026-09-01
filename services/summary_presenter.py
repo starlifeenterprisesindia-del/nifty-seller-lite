@@ -21,6 +21,14 @@ def required_live_feed_state(snapshot: MarketSnapshot) -> tuple[bool, str]:
         ok = ok and live
         if not live:
             states.append(f"{key}={item.use_state if item is not None else 'MISSING'}")
+    progression = snapshot.feed_status.get("price_progression")
+    if progression is not None and not progression.ok:
+        ok = False
+        states.append(f"price_progression={progression.use_state}")
+    expiry_quality = snapshot.feed_status.get("expiry_close_quality")
+    if expiry_quality is not None and not expiry_quality.ok:
+        ok = False
+        states.append(f"expiry_close_quality={expiry_quality.use_state}")
     return ok, "PASS / LIVE" if ok else "BLOCKED — " + "; ".join(states)
 
 

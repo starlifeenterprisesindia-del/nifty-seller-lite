@@ -475,6 +475,12 @@ def render_market_session(snapshot: MarketSnapshot) -> None:
         st.success(f"🟢 {session.label} — {session.message}")
     else:
         st.warning(f"🟡 {session.label} — {session.message}")
+    progression = snapshot.feed_status.get("price_progression")
+    if progression is not None and not progression.ok:
+        st.warning(f"⚠️ {progression.message}. Fresh direction/entry par bharosa mat karo.")
+    expiry_quality = snapshot.feed_status.get("expiry_close_quality")
+    if expiry_quality is not None and not expiry_quality.ok:
+        st.warning(f"⏳ {expiry_quality.message}.")
 
 
 def render_header(snapshot: MarketSnapshot) -> None:
@@ -735,7 +741,10 @@ def render_evidence_matrix(
     with st.expander("Weights, result aur last snapshot ka badlav", expanded=False):
         st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
         st.caption(
-            f"Current reference: {reference_name}. Barrier extra weight 0; Raw futures 10%; composite Big Player extra 0."
+            f"Current reference: {reference_name}. Unified One-Brain: "
+            "15m+3m+indicators 40%, OI 15%, futures volume 10%, "
+            "raw Futures+Top-9 activity 10%, barrier room 15%, special candle/W-M 10%. "
+            "Composite Big Player ka extra direction vote 0."
         )
         actual = getattr(snapshot.decision, "score_audit", {}).get(reference_name, {})
         if actual:
@@ -957,16 +966,38 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
 def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     decision = snapshot.decision
     name, score, plan, is_selected = best_existing_candidate(snapshot)
-    if decision.final_action == "WAIT":
+    direction, direction_score, direction_note = market_rukh_display(snapshot)
+    direction_text = {
+        "UP": "Market upar ja sakta hai",
+        "DOWN": "Market neeche ja sakta hai",
+        "MIXED": "Market abhi mixed hai",
+        "RANGE": "Market range me reh sakta hai",
+    }.get(direction, f"Market direction {direction}")
+    entry_ready = snapshot.execution_guard.readiness == "ENTRY READY"
+    if decision.final_action == "WAIT" or not entry_ready:
         css_class = "wait"
         title = "WAIT"
         if not snapshot.market_session.is_live:
             subtitle = "REFERENCE ONLY — fresh strategy ranking band"
             structure = snapshot.market_session.message
+        elif decision.final_action == "WAIT":
+            subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — entry abhi WAIT"
+            reference = (
+                f"Reference {name} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
+                if plan is not None and plan.available and score > 0
+                else ""
+            )
+            structure = (
+                f"Karan: {direction_note}. {reference}"
+                + str(decision.blocker or "Evidence conflict / confirmation pending")
+            )
         else:
-            subtitle = f"Reference: {name} · Fit {score:.1f}% — entry confirmed nahi" if plan is not None and plan.available and score > 0 else "Koi usable strike setup nahi — entry confirmed nahi"
-            reference = _plan_structure_text(plan) + " · " if plan is not None and plan.available and score > 0 else ""
-            structure = reference + str(decision.blocker or "Evidence conflict / confirmation pending")
+            candidate = decision.final_action.replace(" WITH HEDGE", "")
+            subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — ENTRY BLOCKED"
+            structure = (
+                f"Candidate {candidate} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
+                + str((snapshot.execution_guard.blockers or ("Safety confirmation pending",))[0])
+            )
     else:
         css_class = "ready"
         title = decision.final_action

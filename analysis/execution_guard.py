@@ -271,10 +271,10 @@ def calculate_execution_guard(
             "PE SELL": decision.pe_sell,
             "IRON CONDOR": decision.iron_condor,
         }.get(setup)
-        if evaluation is not None and evaluation.score < CONFIG.decision_minimum_score:
+        if evaluation is not None and evaluation.score < CONFIG.execution_minimum_unified_score:
             blockers.append(
                 f"Strategy score {evaluation.score:.1f}% is below "
-                f"{CONFIG.decision_minimum_score:.0f}%"
+                f"entry-ready {CONFIG.execution_minimum_unified_score:.0f}%"
             )
         if decision.decision_confidence < CONFIG.decision_min_core_confidence:
             blockers.append(
@@ -288,12 +288,28 @@ def calculate_execution_guard(
             blockers.append("No protected setup is selected")
         elif plan.status != "READY":
             blockers.append(f"Protected setup is not READY: {plan.blocker}")
+        elif (
+            setup in {"CE SELL", "PE SELL", "IRON CONDOR"}
+            and float(plan.estimated_credit_points or 0.0)
+            < CONFIG.shadow_journal_min_sell_credit_points
+        ):
+            blockers.append(
+                "Seller spread credit "
+                f"{float(plan.estimated_credit_points or 0.0):.2f} pts is below "
+                f"minimum value {CONFIG.shadow_journal_min_sell_credit_points:.1f} pts"
+            )
         if not _fresh_live(feed_status, "quotes"):
             blockers.append("NIFTY quote is not confirmed live")
         if not _fresh_live(feed_status, "candles"):
             blockers.append("Completed candles are not confirmed live")
         if not _fresh_live(feed_status, "option_chain"):
             blockers.append("Option chain is not confirmed live")
+        progression = feed_status.get("price_progression")
+        if progression is not None and not progression.ok:
+            blockers.append("NIFTY price series is flatlined / not progressing")
+        expiry_quality = feed_status.get("expiry_close_quality")
+        if expiry_quality is not None and not expiry_quality.ok:
+            blockers.append("Expiry-close broker data is limited after 15:15")
         ready_windows, flow_mature = _flow_ready(option_intelligence)
         if option_intelligence.status != "READY":
             blockers.append("Options intelligence is not READY")

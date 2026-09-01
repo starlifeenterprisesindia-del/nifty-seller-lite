@@ -11,8 +11,10 @@ from config import CONFIG
 def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
     st.subheader("🧪 Auto Shadow Journal — Paper Trades Only")
     st.caption(
-        f"One-Brain ke {CONFIG.shadow_journal_min_confidence:.0f}%+ qualified setups "
-        "paper-test hote hain; ENTRY READY aur TEST CANDIDATE alag label hote hain. "
+        f"One-Brain ke {CONFIG.shadow_journal_min_confidence:.0f}%+ experimental setups "
+        "tabhi paper-test hote hain jab 15m permission, 3m trigger, barrier room, "
+        "volume aur special-candle conflict gates pass hon. ENTRY READY ke liye "
+        f"unified fit {CONFIG.execution_minimum_unified_score:.0f}+ bhi zaroori hai. "
         "Koi broker order ya real paisa use nahi hota."
     )
     if store is not None:
@@ -47,8 +49,8 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
 
     if not today:
         st.info(
-            f"Aaj abhi koi {CONFIG.shadow_journal_min_confidence:.0f}%+ qualified "
-            "paper candidate record nahi hua. Real entry ke safety gates alag hain."
+            f"Aaj abhi koi {CONFIG.shadow_journal_min_confidence:.0f}%+ gate-passed "
+            "paper candidate record nahi hua."
         )
         return
 

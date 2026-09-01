@@ -65,23 +65,12 @@ def cycle_prices(samples, expiry):
             state["contracts"].setdefault(key, []).append(ltp)
             valid[key] = {k: number(row.get(k)) for k in ("last_price", "oi", "implied_volatility", "top_bid_price", "top_ask_price")}
         slot = stamp.strftime("%H:%M")
-        if slot == "09:30" and slot not in state["slots"]:
-            state["slots"][slot] = {"observed_at": stamp.isoformat(), "spot": spot,
-                                     "options": valid, "checkpoint_quality": "EXACT"}
-        # Dhan can stop marking quote/candle feeds LIVE at the 15:30 boundary.
-        # Preserve the last genuinely-live observation from the final two minutes
-        # instead of inventing an exact 15:30 price or leaving the close blank.
-        # observed_at always exposes the real capture minute.
-        if "15:28" <= slot <= "15:30" and (spot is not None or valid):
-            state["slots"]["15:30"] = {
-                "observed_at": stamp.isoformat(), "spot": spot, "options": valid,
-                "checkpoint_quality": "EXACT" if slot == "15:30" else "LAST LIVE <=15:30",
-            }
+        if slot in ("09:30", "15:30") and slot not in state["slots"]:
+            state["slots"][slot] = {"observed_at": stamp.isoformat(), "spot": spot, "options": valid}
     rows, summaries = [], []
     for day, state in sorted(days.items()):
         for slot in ("09:30", "15:30"):
-            rows.append({"day": day, "time": slot, **state["slots"].get(slot, {
-                "observed_at": None, "spot": None, "options": {}, "checkpoint_quality": "MISSING"})})
+            rows.append({"day": day, "time": slot, **state["slots"].get(slot, {"observed_at": None, "spot": None, "options": {}})})
         prices = state["spot"]
         summaries.append({"day": day, "samples": state["samples"], "observed_high": max(prices) if prices else None,
                           "observed_low": min(prices) if prices else None,
@@ -96,6 +85,5 @@ def selected_rows(view, ce, pe):
         options = row["options"]
         result.append({"Din": row["day"], "Time IST": row["time"], "Nifty LTP": row["spot"],
                        "CE LTP": options.get(ce, {}).get("last_price"), "PE LTP": options.get(pe, {}).get("last_price"),
-                       "Quality": row.get("checkpoint_quality", "MISSING"),
                        "Observed at": row["observed_at"] or "Data missing"})
     return result

@@ -147,7 +147,7 @@ class InstrumentMaster:
                 | frame["symbol"].str.fullmatch("NIFTY", na=False)
                 | (
                     frame["display_name"].str.contains(
-                        r"(^|\s)NIFTY(\s|$)",
+                        r"(?:^|\s)NIFTY(?:\s|$)",
                         regex=True,
                         na=False,
                     )

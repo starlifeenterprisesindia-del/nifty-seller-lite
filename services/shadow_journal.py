@@ -10,6 +10,7 @@ from typing import Any, Iterator
 
 from analysis.position_guardian import create_trade_record, calculate_position_guardian
 from analysis.execution_guard import calculate_execution_guard
+from analysis.decision import _entry_alignment_blocker
 from config import CONFIG
 from models import DisciplineState, MarketSnapshot
 from services.github_journal import GitHubJsonJournal
@@ -235,6 +236,24 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
     }.get(action)
     if selected_plan is None or not selected_plan.available:
         return False, "Protected paper plan is unavailable"
+    alignment_blocker = _entry_alignment_blocker(
+        setup=action,
+        price_action=snapshot.price_action,
+        levels=snapshot.levels,
+        volume=snapshot.volume,
+        patterns=snapshot.patterns,
+    )
+    if alignment_blocker:
+        return False, alignment_blocker
+    if (
+        action in {"CE SELL", "PE SELL", "IRON CONDOR"}
+        and float(selected_plan.estimated_credit_points or 0.0)
+        < CONFIG.shadow_journal_min_sell_credit_points
+    ):
+        return False, (
+            "Protected credit below experimental journal minimum "
+            f"{CONFIG.shadow_journal_min_sell_credit_points:.1f} pts"
+        )
     if snapshot.execution_guard.allowed_lots < 1:
         return False, "One-lot defined risk exceeds configured paper risk budget"
     now_time = snapshot.created_at.timetz().replace(tzinfo=None)
