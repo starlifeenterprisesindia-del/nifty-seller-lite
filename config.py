@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.41.0_TOP9_DIRECTION_JOURNAL_FIX"
+    version: str = "2.42.0_UNIFIED_ONE_BRAIN"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -40,6 +40,8 @@ class AppConfig:
     cas_end: time = time(15, 40)
     market_close: time = time(15, 30)
     derivatives_close: time = time(15, 40)
+    expiry_close_quality_start: time = time(15, 15)
+    spot_flatline_min_candles: int = 4
     nifty: InstrumentRef = InstrumentRef(
         name="NIFTY 50",
         security_id="13",
@@ -151,6 +153,7 @@ class AppConfig:
     temporary_data_retention_hours: int = 24
     decision_minimum_score: float = 62.0
     decision_minimum_margin: float = 12.0
+    execution_minimum_unified_score: float = 75.0
     decision_wait_block_threshold: float = 60.0
     decision_min_option_confidence: float = 58.0
     decision_min_core_confidence: float = 55.0
@@ -242,6 +245,9 @@ class AppConfig:
     shadow_journal_min_confidence: float = 50.0
     shadow_journal_min_strategy_score: float = 50.0
     shadow_journal_min_option_confidence: float = 55.0
+    # Experimental paper entries still need enough credit to survive estimated
+    # charges and one observed-quote slippage step.  This is not an execution rule.
+    shadow_journal_min_sell_credit_points: float = 4.0
     shadow_journal_cooldown_minutes: int = 20
     shadow_journal_estimated_charges_per_trade: float = 40.0
 

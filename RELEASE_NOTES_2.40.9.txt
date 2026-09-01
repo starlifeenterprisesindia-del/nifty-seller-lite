@@ -1,0 +1,10 @@
+Nifty Seller Lite 2.40.9
+
+- Auto Shadow Journal experimental confidence and strategy threshold: 50.
+- Qualified AI trades and experimental WAIT candidates are separated.
+- Experimental candidates no longer count in Qualified AI win rate or P&L.
+- WAIT candidate strategy is direction-compatible:
+  BULLISH -> PE SELL; BEARISH -> CE SELL; MIXED -> best reference only.
+- Day-memory diagnostics retain the last valid Top-9 15-minute state,
+  movement and timestamp as history reference only.
+- Live decision gates and broker-order safety remain unchanged.

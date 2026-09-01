@@ -1,0 +1,7 @@
+Nifty Seller Lite 2.41.2
+
+- Detect repeated synthetic NIFTY 1m OHLC/volume flatlines instead of trusting a fresh timestamp alone.
+- Label the 0DTE post-15:15 broker-data window as limited/reference while retaining observations.
+- Final hero remains WAIT whenever the execution guard is blocked; candidate and entry status are separated.
+- Auto Shadow Journal blocks candidates opposite to completed 15m structure and low-credit seller spreads below 4 points.
+- Fix repeated instrument-master regex warnings that appeared as Railway errors.

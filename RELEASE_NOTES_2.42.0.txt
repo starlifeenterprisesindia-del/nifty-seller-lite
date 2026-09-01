@@ -1,0 +1,11 @@
+Nifty Seller Lite 2.42.0 — Unified One-Brain draft
+
+- Canonical 100-point decision: timeframe/core 40, OI 15, futures volume 10,
+  raw Futures+Top-9 activity 10, barrier space 15, special candle/W-M 10.
+- Completed 15m is permission and completed 3m is the entry trigger.
+- Opposite/mixed timeframes, insufficient ATR-aware barrier room, opposite strong
+  volume or a confirmed opposite special candle force WAIT.
+- Candidate threshold remains 62; ENTRY READY now requires at least 75 plus all
+  execution checks and persistence.
+- Journal and live execution both reject seller spreads below 4 credit points.
+- Includes v2.41.2 flatline, expiry-close limited-mode, UI/guard and Railway warning fixes.

@@ -1,0 +1,6 @@
+Nifty Seller Lite 2.41.1
+
+- Final One-Brain WAIT card now leads with plain market direction.
+- Direction evidence percentage is displayed separately from strategy Fit.
+- A short reason is shown before the CE/PE reference structure.
+- Strategy reference and entry safety gates remain unchanged.
