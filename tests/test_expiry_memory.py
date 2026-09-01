@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace as NS
 
@@ -71,6 +72,26 @@ def test_eight_summaries_and_restart(tmp_path):
     report=DayMemory(path).report()
     assert len(report["cycle_summaries"])==8
     assert report["counts"]["samples"]==1
+
+
+def test_full_cycle_archives_are_automatically_bounded(tmp_path, monkeypatch):
+    from services import day_memory
+    monkeypatch.setattr(day_memory, "CONFIG", replace(
+        day_memory.CONFIG,
+        day_memory_archive_keep_cycles=2,
+        day_memory_archive_max_mb=60,
+    ))
+    directory = tmp_path / "archives"
+    directory.mkdir()
+    for index, name in enumerate(("2026-08-18", "2026-08-25", "2026-09-01")):
+        path = directory / f"{name}-evidence.jsonl.gz"
+        path.write_bytes(b"x" * (index + 1))
+        path.touch()
+    result = DayMemory(tmp_path / "memory.db").prune_archives()
+    assert result["retained"] == 2
+    assert not (directory / "2026-08-18-evidence.jsonl.gz").exists()
+    assert (directory / "2026-08-25-evidence.jsonl.gz").exists()
+    assert (directory / "2026-09-01-evidence.jsonl.gz").exists()
 
 
 def test_legacy_day_db_migration_preserves_data(tmp_path):

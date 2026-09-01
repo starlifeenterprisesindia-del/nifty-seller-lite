@@ -8,6 +8,7 @@ from analysis.presentation_safety import (
     prepare_snapshot_for_presentation,
     safe_brain_hinglish_line,
 )
+from services.summary_presenter import unified_direction_line
 
 
 def fake_snapshot():
@@ -69,6 +70,28 @@ def test_mixed_core_is_not_presented_as_unconditional_up_or_down():
     assert label == "MIXED"  # core card must not borrow combined AI direction
     assert score >= 0
     assert "Core MIXED" in note
+
+
+def test_unified_direction_line_uses_existing_score_audit_not_new_vote():
+    snap = fake_snapshot()
+    snap.market_session = NS(is_live=True)
+    snap.decision.ce_buy = NS(score=20)
+    snap.decision.pe_buy = NS(score=15)
+    snap.decision.ce_sell = NS(score=25, reasons=(), cautions=())
+    snap.decision.pe_sell = NS(score=78, reasons=(), cautions=())
+    snap.decision.iron_condor = NS(score=30, reasons=(), cautions=())
+    snap.decision.score_audit = {
+        "PE SELL": {
+            "15m permission + 3m trigger + indicators 40%": 31.0,
+            "OI / Options flow 15%": 12.0,
+            "Barrier space 15%": 11.0,
+            "Final fit": 78.0,
+        }
+    }
+    line = unified_direction_line(snap)
+    assert "Market upar ja sakta hai" in line
+    assert "78.0/100" in line
+    assert "31.0 pts" in line
 
 
 def test_brain_line_labels_levels_by_actual_side():
