@@ -1,0 +1,9 @@
+Nifty Seller Lite 2.42.1 — Bounded memory + clear One-Brain outlook
+
+- Main AI now shows canonical direction, unified fit and the top three weighted
+  reasons. The fit is explicitly labelled evidence fit, not profit probability.
+- The detailed active expiry cycle remains available in SQLite.
+- Eight compact completed-cycle summaries remain available for comparison.
+- Full compressed evidence archives are automatically bounded to the newest two
+  cycles and 60 MB total (the newest recovery archive is never deleted alone).
+- Existing v2.42.0 One-Brain weights, 15m/3m gates and safety fixes are retained.

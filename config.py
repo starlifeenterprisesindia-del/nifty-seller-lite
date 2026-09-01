@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.42.0_UNIFIED_ONE_BRAIN"
+    version: str = "2.42.1_BOUNDED_MEMORY_OUTLOOK"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -151,6 +151,11 @@ class AppConfig:
     # Automatic housekeeping. Raw/temporary market state is bounded to 24 hours.
     # FII/DII journal, manual trade records and compact learning summaries are excluded.
     temporary_data_retention_hours: int = 24
+    # Expiry recorder storage stays bounded on Railway.  Detailed rows for the
+    # active cycle remain in SQLite; eight compact cycle summaries remain in the
+    # database, while only the newest full compressed archives are retained.
+    day_memory_archive_keep_cycles: int = 2
+    day_memory_archive_max_mb: int = 60
     decision_minimum_score: float = 62.0
     decision_minimum_margin: float = 12.0
     execution_minimum_unified_score: float = 75.0
