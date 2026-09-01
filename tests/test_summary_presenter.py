@@ -37,7 +37,8 @@ def test_simple_view_prioritizes_final_brain_levels_and_one_compact_setup():
     calculator = app.index("render_spot_premium_calculator(view_snapshot)")
     assert main < levels < calculator
     assert 'with st.expander("Risk & one-trade discipline", expanded=False):' not in app
-    assert 'with st.expander("Compact Evidence + Next 5–15 Min Outlook", expanded=False):' in app
+    assert '"Compact Evidence + Next 5–15 Min Outlook"' in app
+    assert 'with persistent_panel(' in app
 
 
 def test_detailed_screen_uses_one_combined_strategy_audit_without_full_planner_duplicate():

@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from analysis.market_session import classify_market_session, feed_use_state
+from config import CONFIG
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -86,7 +87,7 @@ def test_official_preopen_window_is_separate():
 
 def test_closing_auction_is_reference_only_and_blocks_fresh_entry():
     session = classify_market_session(
-        datetime(2026, 8, 17, 15, 20, tzinfo=IST),
+        datetime.combine(datetime(2026, 8, 17).date(), CONFIG.cas_start, tzinfo=IST),
         quote_age_seconds=2,
         has_current_day_candle=True,
         candle_age_seconds=30,

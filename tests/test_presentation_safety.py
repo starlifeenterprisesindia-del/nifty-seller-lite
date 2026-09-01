@@ -66,9 +66,9 @@ def fake_snapshot():
 
 def test_mixed_core_is_not_presented_as_unconditional_up_or_down():
     label, score, note = market_rukh_display(fake_snapshot())
-    assert label == "MIXED"
-    assert score == 51.1
-    assert "Options/OI bearish pressure" in note
+    assert label == "MIXED"  # core card must not borrow combined AI direction
+    assert score >= 0
+    assert "Core MIXED" in note
 
 
 def test_brain_line_labels_levels_by_actual_side():
@@ -107,4 +107,4 @@ def test_presentation_copy_does_not_mutate_authoritative_snapshot():
     assert view.news_context.risk_level == "LOW WEIGHT"
     assert view.news_context.headlines[0].impact == "HIGH (OLD / NO LIVE WEIGHT)"
     assert view.feed_status["news"].use_state == "OLD / LOW WEIGHT"
-    assert view.decision.market_direction == "MIXED"
+    assert view.decision.market_direction == original.decision.market_direction

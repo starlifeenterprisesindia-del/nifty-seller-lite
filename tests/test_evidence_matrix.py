@@ -101,7 +101,7 @@ def test_compact_matrix_has_eleven_rows_and_normalized_directional_scores():
     assert len(rows) == 11
     for row in rows[:9]:
         total = row["Bullish %"] + row["Bearish %"] + row["Neutral %"]
-        assert round(total, 1) == 100.0
+        assert round(total, 1) in {0.0, 100.0}  # absent evidence is zero, not neutral
     assert rows[-1]["Bullish %"] is None
     assert "VIX NA" in rows[-2]["Result"]
 

@@ -276,3 +276,25 @@ def test_selected_ce_buy_plan_is_a_defined_risk_debit_spread():
         assert item.plan.short_legs
         assert not item.plan.hedge_legs
         assert item.plan.short_legs[0].strike > item.plan.long_legs[0].strike
+
+
+def test_wait_candidate_never_opposes_one_brain_direction():
+    bullish = replace(
+        decision("WAIT"),
+        market_direction="BULLISH",
+        ce_sell=StrategyEvaluation("CE SELL", 99, "READY", (), ()),
+        pe_sell=StrategyEvaluation("PE SELL", 30, "READY", (), ()),
+    )
+    bearish = replace(
+        decision("WAIT"),
+        market_direction="BEARISH",
+        ce_sell=StrategyEvaluation("CE SELL", 30, "READY", (), ()),
+        pe_sell=StrategyEvaluation("PE SELL", 99, "READY", (), ()),
+    )
+    common = dict(
+        frame=option_frame(), spot=24350, expiry="2026-07-21",
+        levels=levels(), options=option_intelligence(),
+        market_session=live_session(),
+    )
+    assert calculate_trade_plan(decision=bullish, **common).candidate_setup == "PE SELL"
+    assert calculate_trade_plan(decision=bearish, **common).candidate_setup == "CE SELL"

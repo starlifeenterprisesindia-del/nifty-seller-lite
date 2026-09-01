@@ -56,7 +56,9 @@ def test_pdf_excludes_raw_json_code_appendix_and_uses_clean_breaks():
     root = Path(__file__).resolve().parents[1]
     text = (root / "services" / "pdf_report.py").read_text(encoding="utf-8")
     assert "Canonical Snapshot JSON Summary" not in text
-    assert "json.dumps(" not in text
+    # Support ZIP legitimately serializes JSON; the PDF builder must not embed it.
+    pdf_only = text.split("def build_support_bundle(")[0]
+    assert "json.dumps(" not in pdf_only
     assert 'return "\\n".join' in text
     assert "₹" not in text
 
@@ -142,6 +144,8 @@ def test_support_bundle_is_single_credential_free_handover_zip():
         assert "complete_diagnostic_report.pdf" in names
         assert "current_snapshot.json" in names
         assert "support_manifest.json" in names
+        assert "recording_diagnostics.json" in names
+        assert json.loads(archive.read("recording_diagnostics.json"))["available"] is False
         assert "option_chain.csv" in names
         assert "spot_candles_3m.csv" in names
         manifest = json.loads(archive.read("support_manifest.json"))

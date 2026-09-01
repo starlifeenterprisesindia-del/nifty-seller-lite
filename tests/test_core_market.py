@@ -155,5 +155,5 @@ def test_live_core_does_not_use_stale_futures_volume_direction():
         MarketSession("LIVE", "MARKET OPEN — LIVE DATA", True, "fresh"),
         future_volume_live=False,
     )
-    assert "NIFTY futures volume is not confirmed live" in result.blockers
-    assert result.confidence < 85
+    assert "NIFTY futures volume is not confirmed live" not in result.blockers
+    assert result.confidence == 100  # volume is not a second core direction vote

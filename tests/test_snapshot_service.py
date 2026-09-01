@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from config import CONFIG
 from services.snapshot_service import SnapshotService
 from services.instrument_master import ResolvedInstrument
@@ -116,7 +118,9 @@ def test_weekend_snapshot_is_reference_and_top9_are_present():
     assert len(snapshot.heavyweight_quotes) == 9
     assert snapshot.feed_status["instruments"].use_state == "READY"
     assert snapshot.indicators.three_minute.status == "READY"
-    assert snapshot.indicators.fifteen_minute.status == "READY"
+    # This fixture crosses overnight with only 46 valid 15m bars after filtering.
+    # Never lower the production 50-bar guard to make a synthetic fixture pass.
+    assert snapshot.indicators.fifteen_minute.status.startswith("INSUFFICIENT COMPLETED CANDLES")
 
 
 class StubFutureMaster:
@@ -235,6 +239,33 @@ def test_stale_live_vix_is_not_used_as_fresh_context():
     assert snapshot.vix_context.seller_environment == "VIX DATA UNAVAILABLE"
 
 
+def test_shared_top9_history_reaches_app_calculation(tmp_path):
+    now = datetime(2026, 7, 20, 10, 0, tzinfo=IST)
+
+    class SharedClient(LiveStaleVixClient):
+        def market_history(self, expiry):
+            return {"options": [], "top9": [
+                {"at": (now-timedelta(seconds=seconds)).isoformat(),
+                 "prices": {item.symbol: 99 for item in CONFIG.top7}, "nifty": 24300}
+                for seconds in (970, 250)]}
+
+    service = SnapshotService(SharedClient(), StubMaster(), recent_quotes_path=str(tmp_path / "top9.json"))
+    snapshot = service.build(now)
+    assert snapshot.heavyweights.recent_15m_move_pct is not None
+    assert snapshot.heavyweights.recent_3m_move_pct is not None
+    assert "Railway + local" in snapshot.feed_status["analysis_history"].message
+
+
+def test_shared_history_failure_keeps_app_available(tmp_path):
+    class FailedClient(LiveStaleVixClient):
+        def market_history(self, expiry):
+            raise RuntimeError("Old server endpoint")
+
+    service = SnapshotService(FailedClient(), StubMaster(), recent_quotes_path=str(tmp_path / "top9.json"))
+    snapshot = service.build(datetime(2026, 7, 20, 10, 0, tzinfo=IST))
+    assert "unavailable; local" in snapshot.feed_status["analysis_history"].message
+
+
 def test_dhan_dayfirst_quote_timestamp_is_not_misread_as_monthfirst():
     now = datetime(2026, 8, 3, 12, 35, 7, tzinfo=IST)
     quote = {"last_trade_time": "03/08/2026 12:35:00"}
@@ -257,3 +288,22 @@ def test_quote_timestamp_parser_accepts_iso_epoch_and_time_only():
     assert iso_age == 7.0
     assert epoch_age == 7.0
     assert time_age == 7.0
+
+
+def test_repeated_timestamped_spot_bars_are_detected_as_flatline():
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2026-09-01 15:18:00+05:30", periods=10, freq="1min"
+            ),
+            "open": 23980.55,
+            "high": 23980.55,
+            "low": 23980.55,
+            "close": 23980.55,
+            "volume": 1129714.0,
+        }
+    )
+    now = datetime(2026, 9, 1, 15, 28, tzinfo=IST)
+    assert SnapshotService._spot_flatline_run(frame, now) == 10
+    frame.loc[len(frame) - 1, "close"] = 23981.0
+    assert SnapshotService._spot_flatline_run(frame, now) == 1

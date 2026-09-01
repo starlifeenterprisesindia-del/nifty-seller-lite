@@ -140,7 +140,8 @@ def test_short_covering_is_not_labelled_as_fresh_long_build_up():
     assert result.direction == "BUYING"
     assert result.activity_type == "SHORT COVERING"
     assert "fresh long buying confirm nahi" in " | ".join(result.cautions)
-    assert "Purane sellers" in result.participant_explanation
+    assert "SHORT COVERING" in result.participant_explanation
+    assert "unconfirmed" in result.participant_explanation
     assert "fresh long buying" in result.next_confirmation
 
 

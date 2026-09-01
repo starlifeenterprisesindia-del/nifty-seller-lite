@@ -116,11 +116,11 @@ def test_first_snapshot_uses_day_change_and_is_warming_up(tmp_path):
         current_snapshot=state,
         is_live=True,
     )
-    assert result.basis == "DAY CHANGE — FIRST SNAPSHOT"
+    assert result.basis.startswith("5M WARMING UP")
     assert result.status == "WARMING UP"
     assert (
         round(result.bullish_score + result.bearish_score + result.range_score, 1)
-        == 100.0
+        == 0.0
     )
     assert all(window.status == "INSUFFICIENT CONTINUITY" for window in result.windows)
 
@@ -152,7 +152,7 @@ def test_intraday_flow_windows_and_classification(tmp_path):
         current_snapshot=current_state,
         is_live=True,
     )
-    assert result.basis == "EXPIRY + STRIKE + SECURITY MATCHED INTRADAY DELTA"
+    assert result.basis.startswith("5M MATCHED FLOW (300s)")
     assert result.status == "READY"
     assert all(window.status == "READY" for window in result.windows)
     assert len(result.flow_rows) == 6
@@ -193,7 +193,7 @@ def test_stale_previous_snapshot_resets_intraday_continuity(tmp_path):
         current_snapshot=current_state,
         is_live=True,
     )
-    assert result.basis == "DAY CHANGE — CONTINUITY RESET"
+    assert result.basis.startswith("5M WARMING UP")
     assert result.status == "WARMING UP"
     assert result.confidence == 20.0
     assert "continuity reset" in " ".join(result.blockers).lower()
@@ -256,9 +256,9 @@ def test_first_snapshot_extreme_flow_is_calibrated_by_low_confidence():
     )
     assert result.confidence == 20.0
     assert result.bullish_score < 85.0
-    assert result.bearish_score > 0.0
-    assert result.range_score > 0.0
-    assert round(result.bullish_score + result.bearish_score + result.range_score, 1) == 100.0
+    assert result.bearish_score == 0.0
+    assert result.range_score == 0.0
+    assert result.bullish_score == 0.0
 
 
 def test_negative_volume_delta_is_rejected_as_a_counter_reset():
