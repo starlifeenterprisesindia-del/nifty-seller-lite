@@ -97,6 +97,12 @@ def render_day_memory(snapshot, url, key):
             st.caption("Saved modules: " + ", ".join(coverage.get("evidence_fields_saved", [])))
             st.caption(f"Last AI decision change: {coverage.get('last_app_ai_at') or '—'} · App heartbeat: {coverage.get('last_app_heartbeat_at') or '—'}")
             st.caption(f"Observed-span coverage: {coverage.get('slot_coverage_pct', '—')}% · Missing minute slots: {coverage.get('missing_slots', '—')}. Yeh data coverage hai, accuracy nahi.")
+            if coverage.get("archive_policy"):
+                st.caption(
+                    "Storage policy: " + str(coverage["archive_policy"])
+                    + f" · Full archives {coverage.get('archive_files', 0)}"
+                    + f" · {float(coverage.get('archive_bytes', 0))/1048576:.2f} MB"
+                )
             top9 = coverage.get("last_valid_top9") or {}
             if top9:
                 st.caption(

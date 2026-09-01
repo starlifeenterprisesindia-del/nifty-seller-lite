@@ -12,6 +12,8 @@ from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from config import CONFIG
+
 IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -176,6 +178,41 @@ class DayMemory:
                     PRIMARY KEY(signal_id,horizon));
                 CREATE INDEX IF NOT EXISTS events_time ON events(at);
             """)
+        self.prune_archives()
+
+    def prune_archives(self):
+        """Bound full-cycle files; compact summaries in SQLite are preserved."""
+        directory = self.pathpath.parent / "archives"
+        if not directory.exists():
+            return {"removed": 0, "retained": 0, "bytes": 0}
+        files = sorted(
+            (item for item in directory.glob("*-evidence.jsonl.gz") if item.is_file()),
+            key=lambda item: (item.stat().st_mtime, item.name),
+            reverse=True,
+        )
+        keep_count = max(1, int(CONFIG.day_memory_archive_keep_cycles))
+        max_bytes = max(1, int(CONFIG.day_memory_archive_max_mb)) * 1024 * 1024
+        retained = []
+        total = 0
+        removed = 0
+        for item in files:
+            try:
+                size = item.stat().st_size
+            except OSError:
+                continue
+            # Always retain the newest valid archive even if it alone exceeds
+            # the cap; deleting the only recovery copy would be unsafe.
+            allowed = len(retained) < keep_count and (not retained or total + size <= max_bytes)
+            if allowed:
+                retained.append(item)
+                total += size
+                continue
+            try:
+                item.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return {"removed": removed, "retained": len(retained), "bytes": total}
 
     @contextmanager
     def connect(self):
@@ -329,6 +366,7 @@ class DayMemory:
             self._event(db, stamp, "DIRECTION", "background", {"direction": body["direction"], "source": "Background reference; app AI nahi"})
             from services.cycle_outcomes import update_outcomes
             update_outcomes(db, body)
+        self.prune_archives()
         return True
 
     def app_event(self, now, body):
@@ -391,7 +429,13 @@ class DayMemory:
             last_app = db.execute("SELECT MAX(at) FROM events WHERE kind='APP AI'").fetchone()[0]
             coverage["last_app_ai_at"] = last_app
             coverage["last_app_heartbeat_at"] = meta.get("app_heartbeat")
-            coverage["archive_files"] = len(list((self.pathpath.parent / "archives").glob("*-evidence.jsonl.gz")))
+            archive_files = list((self.pathpath.parent / "archives").glob("*-evidence.jsonl.gz"))
+            coverage["archive_files"] = len(archive_files)
+            coverage["archive_bytes"] = sum(item.stat().st_size for item in archive_files if item.is_file())
+            coverage["archive_policy"] = (
+                f"newest {CONFIG.day_memory_archive_keep_cycles} full cycles; "
+                f"max {CONFIG.day_memory_archive_max_mb} MB; 8 compact summaries retained"
+            )
             slots = [a for (a,) in db.execute("SELECT at FROM samples WHERE at LIKE ? ORDER BY at", (str(meta.get("day", "")) + "%",))]
             if slots:
                 expected = int((datetime.fromisoformat(slots[-1]) - datetime.fromisoformat(slots[0])).total_seconds() // 60) + 1

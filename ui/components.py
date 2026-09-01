@@ -26,6 +26,7 @@ from services.summary_presenter import (
     required_live_feed_state,
     snapshot_change_hinglish,
     snapshot_change_items,
+    unified_direction_line,
 )
 
 
@@ -1112,6 +1113,7 @@ def render_main_ai_market_view(
             "🧠 **AI samajh:** "
             + safe_brain_hinglish_line(snapshot, previous_snapshot)
         )
+        st.caption("🎯 " + unified_direction_line(snapshot))
         memory = snapshot.metadata.get("history_context", {})
         for line in memory.get("lines", []):
             st.caption("History context: " + line)

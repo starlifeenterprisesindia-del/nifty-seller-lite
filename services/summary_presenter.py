@@ -47,6 +47,52 @@ def direction_evidence_score(snapshot: MarketSnapshot) -> float:
     return float(snapshot.core_evidence.range_score)
 
 
+def unified_direction_line(snapshot: MarketSnapshot) -> str:
+    """Explain canonical direction, fit and strongest weighted inputs only."""
+    decision = snapshot.decision
+    direction = str(decision.market_direction or "MIXED").upper()
+    if direction == "BULLISH":
+        label = "Market upar ja sakta hai"
+        names = ("PE SELL", "CE BUY")
+        score = max(float(decision.pe_sell.score), float(decision.ce_buy.score))
+    elif direction == "BEARISH":
+        label = "Market neeche ja sakta hai"
+        names = ("CE SELL", "PE BUY")
+        score = max(float(decision.ce_sell.score), float(decision.pe_buy.score))
+    elif direction == "RANGE":
+        label = "Market range mein reh sakta hai"
+        names = ("IRON CONDOR",)
+        score = float(decision.iron_condor.score)
+    else:
+        label = "Market direction abhi mixed hai"
+        names = ("CE SELL", "PE SELL", "IRON CONDOR")
+        score = max(
+            float(decision.ce_sell.score),
+            float(decision.pe_sell.score),
+            float(decision.iron_condor.score),
+        )
+
+    audit_name = max(
+        names,
+        key=lambda name: float(getattr(decision, name.lower().replace(" ", "_"), decision.iron_condor).score),
+    )
+    audit = dict(getattr(decision, "score_audit", {}).get(audit_name, {}))
+    excluded = {"Base total", "Net adjustments / caps / rounding", "Final fit"}
+    strongest = sorted(
+        ((key, float(value)) for key, value in audit.items() if key not in excluded and float(value) > 0),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:3]
+    why = ", ".join(f"{name} {points:.1f} pts" for name, points in strongest)
+    if not why:
+        why = "usable evidence abhi limited/mixed hai"
+    live_note = "" if snapshot.market_session.is_live else "Last available data: "
+    return (
+        f"{live_note}{label} — Unified fit {score:.1f}/100. Karan: {why}. "
+        "Yeh conditional evidence fit hai, profit probability nahi; entry gate alag hai."
+    )
+
+
 def brain_hinglish_line(snapshot: MarketSnapshot) -> str:
     """Explain the existing canonical decision in simple Hinglish.
 
