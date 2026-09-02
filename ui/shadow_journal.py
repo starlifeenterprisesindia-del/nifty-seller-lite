@@ -8,6 +8,21 @@ import streamlit as st
 from config import CONFIG
 
 
+def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> None:
+    today = str(getattr(store, "last_checked", ""))[:10]
+    current = [item for item in entries if str(item.get("session_date")) == today]
+    open_items = [item for item in current if str(item.get("status")).upper() == "OPEN"]
+    with st.container(border=True):
+        st.markdown("**🧪 Auto Shadow Journal**")
+        cols = st.columns(4)
+        cols[0].metric("Today candidates", len(current))
+        cols[1].metric("Open paper", len(open_items))
+        cols[2].metric("Candidate floor", f"{CONFIG.shadow_journal_min_strategy_score:.0f}%")
+        cols[3].metric("Qualified floor", "60%")
+        if store is not None:
+            st.caption(f"Last check: {store.last_checked or '—'} · Exact blocker: {store.last_blocker or '—'}")
+
+
 def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
     st.subheader("🧪 Auto Shadow Journal — Paper Trades Only")
     st.caption(
@@ -18,7 +33,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
         "Koi broker order ya real paisa use nahi hota."
     )
     if store is not None:
-        st.caption(f"Last checked: {store.last_checked} · Paper status: {store.last_blocker} · Last saved this process: {store.last_saved or 'No save yet'}")
+        st.caption(f"Last checked: {store.last_checked} · Candidate status: {store.last_blocker} · Last saved: {store.last_saved or 'No save yet'}")
         if store.last_error:
             st.warning(store.last_error)
         else:
@@ -47,6 +62,18 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
     c4.metric("Wins", wins)
     c5.metric("Qualified Net P&L", f"₹{net:,.0f}")
 
+    all_closed = [item for item in entries if str(item.get("status")).upper() == "CLOSED"]
+    if len(all_closed) >= 20:
+        wins_all = sum(float(item.get("net_pnl_rupees") or 0.0) > 0 for item in all_closed)
+        avg_net = sum(float(item.get("net_pnl_rupees") or 0.0) for item in all_closed) / len(all_closed)
+        st.info(
+            f"Recorded calibration ({len(all_closed)} closed paper samples): "
+            f"win rate {wins_all / len(all_closed) * 100:.1f}% · average net ₹{avg_net:,.0f}. "
+            "Yeh historical paper result hai, future profit guarantee nahi."
+        )
+    else:
+        st.caption(f"Historical success rate: insufficient samples ({len(all_closed)}/20 closed paper trades).")
+
     if not today:
         st.info(
             f"Aaj abhi koi {CONFIG.shadow_journal_min_confidence:.0f}%+ gate-passed "
@@ -65,6 +92,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
                 "Strategy score": item.get("strategy_score"),
                 "Score band": item.get("score_band", "LEGACY"),
                 "Qualification": item.get("qualification") or "LEGACY",
+                "Exact blocker/warning": item.get("candidate_warning") or "—",
                 "OI bias": item.get("oi_bias"),
                 "Big Player": f"{item.get('big_player_direction')} {float(item.get('big_player_score') or 0):.0f}",
                 "Status": item.get("status"),

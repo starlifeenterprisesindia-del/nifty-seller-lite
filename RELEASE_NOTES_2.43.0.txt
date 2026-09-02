@@ -1,0 +1,49 @@
+Nifty Seller Lite v2.43.0 — One-Brain Workspace
+================================================
+
+This is a cumulative update. It includes the pending v2.42.4 audit-integrity
+fixes; do not upload an older patch first.
+
+What changed
+------------
+1. One canonical forecast contract now drives the main view and timeframe view.
+   Next 5–15 minute UP/DOWN/RANGE evidence paths always total 100.
+2. Strategy-direction compatibility is enforced:
+   UP -> CE BUY / PE SELL; DOWN -> PE BUY / CE SELL;
+   RANGE -> protected IRON CONDOR; mixed -> WAIT.
+3. Iron Condor recognizes a stable balanced range without requiring the literal
+   15-minute label RANGE. Tight compression remains a breakout-risk warning.
+4. The strategy table is mobile-friendly. Advanced decay/value/pair columns are
+   collapsed. The best compatible setup shows current package premium,
+   preferred limit zone and do-not-cross price.
+5. Every sell setup remains protected. Short+hedge should be placed as one
+   package; if staged, hedge-first. Naked short is never advised.
+6. Auto Shadow Journal records 45+ experimental candidates instead of deleting
+   every near-miss. 60+ score/confidence plus safety alignment is QUALIFIED.
+   Exact blocker/warning is saved and displayed.
+7. Historical paper win-rate/average P&L appears only after 20 closed samples;
+   before that the app says insufficient samples. Records never add a second
+   live-direction vote and do not guarantee future profit.
+8. UI is compact: one status bar, main forecast, levels, strategy and journal
+   status stay visible. Detailed/timeframe/data/tools are collapsed.
+9. Checks & Downloads are consolidated at the bottom.
+10. Railway OOM protection: one Uvicorn worker, concurrency cap, reduced malloc
+    arenas, minute-snapshot cleanup, one generated report retained at a time,
+    and a 12 MB API export ceiling.
+
+Railway note
+------------
+The supplied Railway email is a real out-of-memory crash. The uploaded log time
+also showed a service restart around 15:23 IST. This release reduces peak and
+retained memory. After GitHub upload, redeploy both the Streamlit app and Railway
+service so railway.toml and live_server changes take effect.
+
+Verification
+------------
+397 automated tests passed.
+
+Important
+---------
+Displayed percentages are normalized evidence paths / setup fit, not guaranteed
+profit probabilities. Historical success is shown only from enough closed paper
+samples. The app never places broker orders.

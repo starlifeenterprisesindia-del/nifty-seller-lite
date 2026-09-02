@@ -1,0 +1,14 @@
+Nifty Seller Lite v2.42.4 — Audit integrity fix
+
+- Flatlined repeated NIFTY candles now force the complete snapshot to reference-only,
+  including the late-session/expiry-quality window. Recording may continue, but live
+  direction and paper-entry gates cannot use the synthetic progression.
+- The compact direction sentence no longer calls a mixed/no-clear core unconditionally
+  bullish or bearish. It labels the structure mixed and separately names model lean.
+- Auto Shadow Journal can evaluate CE BUY and PE BUY reference candidates as well as
+  protected sell candidates; every existing score, alignment, room, feed and risk gate
+  still applies.
+- Auto Shadow Journal explicitly blocks flatlined price progression.
+- Volume and hero render paths tolerate partial/legacy snapshots without crashing.
+- Experimental paper threshold remains 50. Raising it to 55 would reduce, not increase,
+  the number of recorded candidates.

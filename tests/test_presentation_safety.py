@@ -89,7 +89,8 @@ def test_unified_direction_line_uses_existing_score_audit_not_new_vote():
         }
     }
     line = unified_direction_line(snap)
-    assert "Market upar ja sakta hai" in line
+    assert "Market direction abhi mixed hai" in line
+    assert "current lean BULLISH" in line
     assert "78.0/100" in line
     assert "31.0 pts" in line
 

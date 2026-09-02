@@ -10,6 +10,8 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from analysis.canonical_forecast import build_canonical_forecast, compatible_strategies
+from analysis.entry_guidance import build_entry_guidance
 
 from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
 from analysis.presentation_safety import (
@@ -484,6 +486,25 @@ def render_market_session(snapshot: MarketSnapshot) -> None:
         st.warning(f"⏳ {expiry_quality.message}.")
 
 
+def render_compact_status_bar(snapshot: MarketSnapshot) -> None:
+    """One top status line instead of duplicate session and health banners."""
+    statuses = snapshot.feed_status or {}
+    critical = [statuses.get(key) for key in ("quotes", "candles", "option_chain")]
+    critical = [item for item in critical if item is not None]
+    bad = [item for item in critical if not item.ok or item.use_state not in {"LIVE", "REFERENCE"}]
+    ages = [float(item.age_seconds) for item in critical if item.age_seconds is not None]
+    age = f" · max age {max(ages):.0f}s" if ages else ""
+    if snapshot.market_session.is_live and not bad:
+        st.success(f"🟢 MARKET OPEN · DATA FRESH{age} · One-Brain live")
+    elif snapshot.market_session.is_live:
+        st.warning("🟡 MARKET OPEN · CHECK DATA: " + ", ".join(item.name for item in bad))
+    else:
+        st.warning("🟡 MARKET CLOSED · LAST DATA · reference only")
+    progression = statuses.get("price_progression")
+    if progression is not None and not progression.ok:
+        st.error(f"SOURCE FLATLINE · {progression.message} · entry blocked")
+
+
 def render_header(snapshot: MarketSnapshot) -> None:
     quote = snapshot.nifty_quote
     last_price = quote.get("last_price")
@@ -880,7 +901,10 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         "IRON CONDOR": bundle.iron_condor,
     }
     selected = snapshot.decision.final_action.replace(" WITH HEDGE", "")
-    leader = max(evaluations, key=lambda name: evaluations[name].score)
+    forecast = build_canonical_forecast(snapshot)
+    allowed = compatible_strategies(forecast.direction)
+    eligible = [name for name in evaluations if name in allowed]
+    leader = max(eligible or list(evaluations), key=lambda name: evaluations[name].score)
 
     st.subheader("🛡️ Best Strategy + Strike Value Table")
     st.caption(
@@ -920,6 +944,8 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
             status = "REFERENCE ONLY"
         elif snapshot.decision.final_action != "WAIT" and name == selected:
             status = "BEST • ENTRY READY" if plan.available else "BEST • STRIKE BLOCKED"
+        elif allowed and name not in allowed:
+            status = "DIRECTION BLOCKED"
         elif snapshot.decision.final_action == "WAIT" and name == leader:
             status = "BEST AVAILABLE • WAIT"
         elif not plan.available:
@@ -935,8 +961,6 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
                 "Fit / Confidence": f"{strategy.score:.0f}%",
                 "Strike + Hedge": _plan_structure_text(plan),
                 "Premium": premium,
-                "Decay Edge": decay_edge,
-                "Value Quality": f"{value_grade} • {plan.quality_score:.0f}/100" if plan.available else value_grade,
                 "Status": status,
             }
         )
@@ -945,13 +969,33 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     def _strategy_style(row: pd.Series) -> list[str]:
         if str(row["Status"]).startswith("BEST"):
             return ["background-color: rgba(59,130,246,.18);font-weight:700"] * len(row)
-        if row["Value Quality"].startswith("KAMZOR") or row["Status"] == "BLOCKED":
+        if row["Status"] in {"BLOCKED", "DIRECTION BLOCKED"}:
             return ["background-color: rgba(239,68,68,.08)"] * len(row)
         return [""] * len(row)
 
     styled = frame.style.apply(_strategy_style, axis=1)
     st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
-    _render_pair_comparison(plan_map)
+    best_plan = plan_map.get(leader)
+    guidance = build_entry_guidance(
+        best_plan,
+        entry_ready=snapshot.execution_guard.readiness == "ENTRY READY" and selected == leader,
+        live=snapshot.market_session.is_live,
+    )
+    with st.container(border=True):
+        st.markdown(f"**Best compatible entry — {leader}: {guidance.status}**")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Current package", guidance.current)
+        c2.metric("Preferred limit zone", guidance.preferred_zone)
+        c3.metric("Do-not-cross", guidance.minimum)
+        st.caption(guidance.instruction)
+    with st.expander("Advanced strike quality / pair comparison", expanded=False):
+        details = []
+        for name in ranked:
+            plan = plan_map[name]
+            premium, value_grade = _premium_value(plan)
+            details.append({"Strategy": name, "Premium": premium, "Decay": " | ".join([r for r in plan.reasons if r.startswith('Theta edge')]) or "—", "Value": f"{value_grade} · {plan.quality_score:.0f}/100"})
+        st.dataframe(details, width="stretch", hide_index=True)
+        _render_pair_comparison(plan_map)
     if not snapshot.market_session.is_live:
         st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
     elif snapshot.decision.final_action == "WAIT":
@@ -975,7 +1019,10 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
         "MIXED": "Market abhi mixed hai",
         "RANGE": "Market range me reh sakta hai",
     }.get(direction, f"Market direction {direction}")
-    entry_ready = snapshot.execution_guard.readiness == "ENTRY READY"
+    entry_ready = (
+        getattr(getattr(snapshot, "execution_guard", None), "readiness", "BLOCKED")
+        == "ENTRY READY"
+    )
     if decision.final_action == "WAIT" or not entry_ready:
         css_class = "wait"
         title = "WAIT"
@@ -989,6 +1036,10 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
                 if plan is not None and plan.available and score > 0
                 else ""
             )
+            if reference:
+                reference = "Reference ranking; entry confirmed nahi. " + reference
+            else:
+                reference = "Koi usable strike setup nahi. "
             structure = (
                 f"Karan: {direction_note}. {reference}"
                 + str(decision.blocker or "Evidence conflict / confirmation pending")
@@ -1096,16 +1147,20 @@ def render_main_ai_market_view(
 
     with st.container(border=True):
         _render_final_action_hero(snapshot, feed_ok)
+        forecast = build_canonical_forecast(snapshot)
+        st.markdown(f"**Next 5–15 min path — {forecast.direction} · {forecast.state}**")
+        p1, p2, p3 = st.columns(3)
+        p1.metric("UP path", f"{forecast.up:.1f}%")
+        p2.metric("DOWN path", f"{forecast.down:.1f}%")
+        p3.metric("RANGE path", f"{forecast.range:.1f}%")
+        st.caption(
+            f"Forecast evidence paths (historical success rate nahi). Confirm: {forecast.confirmation}. "
+            f"Invalidation: {forecast.invalidation}"
+        )
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
                 ("Main Trend (Core)", direction, f"Core evidence {direction_score:.0f}/100 · {direction_note}"),
-                (
-                    "Feed Availability" if snapshot.market_session.is_live else "Last-data Coverage",
-                    f"{data_quality:.0f}%",
-                    "Feed ready ≠ prediction accuracy" if snapshot.market_session.is_live else "Historical/reference completeness only",
-                ),
-                ("Direction Agreement", f"{direction_agreement:.0f}%", "Core · OI · price · big player"),
                 (
                     "Entry Confidence" if snapshot.market_session.is_live else "Reference Confidence",
                     f"{snapshot.decision.decision_confidence:.0f}%",
@@ -1118,11 +1173,13 @@ def render_main_ai_market_view(
             "🧠 **AI samajh:** "
             + safe_brain_hinglish_line(snapshot, previous_snapshot)
         )
-        st.caption("🎯 " + unified_direction_line(snapshot))
-        memory = snapshot.metadata.get("history_context", {})
-        for line in memory.get("lines", []):
-            st.caption("History context: " + line)
-        render_greeks_health(snapshot.option_chain)
+        with st.expander("Detailed evidence, agreement, Greeks and history", expanded=False):
+            st.caption("🎯 " + unified_direction_line(snapshot))
+            st.caption(f"Feed coverage {data_quality:.0f}% · Direction agreement {direction_agreement:.0f}%")
+            memory = snapshot.metadata.get("history_context", {})
+            for line in memory.get("lines", []):
+                st.caption("History context: " + line)
+            render_greeks_health(snapshot.option_chain)
 
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(

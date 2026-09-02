@@ -7,6 +7,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 import time as clock
+import gc
 
 from services.day_memory import DayMemory, IST, recording_time
 
@@ -96,6 +97,10 @@ class DayRecorder:
                         except Exception as exc:
                             self.paper_status = "PAPER MONITOR GAP — " + type(exc).__name__
                     self.status = "RECORDING" if stored else "WAIT — duplicate / data not fresh"
+                    # Snapshot contains several pandas frames. Never retain a full
+                    # minute snapshot in the long-lived Railway worker.
+                    del snapshot
+                    gc.collect()
                 except Exception as exc:
                     # Never persist credentials, API error bodies or arbitrary exception text.
                     self.status = "DATA GAP — " + type(exc).__name__

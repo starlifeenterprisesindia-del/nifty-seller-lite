@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import gc
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -67,10 +68,11 @@ from ui.components import (
     render_walls_and_pcr,
     render_protected_candidates,
     render_big_player_activity,
+    render_compact_status_bar,
 )
 from ui.premium_calculator import render_spot_premium_calculator
 from ui.alerts import render_market_alerts
-from ui.shadow_journal import render_auto_shadow_journal
+from ui.shadow_journal import render_auto_shadow_journal, render_shadow_journal_status
 from ui.pattern_alerts import render_pattern_alerts
 from ui.timeframe_outlook import render_timeframe_outlook
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
@@ -782,15 +784,15 @@ def render_fast_live_monitor() -> None:
 
 render_fast_live_monitor()
 
-render_market_session(view_snapshot)
-render_data_health(view_snapshot)
+render_compact_status_bar(view_snapshot)
 render_main_ai_market_view(view_snapshot, previous_view_snapshot)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
-render_day_memory(snapshot, live_server_url, live_server_api_key)
-render_timeframe_outlook(
-    view_snapshot,
-    st.session_state.get("fast_live_impulse"),
-)
+with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
+    if panel_open:
+        render_day_memory(snapshot, live_server_url, live_server_api_key)
+with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
+    if panel_open:
+        render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
 with persistent_panel(
     "🐘 Big Player Activity — Buying / Selling Alert",
     "panel_big_player_open",
@@ -804,13 +806,18 @@ with persistent_panel(
     if panel_open:
         render_rsi_reversal_setup(snapshot, previous_snapshot, record_trade=discipline_store.mark_trade)
 render_protected_candidates(view_snapshot)
+render_shadow_journal_status(shadow_entries, shadow_journal_store)
 with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
     if panel_open:
         render_auto_shadow_journal(
             shadow_entries, view_snapshot.created_at.date().isoformat(), shadow_journal_store
         )
-render_spot_premium_calculator(view_snapshot)
-render_pattern_alerts(snapshot, live_server_url, live_server_api_key)
+with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
+    if panel_open:
+        render_spot_premium_calculator(view_snapshot)
+with persistent_panel("🕯️ Strong candle / W-M alerts", "panel_pattern_alerts_open") as panel_open:
+    if panel_open:
+        render_pattern_alerts(snapshot, live_server_url, live_server_api_key)
 
 with persistent_panel(
     "🔔 Heavy Activity + Manual Price Alerts",
@@ -891,7 +898,7 @@ with persistent_panel(
         with option_tabs[6]:
             render_news_context(view_snapshot)
 
-with st.expander("Download Reports", expanded=False):
+with st.expander("🧰 Checks & Downloads Centre", expanded=False):
 
     pdf_snapshot_key = st.session_state.get("audit_pdf_snapshot_id")
     if pdf_snapshot_key != snapshot.snapshot_id:
@@ -907,6 +914,8 @@ with st.expander("Download Reports", expanded=False):
         )
         if generate_quick_pdf:
             try:
+                st.session_state.pop("audit_pdf_bytes", None)
+                st.session_state.pop("support_bundle_bytes", None)
                 with st.spinner("Building 2-page quick report from current snapshot only..."):
                     st.session_state.quick_pdf_bytes = build_quick_market_pdf(
                         view_snapshot, previous_view_snapshot
@@ -927,6 +936,8 @@ with st.expander("Download Reports", expanded=False):
         generate_pdf = st.button("Generate Complete Diagnostic PDF", width="stretch")
         if generate_pdf:
             try:
+                st.session_state.pop("quick_pdf_bytes", None)
+                st.session_state.pop("support_bundle_bytes", None)
                 with st.spinner("Building full audit PDF from the current snapshot only..."):
                     st.session_state.audit_pdf_bytes = build_full_audit_pdf(
                         view_snapshot, previous_view_snapshot
@@ -947,6 +958,8 @@ with st.expander("Download Reports", expanded=False):
         generate_bundle = st.button("Generate Support Bundle", width="stretch")
         if generate_bundle:
             try:
+                st.session_state.pop("quick_pdf_bytes", None)
+                st.session_state.pop("audit_pdf_bytes", None)
                 with st.spinner("Building one credential-free support ZIP..."):
                     st.session_state.support_bundle_bytes = build_support_bundle(
                         view_snapshot, previous_view_snapshot, shadow_entries
@@ -962,6 +975,8 @@ with st.expander("Download Reports", expanded=False):
                 mime="application/zip",
                 width="stretch",
             )
+    st.caption("Railway memory safety: ek time par sirf ek generated report RAM me rakhi jati hai; next snapshot par clear hoti hai.")
+    gc.collect()
 
 if os.getenv("NSL_SHOW_DEVELOPER_DATA", "").strip() == "1":
     with st.expander("Developer Raw Market Data (screen only)", expanded=False):

@@ -139,8 +139,11 @@ class DayMemory:
             with self.connect() as db:
                 db.execute("BEGIN")
                 self._write_export(db, target)
-            if target.stat().st_size > 40 * 1024 * 1024:
-                raise ValueError("Export exceeds 40 MB; use the persistent-volume archive")
+            # The API base64-encodes this payload (roughly +33%) while FastAPI
+            # also holds response bytes. Keep the cap low enough for small
+            # Railway plans and use cycle archives for larger history.
+            if target.stat().st_size > 12 * 1024 * 1024:
+                raise ValueError("Export exceeds 12 MB; use the persistent-volume cycle archive")
             return target.read_bytes()
 
     def _archive_cycle(self, db, expiry):

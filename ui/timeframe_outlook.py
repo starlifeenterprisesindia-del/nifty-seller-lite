@@ -6,6 +6,7 @@ from math import isfinite
 import streamlit as st
 
 from models import MarketSnapshot
+from analysis.canonical_forecast import build_canonical_forecast
 
 
 def _pick(bull: float, bear: float, neutral: float) -> tuple[str, float]:
@@ -62,7 +63,8 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
     fifteen = _pick(pa15.bullish_score, pa15.bearish_score, pa15.range_score)
     fifteen_reason = _short_reason("15m structure", pa15.structure, _price_action_move(pa15))
 
-    thirty = _pick(outlook.bullish_path_pct, outlook.bearish_path_pct, outlook.range_path_pct)
+    forecast = build_canonical_forecast(snapshot)
+    thirty = (forecast.direction.replace("UP", "BULLISH").replace("DOWN", "BEARISH"), max(forecast.up, forecast.down, forecast.range))
     thirty_reason = _short_reason("One-Brain path", snapshot.decision.market_direction, *(outlook.reasons[:1]))
 
     hourly = _pick(core.bullish_score, core.bearish_score, core.range_score)

@@ -536,11 +536,10 @@ class SnapshotService:
         )
         spot_flatline_run = self._spot_flatline_run(candles_1m, current)
         spot_progression_ok = spot_flatline_run < CONFIG.spot_flatline_min_candles
-        # Before the normal no-new-entry/expiry-close window, a repeated synthetic
-        # price series is a hard live-data failure.  Later it remains recorded as
-        # limited/reference diagnostics so expiry-cycle LTP history is not erased.
-        if current.time().replace(tzinfo=None) < CONFIG.expiry_close_quality_start:
-            quote_candle_aligned = quote_candle_aligned and spot_progression_ok
+        # A changing quote timestamp cannot make repeated synthetic candles live.
+        # Keep recording late-session LTP/expiry diagnostics, but mark the complete
+        # snapshot reference-only whenever the underlying price series flatlines.
+        quote_candle_aligned = quote_candle_aligned and spot_progression_ok
         market_session = classify_market_session(
             current,
             quote_age_seconds=quote_age,

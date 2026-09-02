@@ -243,8 +243,9 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
         volume=snapshot.volume,
         patterns=snapshot.patterns,
     )
-    if alignment_blocker:
-        return False, alignment_blocker
+    # Candidate journal intentionally records near-misses for calibration. The
+    # alignment gate decides QUALIFIED vs EXPERIMENTAL; it no longer erases the
+    # observation completely.
     if (
         action in {"CE SELL", "PE SELL", "IRON CONDOR"}
         and float(selected_plan.estimated_credit_points or 0.0)
@@ -263,13 +264,14 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
         feed = snapshot.feed_status.get(feed_name)
         if feed is None or feed.use_state != "LIVE":
             return False, f"{feed_name} is not confirmed live"
+    progression = snapshot.feed_status.get("price_progression")
+    if progression is not None and not progression.ok:
+        return False, "NIFTY price series is flatlined / not progressing"
     ready_windows = sum(
         item.status == "READY" for item in snapshot.option_intelligence.windows
     )
-    if snapshot.option_intelligence.status != "READY" or ready_windows < 2:
-        return False, "Option flow has fewer than two ready windows"
-    if snapshot.option_intelligence.confidence < CONFIG.shadow_journal_min_option_confidence:
-        return False, "Option-flow confidence below paper threshold"
+    if snapshot.option_intelligence.status == "UNAVAILABLE" or ready_windows < 1:
+        return False, "Option flow unavailable"
     if any(
         str(item.get("status") or "").upper() == "OPEN"
         and str(item.get("setup") or "").upper() == action
@@ -291,7 +293,7 @@ def _paper_snapshot(snapshot):
     action = snapshot.trade_plan.selected_setup
     if action == "WAIT":
         action = snapshot.trade_plan.candidate_setup
-    if action not in {"CE SELL", "PE SELL", "IRON CONDOR"}:
+    if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
         return snapshot
     plan = replace(snapshot.trade_plan, selected_setup=action)
     guard = calculate_execution_guard(
@@ -331,26 +333,34 @@ def process_auto_shadow_journal(
             ),
         )
         action = snapshot.trade_plan.selected_setup
+        alignment_warning = _entry_alignment_blocker(
+            setup=action, price_action=snapshot.price_action, levels=snapshot.levels,
+            volume=snapshot.volume, patterns=snapshot.patterns,
+        )
+        qualified = bool(
+            snapshot.decision.decision_confidence >= 60
+            and _strategy_score(snapshot, action) >= 60
+            and not alignment_warning
+            and snapshot.option_intelligence.confidence >= CONFIG.shadow_journal_min_option_confidence
+        )
         record.update(
             {
                 "journal_type": "AUTO SHADOW",
                 "real_ai_action": snapshot.decision.final_action,
                 "qualification": (
-                    "QUALIFIED AI TRADE"
-                    if snapshot.execution_guard.readiness == "ENTRY READY"
-                    else f"EXPERIMENTAL {CONFIG.shadow_journal_min_confidence:.0f}+"
+                    "QUALIFIED 60+ PAPER"
+                    if qualified
+                    else f"EXPERIMENTAL {CONFIG.shadow_journal_min_strategy_score:.0f}+"
                 ),
-                "counts_for_ai_accuracy": (
-                    snapshot.execution_guard.readiness == "ENTRY READY"
-                    and snapshot.decision.final_action != "WAIT"
-                ),
+                "counts_for_ai_accuracy": qualified,
+                "candidate_warning": alignment_warning or "None",
                 "trade_id": f"SH-{snapshot.created_at:%Y%m%d-%H%M%S}-{len(entries)+1}",
                 "session_date": snapshot.created_at.date().isoformat(),
                 "setup": action,
                 "action": action,
                 "decision_confidence": snapshot.decision.decision_confidence,
                 "strategy_score": _strategy_score(snapshot, action),
-                "score_band": "50–54" if _strategy_score(snapshot, action) < 55 else "55–61" if _strategy_score(snapshot, action) < 62 else "62+",
+                "score_band": "45–49" if _strategy_score(snapshot, action) < 50 else "50–54" if _strategy_score(snapshot, action) < 55 else "55–59" if _strategy_score(snapshot, action) < 60 else "60+",
                 "big_player_direction": snapshot.big_player_activity.direction,
                 "big_player_score": snapshot.big_player_activity.score,
                 "big_player_confirmations": snapshot.big_player_activity.confirmation_count,

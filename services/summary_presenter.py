@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from models import MarketSnapshot, SetupPlan
+from analysis.canonical_forecast import compatible_strategies
 
 
 def required_live_feed_state(snapshot: MarketSnapshot) -> tuple[bool, str]:
@@ -51,7 +52,19 @@ def unified_direction_line(snapshot: MarketSnapshot) -> str:
     """Explain canonical direction, fit and strongest weighted inputs only."""
     decision = snapshot.decision
     direction = str(decision.market_direction or "MIXED").upper()
-    if direction == "BULLISH":
+    core_state = str(snapshot.core_evidence.market_state or "").upper()
+    core_is_mixed = "MIXED" in core_state or "NO CLEAR" in core_state
+    if core_is_mixed:
+        label = "Market direction abhi mixed hai"
+        names = ("CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR")
+        score = max(
+            float(decision.ce_buy.score),
+            float(decision.pe_buy.score),
+            float(decision.ce_sell.score),
+            float(decision.pe_sell.score),
+            float(decision.iron_condor.score),
+        )
+    elif direction == "BULLISH":
         label = "Market upar ja sakta hai"
         names = ("PE SELL", "CE BUY")
         score = max(float(decision.pe_sell.score), float(decision.ce_buy.score))
@@ -86,9 +99,14 @@ def unified_direction_line(snapshot: MarketSnapshot) -> str:
     why = ", ".join(f"{name} {points:.1f} pts" for name, points in strongest)
     if not why:
         why = "usable evidence abhi limited/mixed hai"
+    lean_note = (
+        f" Combined model ka current lean {direction} hai, lekin core clear nahi."
+        if core_is_mixed and direction in {"BULLISH", "BEARISH"}
+        else ""
+    )
     live_note = "" if snapshot.market_session.is_live else "Last available data: "
     return (
-        f"{live_note}{label} — Unified fit {score:.1f}/100. Karan: {why}. "
+        f"{live_note}{label} — Unified fit {score:.1f}/100.{lean_note} Karan: {why}. "
         "Yeh conditional evidence fit hai, profit probability nahi; entry gate alag hai."
     )
 
@@ -218,7 +236,9 @@ def best_existing_candidate(snapshot: MarketSnapshot) -> tuple[str, float, Setup
     }
     if selected in scores:
         return selected, scores[selected], _plan_by_name(snapshot, selected), True
-    name = max(scores, key=scores.get)
+    allowed = compatible_strategies(decision.market_direction)
+    eligible = {name: score for name, score in scores.items() if name in allowed}
+    name = max(eligible or scores, key=(eligible or scores).get)
     return name, scores[name], _plan_by_name(snapshot, name), False
 
 

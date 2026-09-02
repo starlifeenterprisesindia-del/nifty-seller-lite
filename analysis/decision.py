@@ -151,7 +151,12 @@ def _volume_scores(volume: VolumeBundle | None) -> tuple[float, float, float]:
         return 0.0, 0.0, 0.0
     bull = bear = neutral = 0.0
     ready = 0
-    for item in (volume.three_minute, volume.fifteen_minute):
+    for item in (
+        getattr(volume, "three_minute", None),
+        getattr(volume, "fifteen_minute", None),
+    ):
+        if item is None:
+            continue
         if item.status != "READY":
             continue
         ready += 1
@@ -215,7 +220,7 @@ def _barrier_scores(
         return 0.0, 0.0, 0.0
     atr = None
     if price_action is not None:
-        atr = price_action.three_minute.atr14
+        atr = getattr(getattr(price_action, "three_minute", None), "atr14", None)
     unit = max(18.0, float(atr or 0.0))
 
     def score(room: float | None) -> float:
@@ -1058,7 +1063,13 @@ def calculate_final_decision(
         (heavy_bull, heavy_bear, heavy_range),
     )
 
-    unified_inputs_ready = price_action is not None and volume is not None and patterns is not None
+    unified_inputs_ready = bool(
+        price_action is not None
+        and volume is not None
+        and patterns is not None
+        and getattr(volume, "three_minute", None) is not None
+        and getattr(volume, "fifteen_minute", None) is not None
+    )
 
     def unified_base(side: int) -> float:
         values = (
@@ -1086,19 +1097,33 @@ def calculate_final_decision(
     pe = ce_buy = base_bull
     ce = pe_buy = base_bear
     condor = base_range
-    # RANGE needs observed range structure, not merely conflicting/missing votes.
-    range_eligible = bool(
-        price_action is not None
-        and getattr(price_action.fifteen_minute, "status", "") == "READY"
-        and "RANGE" in getattr(price_action.fifteen_minute, "structure", "")
-        and core.range_score > max(core.bullish_score, core.bearish_score)
-        and levels.status == "READY"
+    # Classify an observed balanced range separately from generic MIXED.  A range
+    # does not require the 15m parser to emit the literal word RANGE: balanced
+    # core/option evidence plus two intact walls and usable room is sufficient.
+    fifteen = getattr(price_action, "fifteen_minute", None)
+    fifteen_ready = bool(fifteen is not None and getattr(fifteen, "status", "") == "READY")
+    structure_text = str(getattr(fifteen, "structure", "")).upper()
+    balanced_core = abs(float(core.bullish_score) - float(core.bearish_score)) <= 18
+    balanced_options = abs(float(options.bullish_score) - float(options.bearish_score)) <= 20
+    two_intact_walls = bool(
+        levels.status == "READY"
         and levels.immediate_support is not None and levels.immediate_resistance is not None
         and levels.immediate_support.status != "BROKEN" and levels.immediate_resistance.status != "BROKEN"
-        and min(levels.upside_room or 0, levels.downside_room or 0) >= 18
+    )
+    balanced_room = min(levels.upside_room or 0, levels.downside_room or 0)
+    explicit_range = "RANGE" in structure_text or "SIDEWAYS" in structure_text
+    stable_range = bool(
+        fifteen_ready and two_intact_walls and balanced_room >= 12
+        and (explicit_range or (balanced_core and balanced_options and base_range >= 20))
+    )
+    tight_compression = bool(stable_range and balanced_room < 18)
+    range_eligible = bool(
+        price_action is not None
+        and stable_range
+        and not (event_risk.level == "HIGH")
     )
     evidence_direction = (
-        "RANGE" if range_eligible and base_range > max(base_bull, base_bear)
+        "RANGE" if range_eligible and base_range >= max(base_bull, base_bear) - 8
         else "BULLISH" if base_bull - base_bear >= 8
         else "BEARISH" if base_bear - base_bull >= 8 else "MIXED"
     )
@@ -1159,6 +1184,17 @@ def calculate_final_decision(
         condor -= 6
         condor_level_cautions = tuple(condor_level_cautions) + (
             "Core and option flow agree directionally",
+        )
+    if stable_range:
+        # Overlapping nearby walls are compression evidence, not an automatic
+        # zero. Tight compression remains eligible but carries breakout caution.
+        condor += 8 if not tight_compression else 3
+        condor_level_cautions = tuple(condor_level_cautions) + (
+            (
+                f"TIGHT COMPRESSION: room {balanced_room:.0f} pts; breakout confirmation ka wait"
+                if tight_compression
+                else f"STABLE BALANCED RANGE: room {balanced_room:.0f} pts"
+            ),
         )
 
     # Patterns own one explicit 10% component in the unified path.  Legacy
@@ -1412,20 +1448,29 @@ def calculate_final_decision(
         cautions=tuple(dict.fromkeys(pe_buy_cautions))[:3],
     )
 
+    direction = evidence_direction if option_data_available else "UNAVAILABLE"
+    bullish_score = max(pe, ce_buy)
+    bearish_score = max(ce, pe_buy)
+    compatible_candidates = {
+        "BULLISH": (("PE SELL", pe), ("CE BUY", ce_buy)),
+        "BEARISH": (("CE SELL", ce), ("PE BUY", pe_buy)),
+        "RANGE": (("IRON CONDOR", condor if range_eligible else 0.0),),
+    }.get(direction, ())
     candidates = sorted(
-        (
-            ("CE SELL", ce),
-            ("PE SELL", pe),
-            ("IRON CONDOR", condor if range_eligible else 0.0),
-        ),
+        compatible_candidates or (("CE BUY", ce_buy), ("PE BUY", pe_buy), ("CE SELL", ce), ("PE SELL", pe)),
         key=lambda item: item[1],
         reverse=True,
     )
     leader, leader_score = candidates[0]
-    runner_up = candidates[1][1]
-    bullish_score = max(pe, ce_buy)
-    bearish_score = max(ce, pe_buy)
-    direction = evidence_direction if option_data_available else "UNAVAILABLE"
+    # CE BUY and PE SELL express the same UP thesis (likewise DOWN pair), so
+    # their near-tie is not a directional conflict. Margin is measured against
+    # the strongest opposing/range thesis.
+    runner_up = (
+        max(bearish_score, condor) if direction == "BULLISH"
+        else max(bullish_score, condor) if direction == "BEARISH"
+        else max(bullish_score, bearish_score) if direction == "RANGE"
+        else candidates[1][1] if len(candidates) > 1 else 0.0
+    )
     score_gap = max(0.0, leader_score - runner_up)
 
     alignment_blocker = (
