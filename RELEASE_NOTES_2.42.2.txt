@@ -1,0 +1,9 @@
+Nifty Seller Lite 2.42.2 — Evidence display alignment
+
+- Fixes the compact evidence audit that still showed legacy 25/35/20 weights.
+- The table now explains the canonical 40/15/10/10/15/10 One-Brain points.
+- Top-9 shows the same raw bounded strength used by the decision instead of
+  normalising a modest (60,5,0) input into a misleading (92,8,0) display.
+- Labels 15m weighted movement separately from current-day advance/decline breadth.
+- Market-closed cards say Last-data Coverage instead of implying a live feed.
+- Decision rules and v2.42.1 bounded Railway retention remain unchanged.

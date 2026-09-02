@@ -162,7 +162,10 @@ def _volume_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
 
 def _heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
     from analysis.decision import _heavyweight_scores as recent_scores
-    return _normalise(*recent_scores(snapshot.heavyweights))
+    # The canonical brain uses these raw bounded strengths.  Normalising
+    # (60, 5, 0) to (92, 8, 0) made a mild 15m recovery look like 92/100
+    # conviction and did not match the actual weighted decision input.
+    return tuple(round(clamp(value, 0.0, 100.0), 1) for value in recent_scores(snapshot.heavyweights))
 
 
 def _legacy_day_heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
@@ -269,23 +272,26 @@ def build_module_impact_audit(
             evaluations,
             key=lambda name: float(getattr(evaluations[name], "score", 0.0)),
         )
-    weights = {
-        "Price Action": 25.0,
-        "OI & Options Flow": 35.0,
-        "EMA / MACD / RSI": 20.0,
-        "Barrier / Levels / Volume": 0.0,
-        "NIFTY Top-9": 10.0,
-        "FII/DII (15 Sessions)": 0.0,
-        "VIX / Data Integrity": 0.0,
-    }
+    score_audit = dict(getattr(decision, "score_audit", {}).get(reference, {}))
+    core_points = float(score_audit.get("15m permission + 3m trigger + indicators 40%", 0.0) or 0.0)
+    oi_points = float(score_audit.get("OI / Options flow 15%", 0.0) or 0.0)
+    volume_points = float(score_audit.get("Futures volume 10%", 0.0) or 0.0)
+    activity_points = float(score_audit.get("Buying/Selling activity (Futures + Top-9) 10%", 0.0) or 0.0)
+    barrier_points = float(score_audit.get("Barrier space 15%", 0.0) or 0.0)
+    pattern_points = float(score_audit.get("Special candle / W-M 10%", 0.0) or 0.0)
     audit: dict[str, str] = {}
     for row in rows:
         module = str(row["Module"])
+        if module in {"Price Action", "EMA / MACD / RSI"}:
+            audit[module] = f"Shared canonical Core 40% · combined actual {core_points:.1f} pts"
+            continue
+        if module == "OI & Options Flow":
+            audit[module] = f"Canonical OI/Options 15% · actual {oi_points:.1f} pts"
+            continue
         if module == "Barrier / Levels / Volume":
-            base = weights[module]
             audit[module] = (
-                f"Base Volume {base:g}% + existing structural gate; "
-                "Barrier extra weight 0 (no doubling)"
+                f"Futures volume 10% = {volume_points:.1f} pts · "
+                f"Barrier room 15% = {barrier_points:.1f} pts"
             )
             continue
         if module == "Big Player Activity":
@@ -295,14 +301,20 @@ def build_module_impact_audit(
             confirmations = int(getattr(activity, "confirmation_count", 0) or 0)
             audit[module] = (
                 f"{direction} {score:.0f}/100 · confirm {confirmations} · "
-                "raw Futures activity 10% · composite confirmation/gate extra 0"
+                f"shared Futures+Top-9 activity 10% = {activity_points:.1f} pts; "
+                "composite gate extra 0"
             )
             continue
-        if module == "3M W/M Pattern":
-            maximum, max_text = 0.0, "Trigger/alert only; extra weight 0"
-        elif module == "Special Candle":
-            maximum, max_text = 0.0, "Trigger/alert only; extra weight 0"
-        elif module == "News / Event Risk":
+        if module in {"3M W/M Pattern", "Special Candle"}:
+            audit[module] = f"Shared pattern component 10% · combined actual {pattern_points:.1f} pts"
+            continue
+        if module == "NIFTY Top-9":
+            audit[module] = f"Shared Futures+Top-9 activity 10% · combined actual {activity_points:.1f} pts"
+            continue
+        if module == "FII/DII (15 Sessions)":
+            audit[module] = "Background/history context · live direction weight 0"
+            continue
+        if module == "News / Event Risk":
             news = getattr(snapshot, "news_context", None)
             status = str(getattr(news, "status", "UNAVAILABLE")).upper()
             risk = str(getattr(news, "risk_level", "NONE")).upper()
@@ -334,23 +346,7 @@ def build_module_impact_audit(
                 " · Risk context; extra direction weight 0"
             )
             continue
-        else:
-            maximum = weights.get(module, 0.0)
-            max_text = f"Max {maximum:.1f}%"
-        usable = {
-            label: float(row[key])
-            for label, key in (
-                ("Bull", "Bullish %"),
-                ("Bear", "Bearish %"),
-                ("Range", "Neutral %"),
-            )
-            if row.get(key) is not None
-        }
-        if not usable or maximum <= 0:
-            audit[module] = max_text
-            continue
-        direction, score = max(usable.items(), key=lambda item: item[1])
-        audit[module] = f"{max_text} · {direction} evidence {score:.1f}/100; actual points neeche"
+        audit[module] = "Display evidence only; canonical point mapping unavailable"
     return reference, audit
 
 
@@ -632,7 +628,7 @@ def build_compact_evidence_matrix(
     else:
         delta_text = " · badlav warming"
     heavy_result = (
-        f"15m WEIGHTED {move_text}{delta_text} · "
+        f"15m WEIGHTED {move_text}{delta_text} · current-day breadth "
         f"{getattr(snapshot.heavyweights, 'advancing', 0)} UP / {getattr(snapshot.heavyweights, 'declining', 0)} DOWN"
     )
     inst_bull, inst_bear, inst_neutral = inst_scores

@@ -2,7 +2,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from analysis.evidence_matrix import build_compact_evidence_matrix
+from analysis.evidence_matrix import build_compact_evidence_matrix, _heavyweight_scores
 from models import FeedStatus
 
 
@@ -119,3 +119,18 @@ def test_directional_rounding_always_totals_exactly_100():
     for values in samples:
         result = _normalise(*values)
         assert round(sum(result), 1) == 100.0
+
+
+def test_top9_display_does_not_normalise_mild_move_into_92_percent():
+    snapshot = SimpleNamespace(
+        heavyweights=SimpleNamespace(
+            status="READY",
+            recent_15m_move_pct=0.082,
+            recent_coverage_pct=100.0,
+            covered_weight_pct=100.0,
+        )
+    )
+    bull, bear, neutral = _heavyweight_scores(snapshot)
+    assert 55 < bull < 70
+    assert bear == 5
+    assert neutral == 0

@@ -554,8 +554,9 @@ def render_evidence_matrix(
     st.subheader("All Features — Compact Evidence")
     st.caption(
         "11 compact rows same One-Brain ki Bull/Bear/Neutral evidence dikhati hain. "
-        "Barrier existing Levels/OI/Volume ka synthesis hai—extra weight 0. Big Player "
-        "confirmation/gate hai—extra direction weight 0; koi second brain nahi."
+        "Canonical calculation: Core 40%, OI 15%, futures volume 10%, "
+        "Futures+Top-9 activity 10%, barrier room 15%, special candle/W-M 10%. "
+        "Shared rows ko do baar add nahi kiya jata; koi second brain nahi."
     )
     rows = build_compact_evidence_matrix(snapshot, previous_snapshot)
     previous_rows = (
@@ -1099,7 +1100,11 @@ def render_main_ai_market_view(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
                 ("Main Trend (Core)", direction, f"Core evidence {direction_score:.0f}/100 · {direction_note}"),
-                ("Feed Availability", f"{data_quality:.0f}%", "Feed ready ≠ prediction accuracy"),
+                (
+                    "Feed Availability" if snapshot.market_session.is_live else "Last-data Coverage",
+                    f"{data_quality:.0f}%",
+                    "Feed ready ≠ prediction accuracy" if snapshot.market_session.is_live else "Historical/reference completeness only",
+                ),
                 ("Direction Agreement", f"{direction_agreement:.0f}%", "Core · OI · price · big player"),
                 (
                     "Entry Confidence" if snapshot.market_session.is_live else "Reference Confidence",
