@@ -400,7 +400,10 @@ def calculate_big_player_activity(
         buy_score=round(buy, 1),
         sell_score=round(sell, 1),
         confirmation_count=matching,
-        confirmation_total=max(1, total),
+        # Confirmation is a two-observation gate.  Showing 1/1 on the first
+        # observation looked complete even though every consumer correctly
+        # requires two matching observations before treating it as confirmed.
+        confirmation_total=2,
         persistence=persistence,
         reversal_risk=reversal_risk,
         time_window=time_window,

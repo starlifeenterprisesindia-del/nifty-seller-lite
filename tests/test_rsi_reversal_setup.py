@@ -49,13 +49,18 @@ def snapshot(rsi: float, direction: str, *, score: float = 80, confirmations: in
     elif rsi < 70:
         closes.append(closes[-1] - 6)
     stamps = pd.date_range(end=now.replace(minute=54), periods=len(closes), freq="3min")
+    candle_frame = pd.DataFrame(
+        {"timestamp": stamps, "close": closes, "is_complete": True}
+    )
     return ns(
         created_at=now,
         nifty_quote={"last_price": 24425.0},
-        candles_3m=pd.DataFrame(
-            {"timestamp": stamps, "close": closes, "is_complete": True}
+        candles_3m=candle_frame,
+        candles_15m=candle_frame.copy(),
+        indicators=ns(
+            three_minute=ns(rsi14=rsi, as_of=stamps[-1]),
+            fifteen_minute=ns(rsi14=rsi, as_of=stamps[-1]),
         ),
-        indicators=ns(three_minute=ns(rsi14=rsi, as_of=stamps[-1])),
         barrier_map=ns(
             nearest_resistance=level("RESISTANCE"),
             nearest_support=level("SUPPORT"),

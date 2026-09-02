@@ -15,6 +15,7 @@ class RsiReversalSetup:
     confidence: int
     rsi_now: float | None
     rsi_previous: float | None
+    trigger_text: str
     barrier_text: str
     big_player_text: str
     structure_text: str
@@ -35,25 +36,36 @@ MIN_BIG_PLAYER_SCORE = 60.0
 MIN_BIG_PLAYER_CONFIRMATIONS = 2
 
 
-def _rsi(snapshot: Any | None) -> float | None:
+def _value_direction(previous: float, current: float) -> str:
+    if current > previous:
+        return "UP"
+    if current < previous:
+        return "DOWN"
+    return "FLAT"
+
+
+def _rsi(snapshot: Any | None, timeframe: str = "three_minute") -> float | None:
     if snapshot is None:
         return None
     value = getattr(
-        getattr(getattr(snapshot, "indicators", None), "three_minute", None),
+        getattr(getattr(snapshot, "indicators", None), timeframe, None),
         "rsi14",
         None,
     )
     return float(value) if value is not None else None
 
 
-def _completed_rsi_pair(snapshot: Any) -> tuple[float | None, float | None]:
+def _completed_rsi_pair(
+    snapshot: Any, timeframe: str = "three_minute"
+) -> tuple[float | None, float | None]:
     """Use adjacent completed bars, never adjacent UI refreshes."""
-    frame = getattr(snapshot, "candles_3m", None)
+    frame_name = "candles_15m" if timeframe == "fifteen_minute" else "candles_3m"
+    frame = getattr(snapshot, frame_name, None)
     if not isinstance(frame, pd.DataFrame) or frame.empty:
-        return _rsi(snapshot), None
+        return _rsi(snapshot, timeframe), None
     frame = frame.copy()
     if "is_complete" not in frame or "timestamp" not in frame:
-        return _rsi(snapshot), None
+        return _rsi(snapshot, timeframe), None
     frame = (
         frame[frame.is_complete.fillna(False)]
         .sort_values("timestamp")
@@ -61,7 +73,7 @@ def _completed_rsi_pair(snapshot: Any) -> tuple[float | None, float | None]:
     )
     values = _rsi_wilder(pd.to_numeric(frame.close, errors="coerce").dropna()).dropna()
     if len(values) < 2:
-        return _rsi(snapshot), None
+        return _rsi(snapshot, timeframe), None
     return float(values.iloc[-1]), float(values.iloc[-2])
 
 
@@ -198,7 +210,14 @@ def evaluate_rsi_reversal_setup(
 ) -> RsiReversalSetup:
     """Independent RSI reversal advisory; it never changes the One-Brain decision."""
 
-    rsi_now, rsi_previous = _completed_rsi_pair(snapshot)
+    # The agreed architecture is 15m permission + 3m trigger.  A completed
+    # 15m RSI extreme defines the reversal zone; adjacent completed 3m bars
+    # only time the turn.  Legacy/test snapshots without a 15m frame fall back
+    # to the old 3m pair instead of fabricating data.
+    has_15m = isinstance(getattr(snapshot, "candles_15m", None), pd.DataFrame)
+    permission_tf = "fifteen_minute" if has_15m else "three_minute"
+    rsi_now, rsi_previous = _completed_rsi_pair(snapshot, permission_tf)
+    trigger_now, trigger_previous = _completed_rsi_pair(snapshot, "three_minute")
     barrier_map = getattr(snapshot, "barrier_map", None)
     resistance = getattr(barrier_map, "nearest_resistance", None)
     support = getattr(barrier_map, "nearest_support", None)
@@ -206,13 +225,13 @@ def evaluate_rsi_reversal_setup(
 
     top_seen = rsi_now is not None and rsi_now >= RSI_TOP
     bottom_seen = rsi_now is not None and rsi_now <= RSI_BOTTOM
-    top_turn = (
+    permission_top_turn = (
         rsi_now is not None
         and rsi_previous is not None
         and rsi_previous >= RSI_TOP
         and rsi_now < rsi_previous
     )
-    bottom_turn = (
+    permission_bottom_turn = (
         rsi_now is not None
         and rsi_previous is not None
         and rsi_previous <= RSI_BOTTOM
@@ -220,10 +239,28 @@ def evaluate_rsi_reversal_setup(
     )
     zone = (
         "TOP"
-        if top_seen or top_turn
+        if top_seen or permission_top_turn
         else "BOTTOM"
-        if bottom_seen or bottom_turn
+        if bottom_seen or permission_bottom_turn
         else "NORMAL"
+    )
+    trigger_down = (
+        trigger_now is not None
+        and trigger_previous is not None
+        and trigger_now < trigger_previous
+    )
+    trigger_up = (
+        trigger_now is not None
+        and trigger_previous is not None
+        and trigger_now > trigger_previous
+    )
+    top_turn = permission_top_turn and trigger_down
+    bottom_turn = permission_bottom_turn and trigger_up
+    trigger_text = (
+        f"3m RSI {_value_direction(trigger_previous, trigger_now)} · "
+        f"{trigger_previous:.1f} → {trigger_now:.1f}"
+        if trigger_now is not None and trigger_previous is not None
+        else "3m trigger unavailable"
     )
 
     resistance_ready = _strong_barrier(resistance) and _near_barrier(resistance)
@@ -262,10 +299,10 @@ def evaluate_rsi_reversal_setup(
     if rsi_now is None:
         cautions.append("3m RSI unavailable")
     elif zone == "TOP":
-        reasons.append(f"3m RSI top zone {rsi_now:.1f}")
+        reasons.append(f"15m RSI top permission {rsi_now:.1f}")
         confidence += 30
-        if top_turn:
-            reasons.append(f"RSI {rsi_previous:.1f} se neeche muda")
+        if permission_top_turn and trigger_down:
+            reasons.append("15m top turn + 3m downward trigger")
             confidence += 20
         else:
             cautions.append("RSI abhi top se neeche mudna baaki hai")
@@ -288,10 +325,10 @@ def evaluate_rsi_reversal_setup(
             action = "IRON CONDOR"
             confidence = min(confidence, 69)
     elif zone == "BOTTOM":
-        reasons.append(f"3m RSI bottom zone {rsi_now:.1f}")
+        reasons.append(f"15m RSI bottom permission {rsi_now:.1f}")
         confidence += 30
-        if bottom_turn:
-            reasons.append(f"RSI {rsi_previous:.1f} se upar muda")
+        if permission_bottom_turn and trigger_up:
+            reasons.append("15m bottom turn + 3m upward trigger")
             confidence += 20
         else:
             cautions.append("RSI abhi bottom se upar mudna baaki hai")
@@ -314,7 +351,7 @@ def evaluate_rsi_reversal_setup(
             action = "IRON CONDOR"
             confidence = min(confidence, 69)
     else:
-        cautions.append("RSI top 70+ ya bottom 30- zone mein nahi")
+        cautions.append("15m completed RSI top 70+ ya bottom 30- permission mein nahi")
 
     market_live = bool(
         getattr(getattr(snapshot, "market_session", None), "is_live", False)
@@ -359,7 +396,7 @@ def evaluate_rsi_reversal_setup(
 
     bp_text = (
         f"{bp_direction} {bp_score:.0f}/100 · {bp_confirmations}/"
-        f"{int(getattr(big_player, 'confirmation_total', 0) or 0)}"
+        f"{max(MIN_BIG_PLAYER_CONFIRMATIONS, int(getattr(big_player, 'confirmation_total', 0) or 0))}"
         if big_player is not None
         else "Unavailable"
     )
@@ -373,10 +410,23 @@ def evaluate_rsi_reversal_setup(
         confidence=confidence,
         rsi_now=rsi_now,
         rsi_previous=rsi_previous,
-        barrier_text=_level_text(active_level, "Barrier"),
+        trigger_text=trigger_text,
+        barrier_text=(
+            _level_text(active_level, "Barrier")
+            if active_level is not None
+            else "RSI permission ke baad relevant barrier evaluate hoga"
+        ),
         big_player_text=bp_text,
-        structure_text=_structure(plan),
-        market_sl_text=_market_sl(action, resistance, support),
+        structure_text=(
+            _structure(plan)
+            if zone != "NORMAL"
+            else "Entry gate pending — strike abhi select nahi hua"
+        ),
+        market_sl_text=(
+            _market_sl(action, resistance, support)
+            if zone != "NORMAL"
+            else "Entry gate pending — SL abhi active nahi"
+        ),
         money_sl_text=f"Loss alert budget ₹{_budget(snapshot):,.0f} · actual trade record required; auto-exit nahi",
         suggested_lots=lots if action != "WAIT" else 0,
         reasons=tuple(reasons),

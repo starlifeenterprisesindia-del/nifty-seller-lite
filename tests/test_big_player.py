@@ -87,7 +87,7 @@ def test_same_completed_minute_is_not_counted_twice():
         ],
     )
     assert result.confirmation_count == 1
-    assert result.confirmation_total == 1
+    assert result.confirmation_total == 2
 
 
 def test_small_opposite_move_does_not_flip_direction_immediately():

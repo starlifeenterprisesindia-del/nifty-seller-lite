@@ -1,0 +1,8 @@
+Nifty Seller Lite v2.42.3 — Evidence + RSI alignment
+
+- Cumulative update from deployed v2.42.1; includes the v2.42.2 evidence-display correction.
+- Evidence table now reflects the actual unified One-Brain weights and raw bounded Top-9 breadth.
+- RSI reversal now follows 15-minute permission + 3-minute entry trigger.
+- A normal RSI state no longer falsely says that available barriers/strikes are unresolved.
+- Big Player first observation is shown as 1/2, not the misleading 1/1.
+- No order placement was added; all entry, risk, hedge and manual-fill guards remain active.
