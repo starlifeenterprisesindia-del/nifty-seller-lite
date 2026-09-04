@@ -236,16 +236,29 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
     }.get(action)
     if selected_plan is None or not selected_plan.available:
         return False, "Protected paper plan is unavailable"
+    future = snapshot.metadata.get("future_brain") or {}
+    future_gate = str(future.get("final_gate") or "")
     alignment_blocker = _entry_alignment_blocker(
         setup=action,
         price_action=snapshot.price_action,
         levels=snapshot.levels,
         volume=snapshot.volume,
         patterns=snapshot.patterns,
+        allow_countertrend_15m="REVERSAL PAPER TEST" in future_gate,
     )
-    # Candidate journal intentionally records near-misses for calibration. The
-    # alignment gate decides QUALIFIED vs EXPERIMENTAL; it no longer erases the
-    # observation completely.
+    # Rejected observations remain in the signal log, but cannot contaminate
+    # paper-trade P&L.
+    if alignment_blocker:
+        return False, alignment_blocker
+    preferred = str(future.get("preferred_direction") or "")
+    setup_direction = {
+        "PE SELL": "UP", "CE BUY": "UP", "CE SELL": "DOWN",
+        "PE BUY": "DOWN", "IRON CONDOR": "RANGE",
+    }.get(action)
+    if future_gate.startswith("WAIT"):
+        return False, "Future Brain: " + future_gate
+    if preferred in {"UP", "DOWN", "RANGE"} and setup_direction != preferred:
+        return False, f"Future Brain prefers {preferred}; {action} rejected"
     if (
         action in {"CE SELL", "PE SELL", "IRON CONDOR"}
         and float(selected_plan.estimated_credit_points or 0.0)
@@ -292,7 +305,17 @@ def _paper_snapshot(snapshot):
     """Select a test candidate on a copy; never mutate the real AI/position."""
     action = snapshot.trade_plan.selected_setup
     if action == "WAIT":
-        action = snapshot.trade_plan.candidate_setup
+        future = snapshot.metadata.get("future_brain") or {}
+        preferred = str(future.get("preferred_direction") or "")
+        choices = {
+            "UP": (("PE SELL", snapshot.decision.pe_sell), ("CE BUY", snapshot.decision.ce_buy)),
+            "DOWN": (("CE SELL", snapshot.decision.ce_sell), ("PE BUY", snapshot.decision.pe_buy)),
+            "RANGE": (("IRON CONDOR", snapshot.decision.iron_condor),),
+        }.get(preferred, ())
+        action = (
+            max(choices, key=lambda item: float(item[1].score))[0]
+            if choices else snapshot.trade_plan.candidate_setup
+        )
     if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
         return snapshot
     plan = replace(snapshot.trade_plan, selected_setup=action)

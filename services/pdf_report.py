@@ -492,6 +492,20 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             _BLUE,
         )
     )
+    future = snapshot.metadata.get("future_brain") or {}
+    if future:
+        story.append(_sub_title("Future Brain - Next 5 / 15 Minute"))
+        story.append(_table(
+            ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Action gate", "History"],
+            [[
+                future.get("transition"),
+                f"{future.get('up_5m')} / {future.get('down_5m')} / {future.get('range_5m')}",
+                f"{future.get('up_15m')} / {future.get('down_15m')} / {future.get('range_15m')}",
+                future.get("final_gate"),
+                f"{future.get('historical_matches', 0)} matches - {future.get('historical_status')}",
+            ]],
+            widths=[50 * mm, 48 * mm, 48 * mm, 60 * mm, 52 * mm], compact=True,
+        ))
 
     activity_rows, activity_callouts = _activity_report_rows(snapshot)
     story.append(_sub_title("Big Player Activity, Price Shock and Freeze Status"))
@@ -2018,6 +2032,18 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
             _BLUE,
         )
     )
+    future = snapshot.metadata.get("future_brain") or {}
+    if future:
+        story.append(_sub_title("Future Brain - Next Move"))
+        story.append(_table(
+            ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Action gate"],
+            [[
+                future.get("transition"),
+                f"{future.get('up_5m')} / {future.get('down_5m')} / {future.get('range_5m')}",
+                f"{future.get('up_15m')} / {future.get('down_15m')} / {future.get('range_15m')}",
+                future.get("final_gate"),
+            ]], widths=[60 * mm, 60 * mm, 60 * mm, 70 * mm], compact=True,
+        ))
 
     activity_rows, activity_callouts = _activity_report_rows(snapshot)
     story.append(_sub_title("Activity / Shock Status"))

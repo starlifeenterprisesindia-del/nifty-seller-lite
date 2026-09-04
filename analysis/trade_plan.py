@@ -972,13 +972,18 @@ def _candidate_action(decision: FinalDecision, selected: str) -> str:
     # idea, but it remains WATCH ONLY until the execution guard becomes ready.
     direction = str(decision.market_direction or "").upper()
     if direction == "BULLISH":
-        evaluations = {"PE SELL": decision.pe_sell}
+        evaluations = {"PE SELL": decision.pe_sell, "CE BUY": decision.ce_buy}
     elif direction == "BEARISH":
-        evaluations = {"CE SELL": decision.ce_sell}
+        evaluations = {"CE SELL": decision.ce_sell, "PE BUY": decision.pe_buy}
+    elif direction == "RANGE":
+        evaluations = {"IRON CONDOR": decision.iron_condor}
     else:
         evaluations = {
             "CE SELL": decision.ce_sell,
             "PE SELL": decision.pe_sell,
+            "CE BUY": decision.ce_buy,
+            "PE BUY": decision.pe_buy,
+            "IRON CONDOR": decision.iron_condor,
         }
     return max(evaluations, key=lambda name: float(evaluations[name].score))
 

@@ -129,21 +129,21 @@ def test_pattern_aligned_alert_rejects_weak_opposite_forming():
 
 def test_paper_threshold_only():
     assert CONFIG.shadow_journal_min_confidence == 50
-    assert CONFIG.shadow_journal_min_strategy_score == 45
+    assert CONFIG.shadow_journal_min_strategy_score == 55
     assert CONFIG.shadow_journal_min_option_confidence == 55
     assert CONFIG.shadow_journal_min_sell_credit_points == 4
     assert CONFIG.decision_minimum_score == 62
 
 
-def test_paper_wait_candidate_50_records_without_changing_main(tmp_path):
+def test_paper_wait_candidate_55_records_without_changing_main(tmp_path):
     from test_snapshot_service import StubClient, StubMaster
     import test_execution_guard as fixtures
     from test_position_guardian import bundle
     from services.snapshot_service import SnapshotService
     from services.shadow_journal import process_auto_shadow_journal, ShadowJournalStore
     snap = SnapshotService(StubClient(), StubMaster()).build(NOW)
-    decision = replace(fixtures.decision("WAIT"), decision_confidence=50,
-                       pe_sell=replace(fixtures.decision().pe_sell, score=50))
+    decision = replace(fixtures.decision("WAIT"), decision_confidence=55,
+                       pe_sell=replace(fixtures.decision().pe_sell, score=55))
     snap = replace(snap, created_at=fixtures.NOW, decision=decision,
         trade_plan=replace(bundle(), selected_setup="WAIT", candidate_setup="PE SELL"),
         risk_profile=fixtures.risk_profile(capital=2_000_000),
@@ -158,7 +158,7 @@ def test_paper_wait_candidate_50_records_without_changing_main(tmp_path):
     assert entries[0]["setup"] == "PE SELL"
     assert entries[0]["real_ai_action"] == "WAIT"
     assert entries[0]["stop_loss_points"] > 0
-    assert entries[0]["score_band"] == "50–54"
+    assert entries[0]["score_band"] == "55–59"
     assert entries[0]["counts_for_ai_accuracy"] is False
     assert snap.trade_plan.selected_setup == snap.decision.final_action == "WAIT"
     assert len(process_auto_shadow_journal(snap, store, enabled=True)) == 1
@@ -190,9 +190,8 @@ def test_paper_wait_candidate_50_records_without_changing_main(tmp_path):
     )
     trend_store = ShadowJournalStore(tmp_path / "counter-trend.json")
     counter_entries = process_auto_shadow_journal(counter_trend, trend_store, enabled=True)
-    assert len(counter_entries) == 1
-    assert counter_entries[0]["counts_for_ai_accuracy"] is False
-    assert "15m permission" in counter_entries[0]["candidate_warning"].lower()
+    assert counter_entries == []
+    assert "15m permission" in trend_store.last_blocker.lower()
 
 
 def test_live_guard_not_lowered_to_paper_50():

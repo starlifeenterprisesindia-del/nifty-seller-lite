@@ -16,13 +16,14 @@ def app_observation(snapshot):
     candidate = snapshot.trade_plan.selected_setup
     if candidate == "WAIT":
         candidate = snapshot.trade_plan.candidate_setup
-    field = {"CE SELL": "ce_sell", "PE SELL": "pe_sell", "IRON CONDOR": "iron_condor"}.get(candidate)
+    field = {"CE SELL": "ce_sell", "PE SELL": "pe_sell", "IRON CONDOR": "iron_condor",
+             "CE BUY": "ce_buy", "PE BUY": "pe_buy"}.get(candidate)
     plan = getattr(snapshot.trade_plan, field, None) if field else None
     evaluation = getattr(snapshot.decision, field, None) if field else None
     legs = []
     valid = True
     if plan:
-        for role, items in (("SELL", plan.short_legs), ("HEDGE", plan.hedge_legs)):
+        for role, items in (("SELL", plan.short_legs), ("HEDGE", plan.hedge_legs), ("BUY", plan.long_legs)):
             for leg in items:
                 matches = snapshot.option_chain[(snapshot.option_chain["strike"] == leg.strike) & (snapshot.option_chain["side"] == leg.side)]
                 if len(matches) != 1:
@@ -32,10 +33,15 @@ def app_observation(snapshot):
                 legs.append({"role": role, "strike": leg.strike, "side": leg.side,
                              "security_id": row.get("security_id"), "top_bid_price": row.get("top_bid_price"),
                              "top_ask_price": row.get("top_ask_price")})
+    future = snapshot.metadata.get("future_brain") or {}
     return clean({"at": snapshot.created_at.isoformat(), "action": snapshot.decision.final_action,
                   "reason": snapshot.decision.execution_status, "version": snapshot.metadata.get("version", ""),
                   "candidate": candidate, "score": getattr(evaluation,"score",0), "expiry": snapshot.expiry,
                   "spot": snapshot.nifty_quote.get("last_price"), "legs": legs if valid else [],
+                  "future_brain": {k: future.get(k) for k in (
+                      "feature_key", "current_direction", "next_direction", "transition",
+                      "up_5m", "down_5m", "range_5m", "up_15m", "down_15m", "range_15m",
+                      "final_gate", "model_label")},
                   "institutional": asdict(snapshot.institutional_context),
                   "fresh": snapshot.market_session.is_live and all(getattr(snapshot.feed_status.get(k),"use_state","")=="LIVE" for k in ("quotes","candles","option_chain"))})
 
@@ -58,6 +64,7 @@ def sync_day_memory(snapshot, url, key):
             st.session_state.day_memory_error = "History unavailable — Railway update/storage/connection check karo."
         st.session_state.day_memory_fetch_at = now
     report = st.session_state.get("day_memory_report") if not st.session_state.get("day_memory_error") and url and key else None
+    snapshot.metadata["learning_outcomes"] = list((report or {}).get("outcomes") or [])
     snapshot.metadata["history_context"] = history_context(snapshot,report)
     snapshot.metadata["recent_history"] = recent_history(snapshot, report)
     snapshot.metadata["cycle_recorded_days"] = len((report or {}).get("cycle_prices", {}).get("days", []))

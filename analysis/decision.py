@@ -266,6 +266,7 @@ def _entry_alignment_blocker(
     levels: LevelBundle,
     volume: VolumeBundle | None,
     patterns: PatternEvidenceBundle | None,
+    allow_countertrend_15m: bool = False,
 ) -> str | None:
     """Hard permission gates: 15m direction, 3m trigger and usable room."""
 
@@ -276,7 +277,7 @@ def _entry_alignment_blocker(
         return "15m/3m alignment unavailable"
     fifteen = _timeframe_state(price_action.fifteen_minute)
     three = _timeframe_state(price_action.three_minute)
-    if fifteen != desired:
+    if fifteen != desired and not allow_countertrend_15m:
         return f"15m permission is {fifteen}; {desired} setup blocked"
     if three != desired:
         return f"3m trigger is {three}; {desired} entry not confirmed"

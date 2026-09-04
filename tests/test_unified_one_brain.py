@@ -29,6 +29,27 @@ def test_bullish_timeframes_block_bearish_candidate():
     assert "15m permission" in blocker
 
 
+def test_future_reversal_paper_gate_can_use_3m_without_rewriting_15m_context():
+    blocker = _entry_alignment_blocker(
+        setup="CE SELL",
+        price_action=replace(
+            price_action(),
+            three_minute=replace(
+                price_action().three_minute,
+                structure="BEARISH LH/LL",
+                event="BEARISH CONTINUATION",
+                bullish_score=10,
+                bearish_score=80,
+            ),
+        ),
+        levels=common_kwargs()["levels"],
+        volume=None,
+        patterns=None,
+        allow_countertrend_15m=True,
+    )
+    assert blocker is None
+
+
 def test_good_direction_still_blocks_when_barrier_space_is_too_small():
     levels = replace(common_kwargs()["levels"], upside_room=5.0)
     blocker = _entry_alignment_blocker(

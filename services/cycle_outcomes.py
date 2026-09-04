@@ -77,6 +77,13 @@ def record_signal(db, body):
             "version": str(body.get("version", ""))[:80], "legs": legs, "entry_credit": credit,
             "score_band": int((number(body.get("score")) or 0)//5)*5,
             "label": "Candidate observation; no order/fill, no fees included"}
+    future = body.get("future_brain") or {}
+    if not isinstance(future, dict):
+        future = {}
+    item["future_brain"] = {key: future.get(key) for key in (
+        "feature_key", "current_direction", "next_direction", "transition",
+        "up_5m", "down_5m", "range_5m", "up_15m", "down_15m", "range_15m",
+        "final_gate", "model_label")}
     institutional = body.get("institutional") or {}
     if not isinstance(institutional, dict):
         institutional = {}
@@ -85,6 +92,8 @@ def record_signal(db, body):
     for key in ("latest_fii_net", "latest_dii_net", "latest_fii_index_futures_contracts", "latest_fii_futures_long_pct", "latest_fii_futures_short_pct"):
         item["institutional"][key] = number(institutional.get(key))
     signature = encode({k: item[k] for k in ("expiry", "action", "candidate", "version", "score_band")} | {
+        "future_feature": item["future_brain"].get("feature_key"),
+        "future_direction": item["future_brain"].get("next_direction"),
         "legs": [{k:x[k] for k in ("strike", "side", "role", "security_id")} for x in legs]})
     old = db.execute("SELECT body FROM state WHERE identity='signal_signature'").fetchone()
     if old and old[0] == signature:
@@ -122,10 +131,12 @@ def update_outcomes(db, sample):
                 continue
             result = {"candidate": signal["candidate"], "action": signal["action"], "status": "UNAVAILABLE",
                       "label": "Observed simulation, points per equal-quantity spread; not realised P&L"}
+            result["feature_key"] = (signal.get("future_brain") or {}).get("feature_key")
             if now.date() == start.date() and horizon <= elapsed <= horizon+2:
                 end_spot = number(sample.get("spot"))
                 result.update(status="OBSERVED", observed_minutes=round(elapsed,2),
-                              spot_change=None if end_spot is None else round(end_spot-signal["spot"],2))
+                              spot_change=None if end_spot is None else round(end_spot-signal["spot"],2),
+                              move_threshold_points=8.0)
                 history = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples WHERE at>=? AND at<=? ORDER BY at", (start.replace(second=0,microsecond=0).isoformat(),now.isoformat()))]
                 history = [r for r in history if start <= datetime.fromisoformat(r["at"]) <= now]
                 times = [start]+[datetime.fromisoformat(r["at"]) for r in history]+[now]

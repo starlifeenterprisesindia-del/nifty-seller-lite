@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.43.1_RAILWAY_MEMORY_HOTFIX"
+    version: str = "2.44.0_TWO_BRAIN_LEARNING_ENGINE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -248,7 +248,7 @@ class AppConfig:
     shadow_journal_path: str = "data/shadow_journal.json"
     shadow_journal_max_trades_per_day: int = 5
     shadow_journal_min_confidence: float = 50.0
-    shadow_journal_min_strategy_score: float = 45.0
+    shadow_journal_min_strategy_score: float = 55.0
     shadow_journal_min_option_confidence: float = 55.0
     # Experimental paper entries still need enough credit to survive estimated
     # charges and one observed-quote slippage step.  This is not an execution rule.

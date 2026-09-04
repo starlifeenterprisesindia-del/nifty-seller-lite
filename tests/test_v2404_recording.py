@@ -78,6 +78,22 @@ def test_empty_record_does_not_claim_saved_parameters(tmp_path):
     assert coverage["raw_greeks_rows"] == 0
 
 
+def test_slim_railway_record_keeps_executable_fields_not_raw_greek_duplicates(monkeypatch):
+    monkeypatch.setenv("DAY_MEMORY_SLIM", "1")
+    item = snapshot(datetime(2026, 8, 28, 14, 25, tzinfo=IST))
+    item.option_chain = validate_greeks(source_pair())
+    body = compact(item)
+    assert body["storage_mode"] == "SLIM IMPORTANT DATA"
+    assert "strike" in body["options"][0]
+    assert "delta" in body["options"][0]
+    assert "source_delta" not in body["options"][0]
+    assert "gamma" not in body["options"][0]
+    assert set(body["evidence"]) == {
+        "price_action", "option_intelligence", "decision", "trade_plan",
+        "heavyweights", "volume", "vix_context",
+    }
+
+
 def test_main_card_shows_reference_fit_and_strike_without_changing_wait(monkeypatch):
     from types import SimpleNamespace as NS
     from ui import components

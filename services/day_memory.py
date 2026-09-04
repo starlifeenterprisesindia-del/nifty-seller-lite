@@ -58,13 +58,15 @@ def candle_reaction(level, candle):
 
 def compact(snapshot, tracked_strikes=()):
     """Keep contracts within 500 points plus no credentials/raw HTTP payloads."""
+    slim = os.getenv("DAY_MEMORY_SLIM", "0") == "1"
     summary = snapshot.public_summary()
     spot = summary.get("nifty_last_price")
     frame = snapshot.option_chain
     if getattr(snapshot.feed_status.get("option_chain"), "use_state", "") != "LIVE":
         frame = frame.iloc[:0]
     if spot is not None and "strike" in frame:
-        relevant = (frame["strike"] - float(spot)).abs() <= 500
+        radius = 250 if slim else 500
+        relevant = (frame["strike"] - float(spot)).abs() <= radius
         relevant |= frame["strike"].isin(tracked_strikes)
         for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
             zone = summary["barrier_map"].get(name)
@@ -81,6 +83,13 @@ def compact(snapshot, tracked_strikes=()):
                           "previous_oi", "previous_volume", "previous_close_price",
                           "source_implied_volatility", "source_delta", "source_gamma", "source_theta", "source_vega",
                           "iv_pair_ratio", "delta_pair_gap") if x in frame]
+    if slim:
+        important = {
+            "security_id", "strike", "side", "last_price", "oi", "volume",
+            "implied_volatility", "top_bid_price", "top_ask_price", "delta", "theta",
+            "previous_oi", "previous_volume", "previous_close_price",
+        }
+        fields = [field for field in fields if field in important]
     frame = frame.copy()
     if "greeks_quality" in frame:
         for field in ("delta", "gamma", "theta", "vega"):
@@ -93,6 +102,25 @@ def compact(snapshot, tracked_strikes=()):
     def quotes(rows):
         return [{k: row.get(k) for k in ("symbol", "security_id", "last_price", "volume", "oi",
                                         "last_trade_time", "timestamp")} for row in rows]
+    if slim:
+        evidence = {
+            "price_action": summary.get("price_action"),
+            "option_intelligence": summary.get("option_intelligence"),
+            "decision": summary.get("decision"),
+            "trade_plan": summary.get("trade_plan"),
+            "heavyweights": {
+                key: (summary.get("heavyweights") or {}).get(key)
+                for key in ("state", "recent_state", "recent_3m_move_pct", "recent_15m_move_pct",
+                            "advancing", "declining", "confidence", "status")
+            },
+            "volume": summary.get("volume"),
+            "vix_context": summary.get("vix_context"),
+        }
+    else:
+        evidence = {k: summary.get(k) for k in (
+            "core_evidence", "price_action", "patterns", "option_intelligence",
+            "heavyweights", "volume", "vix_context", "news_context", "event_risk",
+            "decision", "trade_plan", "execution_guard", "risk_profile")}
     return clean({
         "record_schema": 2,
         "at": summary["created_at"], "spot": spot, "expiry": summary["expiry"],
@@ -112,10 +140,8 @@ def compact(snapshot, tracked_strikes=()):
         "institutional_context": summary.get("institutional_context", {}),
         "history_analytics": snapshot.metadata.get("history_analytics", {}),
         # Canonical background inputs/results for later diagnosis, not extra votes.
-        "evidence": {k: summary.get(k) for k in (
-            "core_evidence", "price_action", "patterns", "option_intelligence",
-            "heavyweights", "volume", "vix_context", "news_context", "event_risk",
-            "decision", "trade_plan", "execution_guard", "risk_profile")},
+        "evidence": evidence,
+        "storage_mode": "SLIM IMPORTANT DATA" if slim else "FULL DIAGNOSTIC",
     })
 
 
@@ -396,7 +422,7 @@ class DayMemory:
                 "SELECT at,kind,identity,body FROM events ORDER BY id DESC LIMIT 100")]
             summaries = [json.loads(r[0]) for r in db.execute("SELECT body FROM cycle_summaries ORDER BY expiry DESC")]
             outcomes = [{"at": a, "horizon_minutes": h, **json.loads(b)} for a,h,b in db.execute(
-                "SELECT signals.at,outcomes.horizon,outcomes.body FROM outcomes JOIN signals ON signals.id=outcomes.signal_id ORDER BY signals.id DESC,horizon LIMIT 30")]
+                "SELECT signals.at,outcomes.horizon,outcomes.body FROM outcomes JOIN signals ON signals.id=outcomes.signal_id ORDER BY signals.id DESC,horizon LIMIT 200")]
             recent = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 20")]
             from analysis.cycle_prices import cycle_prices
             # Read only price fields, not full evidence payloads; no new feed calls.
@@ -408,6 +434,7 @@ class DayMemory:
             latest_options = latest.get("options", [])
             coverage = {
                 "record_schema": latest.get("record_schema", 1) if latest else None,
+                "storage_mode": latest.get("storage_mode") if latest else None,
                 "sample_at": latest.get("at"),
                 "option_rows": len(latest_options),
                 "raw_greeks_rows": sum(all(r.get("source_" + key) is not None for key in ("implied_volatility", "delta", "gamma", "theta", "vega")) for r in latest_options),

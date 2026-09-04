@@ -1,0 +1,47 @@
+Nifty Seller Lite v2.44.0 — Two-Brain Learning Engine
+=====================================================
+
+What changed
+------------
+- Brain 1 remains the authoritative Current Market state (UP/DOWN/RANGE).
+- Brain 2 is a separate leading forecast for the next 5 and 15 minutes.
+- The Transition Gate explicitly distinguishes continuation, reversal watch,
+  confirmed paper-test reversal, range/compression and no-edge WAIT.
+- Future Brain uses RSI slope, MACD-histogram change, recent 1m momentum,
+  barrier room, option bias, Top-9 breadth and bounded big-player evidence.
+- Percentages are labelled FORECAST SCORE until enough matching outcomes exist.
+  They are never described as guaranteed win probability.
+- Railway outcomes now retain a compact regime key and label the actual NIFTY
+  move 5/15/30 minutes later. Matching history calibrates at most 25% of the
+  live forecast, so old data cannot overpower fresh evidence.
+- Historical status is explicit: INSUFFICIENT DATA, EARLY ESTIMATE, MODERATE
+  HISTORY or STRONGER HISTORICAL BASE.
+- Auto Shadow Journal floor is 55. Blocked alignment and Future-Brain WAIT
+  checks remain rejected observations; they no longer contaminate paper P&L.
+- A 3m-confirmed forecast reversal may be observed as an experimental paper
+  test while the slower 15m state remains visible as context. It never places
+  a broker order and does not relax the real execution guard.
+- WAIT candidates compare direction-compatible BUY and SELL structures. Range
+  candidates can select an Iron Condor instead of forcing directional selling.
+- Railway DAY_MEMORY_SLIM keeps one-minute outcome continuity but stores only
+  important nearby option rows and canonical decision/price/flow evidence.
+  Repeated raw Greek copies and distant option rows are omitted in production.
+- Future Brain is included in the app, public snapshot, quick report, complete
+  diagnostic report and support bundle.
+
+Important interpretation
+------------------------
+- Current strength = present-state evidence, not a future probability.
+- Future score = next-path estimate; it becomes historically calibrated only
+  after enough matching observed outcomes.
+- Entry quality and strategy P&L remain separate from market-direction labels.
+- Existing Railway volume records and old paper journal entries are preserved.
+- No automatic broker order or profit guarantee is added.
+
+Deployment
+----------
+Upload this cumulative package over the repository root and redeploy Railway.
+Keep one Railway replica, a persistent volume and DAY_MEMORY_ENABLED=1. The
+included railway.toml enables DAY_MEMORY_SLIM=1.
+
+Verification: 404 automated tests passed.

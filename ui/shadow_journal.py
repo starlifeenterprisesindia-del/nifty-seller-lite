@@ -14,11 +14,18 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> N
     open_items = [item for item in current if str(item.get("status")).upper() == "OPEN"]
     with st.container(border=True):
         st.markdown("**🧪 Auto Shadow Journal**")
-        cols = st.columns(4)
-        cols[0].metric("Today candidates", len(current))
+        try:
+            import json
+            checks = json.loads(store.path.with_suffix(".signals.json").read_text()) if store is not None else []
+        except (OSError, ValueError):
+            checks = []
+        rejected = [row for row in checks if str(row.get("at", ""))[:10] == today and row.get("reason") != "READY"]
+        cols = st.columns(5)
+        cols[0].metric("Paper trades", len(current))
         cols[1].metric("Open paper", len(open_items))
-        cols[2].metric("Candidate floor", f"{CONFIG.shadow_journal_min_strategy_score:.0f}%")
-        cols[3].metric("Qualified floor", "60%")
+        cols[2].metric("Rejected checks", len(rejected))
+        cols[3].metric("Candidate floor", f"{CONFIG.shadow_journal_min_strategy_score:.0f}%")
+        cols[4].metric("Qualified floor", "60%")
         if store is not None:
             st.caption(f"Last check: {store.last_checked or '—'} · Exact blocker: {store.last_blocker or '—'}")
 
@@ -26,9 +33,10 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> N
 def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
     st.subheader("🧪 Auto Shadow Journal — Paper Trades Only")
     st.caption(
-        f"One-Brain ke {CONFIG.shadow_journal_min_confidence:.0f}%+ experimental setups "
+        f"One-Brain ke {CONFIG.shadow_journal_min_strategy_score:.0f}%+ aligned setups "
         "tabhi paper-test hote hain jab 15m permission, 3m trigger, barrier room, "
-        "volume aur special-candle conflict gates pass hon. ENTRY READY ke liye "
+        "volume, Future Brain aur special-candle conflict gates pass hon. Rejected "
+        "checks reason-history mein rahte hain, trade P&L mein nahi. ENTRY READY ke liye "
         f"unified fit {CONFIG.execution_minimum_unified_score:.0f}+ bhi zaroori hai. "
         "Koi broker order ya real paisa use nahi hota."
     )

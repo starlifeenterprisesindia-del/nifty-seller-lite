@@ -1147,16 +1147,44 @@ def render_main_ai_market_view(
 
     with st.container(border=True):
         _render_final_action_hero(snapshot, feed_ok)
-        forecast = build_canonical_forecast(snapshot)
-        st.markdown(f"**Next 5–15 min path — {forecast.direction} · {forecast.state}**")
-        p1, p2, p3 = st.columns(3)
-        p1.metric("UP path", f"{forecast.up:.1f}%")
-        p2.metric("DOWN path", f"{forecast.down:.1f}%")
-        p3.metric("RANGE path", f"{forecast.range:.1f}%")
-        st.caption(
-            f"Forecast evidence paths (historical success rate nahi). Confirm: {forecast.confirmation}. "
-            f"Invalidation: {forecast.invalidation}"
-        )
+        future = snapshot.metadata.get("future_brain") or {}
+        if future:
+            st.markdown("### 🧠 Brain 1 — Current Market")
+            st.markdown(
+                f"**Abhi: {future.get('current_direction', 'RANGE')} · "
+                f"Current strength {float(future.get('current_strength') or 0):.1f}/100**"
+            )
+            st.markdown("### 🔮 Brain 2 — Next Move")
+            st.markdown(
+                f"**{future.get('transition', 'MIXED / TRANSITION')}** · "
+                f"{future.get('model_label', 'FORECAST SCORE')}"
+            )
+            p1, p2, p3 = st.columns(3)
+            p1.metric("5m UP", f"{float(future.get('up_5m') or 0):.1f}%")
+            p2.metric("5m DOWN", f"{float(future.get('down_5m') or 0):.1f}%")
+            p3.metric("5m RANGE", f"{float(future.get('range_5m') or 0):.1f}%")
+            q1, q2, q3 = st.columns(3)
+            q1.metric("15m UP", f"{float(future.get('up_15m') or 0):.1f}%")
+            q2.metric("15m DOWN", f"{float(future.get('down_15m') or 0):.1f}%")
+            q3.metric("15m RANGE", f"{float(future.get('range_15m') or 0):.1f}%")
+            gate = str(future.get("final_gate") or "WAIT")
+            if gate.startswith("WAIT"):
+                st.warning(f"⚖️ **Action Gate: {gate}**")
+            else:
+                st.info(f"⚖️ **Action Gate: {gate}**")
+            st.caption(
+                f"Confirm: {future.get('confirmation', '3m completed close')} · "
+                f"Invalidation: {future.get('invalidation', 'Latest swing')} · "
+                f"Similar outcomes: {int(future.get('historical_matches') or 0)} "
+                f"({future.get('historical_status', 'INSUFFICIENT DATA')}). "
+                "Forecast score/probability profit guarantee nahi hai."
+            )
+            with st.expander("Future Brain ke reasons", expanded=False):
+                for reason in future.get("reasons") or ("Leading evidence warming up",):
+                    st.write("• " + str(reason))
+        else:
+            forecast = build_canonical_forecast(snapshot)
+            st.markdown(f"**Next 5–15 min path — {forecast.direction} · {forecast.state}**")
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),

@@ -657,8 +657,19 @@ if "snapshot" not in st.session_state or refresh:
         st.stop()
 
 snapshot = st.session_state.snapshot
-sync_day_memory(snapshot, live_server_url, live_server_api_key)
 previous_snapshot = st.session_state.get("previous_snapshot")
+from analysis.future_brain import calculate_future_brain
+# First pass is sent with the observation; the second pass adds any matching
+# Railway outcomes returned by the same sync call.
+snapshot.metadata["future_brain"] = calculate_future_brain(
+    snapshot, previous_snapshot, []
+).to_dict()
+sync_day_memory(snapshot, live_server_url, live_server_api_key)
+snapshot.metadata["future_brain"] = calculate_future_brain(
+    snapshot,
+    previous_snapshot,
+    snapshot.metadata.get("learning_outcomes") or [],
+).to_dict()
 shadow_entries = process_auto_shadow_journal(
     snapshot,
     shadow_journal_store,
