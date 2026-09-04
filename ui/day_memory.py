@@ -2,7 +2,6 @@
 from datetime import datetime
 from dataclasses import asdict
 import hashlib
-import base64
 
 import streamlit as st
 
@@ -13,9 +12,8 @@ from services.railway_live_client import RailwayDhanClient
 
 
 def app_observation(snapshot):
-    candidate = snapshot.trade_plan.selected_setup
-    if candidate == "WAIT":
-        candidate = snapshot.trade_plan.candidate_setup
+    common = snapshot.metadata.get("common_decision") or {}
+    candidate = str(common.get("best_strategy") or snapshot.trade_plan.candidate_setup or "WAIT")
     field = {"CE SELL": "ce_sell", "PE SELL": "pe_sell", "IRON CONDOR": "iron_condor",
              "CE BUY": "ce_buy", "PE BUY": "pe_buy"}.get(candidate)
     plan = getattr(snapshot.trade_plan, field, None) if field else None
@@ -34,14 +32,17 @@ def app_observation(snapshot):
                              "security_id": row.get("security_id"), "top_bid_price": row.get("top_bid_price"),
                              "top_ask_price": row.get("top_ask_price")})
     future = snapshot.metadata.get("future_brain") or {}
-    return clean({"at": snapshot.created_at.isoformat(), "action": snapshot.decision.final_action,
-                  "reason": snapshot.decision.execution_status, "version": snapshot.metadata.get("version", ""),
-                  "candidate": candidate, "score": getattr(evaluation,"score",0), "expiry": snapshot.expiry,
+    return clean({"at": snapshot.created_at.isoformat(), "action": common.get("final_action", "WAIT"),
+                  "reason": (common.get("blockers") or [common.get("status", "WAIT")])[0], "version": snapshot.metadata.get("version", ""),
+                  "candidate": candidate, "score": common.get("trade_confidence", getattr(evaluation,"score",0)), "expiry": snapshot.expiry,
                   "spot": snapshot.nifty_quote.get("last_price"), "legs": legs if valid else [],
                   "future_brain": {k: future.get(k) for k in (
                       "feature_key", "current_direction", "next_direction", "transition",
                       "up_5m", "down_5m", "range_5m", "up_15m", "down_15m", "range_15m",
                       "final_gate", "model_label")},
+                  "common_decision": {k: common.get(k) for k in (
+                      "status", "final_action", "best_strategy", "entry_allowed", "direction",
+                      "trade_confidence", "historical_hit_rate", "historical_matches", "blockers")},
                   "institutional": asdict(snapshot.institutional_context),
                   "fresh": snapshot.market_session.is_live and all(getattr(snapshot.feed_status.get(k),"use_state","")=="LIVE" for k in ("quotes","candles","option_chain"))})
 
@@ -126,10 +127,11 @@ def render_day_memory(snapshot, url, key):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
         if st.button("Prepare full evidence download", key="prepare_evidence_export"):
             try:
-                export = RailwayDhanClient(url,key,timeout_seconds=30)._post("/day-memory-export", {})
-                st.session_state.evidence_download = base64.b64decode(export["content_base64"], validate=True)
-            except Exception:
-                st.error("Export nahi mila; Railway par matching version aur volume check karo. Records delete nahi kiye.")
+                st.session_state.evidence_download = RailwayDhanClient(url,key,timeout_seconds=60).download_bytes("/day-memory-export-file")
+                st.session_state.pop("evidence_download_error", None)
+            except Exception as exc:
+                st.session_state.evidence_download_error = str(exc)[:220]
+                st.error("Export nahi mila: " + st.session_state.evidence_download_error + ". Records delete nahi kiye.")
         if st.session_state.get("evidence_download"):
             st.download_button("Download full recorded evidence", st.session_state.evidence_download,
                                file_name="nifty-evidence.jsonl.gz", mime="application/gzip")

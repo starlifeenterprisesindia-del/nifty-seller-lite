@@ -86,16 +86,29 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
 
 
 def render_timeframe_outlook(snapshot: MarketSnapshot, live_impulse: Any | None = None) -> None:
-    st.subheader("🧭 One-Brain Timeframe Outlook")
+    st.subheader("🔮 Future Brain — Timeframe Detail")
     st.caption(
-        "Yeh same One-Brain evidence ka horizon view hai—alag signal engine nahi. "
-        "Score normalized evidence hai, success probability nahi; final entry status wahi ek One-Brain deta hai. "
-        "1 day = agla trading session, abhi provisional context; naya daily-trained model nahi."
+        "5m/15m Future Brain ke actionable horizons hain. 30m/1h/1day context-only detail hai; "
+        "Common Final Gate ke bina koi strategy entry nahi banti."
     )
     if not snapshot.market_session.is_live:
         st.info("Last-session outlook — market closed; live prediction nahi.")
+    future = snapshot.metadata.get("future_brain") or {}
+    def future_pick(horizon: str) -> tuple[str, float]:
+        values = {
+            "UP": float(future.get(f"up_{horizon}") or 0),
+            "DOWN": float(future.get(f"down_{horizon}") or 0),
+            "RANGE": float(future.get(f"range_{horizon}") or 0),
+        }
+        direction, score = max(values.items(), key=lambda item: item[1])
+        return (direction if score else "MIXED", score)
+    pick5, pick15 = future_pick("5m"), future_pick("15m")
+    future_rows = [
+        {"Time":"5 min", "Direction":pick5[0], "Evidence /100":pick5[1], "Kyun":future.get("confirmation", "Leading evidence warming up")},
+        {"Time":"15 min", "Direction":pick15[0], "Evidence /100":pick15[1], "Kyun":future.get("transition", "MIXED / TRANSITION")},
+    ]
     st.dataframe(
-        build_timeframe_rows(snapshot, live_impulse),
+        future_rows,
         width="stretch",
         hide_index=True,
         column_config={
@@ -104,3 +117,5 @@ def render_timeframe_outlook(snapshot: MarketSnapshot, live_impulse: Any | None 
             "Kyun": st.column_config.TextColumn(width="large"),
         },
     )
+    with st.expander("30m / 1h / next-session context", expanded=False):
+        st.dataframe(build_timeframe_rows(snapshot, live_impulse)[2:], width="stretch", hide_index=True)

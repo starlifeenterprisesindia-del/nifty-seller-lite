@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import resource
+import tempfile
 import threading
 import time
 from collections import deque
@@ -10,7 +11,8 @@ from datetime import datetime, time as wall_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from services.dhan_gateway import DhanGateway
 from services.railway_alert_store import PremiumAlertMonitor, RailwayAlertStore
@@ -314,6 +316,28 @@ def day_memory_export(x_live_key: str = Header(default="")):
         raise HTTPException(status_code=503, detail="Export unavailable; existing records preserved")
     return {"ok": True, "data": {"content_base64": base64.b64encode(content).decode("ascii"),
                                   "filename": "nifty-evidence.jsonl.gz"}}
+
+
+@app.get("/day-memory-export-file")
+def day_memory_export_file(background_tasks: BackgroundTasks, x_live_key: str = Header(default="")):
+    """Stream a full evidence file; avoids JSON/base64 duplication on small RAM plans."""
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
+    _authorise("", x_live_key)
+    if not DAY_RECORDER.store:
+        raise HTTPException(status_code=503, detail="Persistent recorder unavailable")
+    fd, raw = tempfile.mkstemp(prefix="nifty-evidence-", suffix=".jsonl.gz")
+    os.close(fd)
+    try:
+        DAY_RECORDER.store.export_file(raw)
+    except (ValueError, OSError) as exc:
+        try:
+            os.unlink(raw)
+        except OSError:
+            pass
+        raise HTTPException(status_code=503, detail=f"Evidence export failed: {type(exc).__name__}") from exc
+    background_tasks.add_task(os.unlink, raw)
+    return FileResponse(raw, media_type="application/gzip", filename="nifty-evidence.jsonl.gz")
 
 
 @app.post("/paper-monitor")

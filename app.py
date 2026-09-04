@@ -151,7 +151,7 @@ st.markdown(
 )
 st.title("📈 Nifty Seller Lite")
 st.caption(
-    "Hinglish One-Brain market view"
+    "Hinglish Current + Future Brain decision workspace"
 )
 
 
@@ -659,6 +659,7 @@ if "snapshot" not in st.session_state or refresh:
 snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
 from analysis.future_brain import calculate_future_brain
+from analysis.decision_workspace import build_common_decision
 # First pass is sent with the observation; the second pass adds any matching
 # Railway outcomes returned by the same sync call.
 snapshot.metadata["future_brain"] = calculate_future_brain(
@@ -670,6 +671,7 @@ snapshot.metadata["future_brain"] = calculate_future_brain(
     previous_snapshot,
     snapshot.metadata.get("learning_outcomes") or [],
 ).to_dict()
+snapshot.metadata["common_decision"] = build_common_decision(snapshot)
 shadow_entries = process_auto_shadow_journal(
     snapshot,
     shadow_journal_store,

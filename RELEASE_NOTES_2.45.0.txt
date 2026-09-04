@@ -1,0 +1,44 @@
+Nifty Seller Lite 2.45.0 — Future Decision Workspace
+
+WHAT CHANGED
+
+1. Current Brain now describes the market as it is now. It no longer owns the
+   future strategy decision.
+2. Future Brain calculates separate 5-minute and 15-minute UP, DOWN and RANGE
+   paths, transition/reversal state, confirmation and invalidation.
+3. A Common Final Gate now joins Current context, Future direction, live feeds,
+   protected strike availability, alignment and risk budget. Only this gate can
+   mark an entry as allowed.
+4. Best Strategy + Strike ranking is filtered by Future Brain direction:
+   UP -> PE SELL / CE BUY, DOWN -> CE SELL / PE BUY, RANGE -> IRON CONDOR.
+5. The strategy table now shows a compatible protected package and preferred
+   premium entry zone, while clearly remaining WAIT/reference-only when blocked.
+6. Auto Shadow Journal can no longer create an experimental trade from a WAIT
+   candidate. A paper trade requires the same Common Final Gate action.
+7. Recorded observations now store Future Brain and Common Gate fields so later
+   outcomes can calibrate the forecast without silently overriding fresh data.
+8. Full evidence download now streams a gzip file from Railway. It avoids the
+   former 12 MB JSON/base64 limit and lowers peak RAM usage on small plans.
+9. Public snapshot export includes common_decision for auditability.
+
+IMPORTANT SAFETY MEANING
+
+- Forecast percentages are path/evidence estimates, not guaranteed profit odds.
+- Historical hit rate appears only after enough matching observed outcomes.
+- WAIT always overrides the strategy ranking.
+- The app remains advisory and does not place broker orders.
+
+RAILWAY
+
+- Keep the persistent volume mounted at /data.
+- Deploy the same 2.45.0 code to Railway and Streamlit.
+- Keep DAY_MEMORY_SLIM=1 on the small Railway plan.
+- Do not wipe or delete the existing volume.
+- After both deployments finish, open Recorded Data + Calibration and use
+  Prepare full evidence download. The new endpoint is /day-memory-export-file.
+
+VERIFICATION
+
+- Full automated suite: 408 passed.
+- Python compile check passed.
+

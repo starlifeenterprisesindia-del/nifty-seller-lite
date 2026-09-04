@@ -92,6 +92,8 @@ class FutureBrainResult:
     reasons: tuple[str, ...]
     feature_key: str
     historical_matches: int
+    historical_accuracy_5m: float | None
+    historical_accuracy_15m: float | None
     historical_status: str
     model_label: str
     status: str
@@ -242,4 +244,6 @@ def calculate_future_brain(snapshot: Any, previous_snapshot: Any | None = None, 
         invalidation = "3m close outside the active range"
     history_status = "INSUFFICIENT DATA" if matches < 30 else "EARLY ESTIMATE" if matches < 100 else "MODERATE HISTORY" if matches < 300 else "STRONGER HISTORICAL BASE"
     model_label = "FORECAST SCORE" if matches < 100 else "HISTORICALLY CALIBRATED ESTIMATE"
-    return FutureBrainResult(current, current_strength, up5, down5, range5, up15, down15, range15, next_direction, transition, gate, preferred, confirmation, invalidation, tuple(dict.fromkeys(reasons))[:5], key, matches, history_status, model_label, "READY" if snapshot.market_session.is_live else "REFERENCE ONLY")
+    accuracy5 = round(max(rates5), 1) if rates5 and count5 >= 10 else None
+    accuracy15 = round(max(rates15), 1) if rates15 and count15 >= 10 else None
+    return FutureBrainResult(current, current_strength, up5, down5, range5, up15, down15, range15, next_direction, transition, gate, preferred, confirmation, invalidation, tuple(dict.fromkeys(reasons))[:5], key, matches, accuracy5, accuracy15, history_status, model_label, "READY" if snapshot.market_session.is_live else "REFERENCE ONLY")

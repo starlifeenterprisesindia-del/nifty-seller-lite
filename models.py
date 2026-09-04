@@ -899,6 +899,7 @@ class MarketSnapshot:
                 },
                 "discipline_state": asdict(self.discipline_state),
                 "future_brain": self.metadata.get("future_brain"),
+                "common_decision": self.metadata.get("common_decision"),
                 "feeds": {
                     name: asdict(status) for name, status in self.feed_status.items()
                 },

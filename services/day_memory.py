@@ -172,6 +172,14 @@ class DayMemory:
                 raise ValueError("Export exceeds 12 MB; use the persistent-volume cycle archive")
             return target.read_bytes()
 
+    def export_file(self, destination):
+        """Write the full export to a caller-owned path without a RAM/base64 cap."""
+        target = Path(destination)
+        with self.connect() as db:
+            db.execute("BEGIN")
+            self._write_export(db, target)
+        return target
+
     def _archive_cycle(self, db, expiry):
         # An archive failure must abort the rollover BEFORE deleting any rows.
         directory = self.pathpath.parent / "archives"

@@ -1,0 +1,12 @@
+1. Extract the ZIP.
+2. Upload/commit every extracted project file together; do not mix versions.
+3. Recommended commit message:
+   feat: unify future brain strategy entry and evidence export
+4. Wait for Railway and Streamlit deployments to finish.
+5. Confirm the sidebar version is 2.45.0_FUTURE_DECISION_WORKSPACE.
+6. Do not wipe the Railway volume. It must remain mounted at /data.
+7. Keep DAY_MEMORY_SLIM=1 in Railway variables.
+8. During live market, verify Current Brain, Future Brain and Common Final Gate.
+9. Open Checks & Download Centre > Recorded Data + Calibration and test the
+   full evidence download.
+

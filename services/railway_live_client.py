@@ -107,6 +107,28 @@ class RailwayDhanClient:
             raise RuntimeError(str(envelope.get("error") if isinstance(envelope, dict) else envelope))
         return envelope.get("data")
 
+    def download_bytes(self, path: str, *, maximum_bytes: int = 80 * 1024 * 1024) -> bytes:
+        """Download a protected binary response with an explicit client-side cap."""
+        request = Request(
+            f"{self.base_url}{path}",
+            headers={"X-Live-Key": self.api_key, "Accept": "application/gzip"},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=max(30.0, self.timeout_seconds)) as response:
+                length = int(response.headers.get("Content-Length") or 0)
+                if length > maximum_bytes:
+                    raise RuntimeError("Evidence export is larger than the safe download limit")
+                data = response.read(maximum_bytes + 1)
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Railway evidence export HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"Railway evidence export unavailable: {exc.reason}") from exc
+        if len(data) > maximum_bytes:
+            raise RuntimeError("Evidence export is larger than the safe download limit")
+        return data
+
     def market_quote(self, instruments: dict[str, list[int]]) -> dict[str, Any]:
         return self._post("/dhan/market-quote", {"instruments": instruments})
 

@@ -215,6 +215,10 @@ def _close_open_entries(
 
 def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[bool, str]:
     action = snapshot.trade_plan.selected_setup
+    common = snapshot.metadata.get("common_decision") or {}
+    if not common.get("entry_allowed") or common.get("final_action") != action:
+        reasons = common.get("blockers") or ["Common Current/Future gate is not ready"]
+        return False, "Common Gate: " + str(reasons[0])
     today = snapshot.created_at.date().isoformat()
     today_entries = [item for item in entries if str(item.get("session_date")) == today]
     if len(today_entries) >= CONFIG.shadow_journal_max_trades_per_day:
@@ -223,8 +227,8 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
         return False, "Market is not live"
     if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
         return False, "No concrete One-Brain strategy"
-    if snapshot.decision.decision_confidence < CONFIG.shadow_journal_min_confidence:
-        return False, "Entry confidence below threshold"
+    if float(common.get("trade_confidence") or 0) < CONFIG.shadow_journal_min_confidence:
+        return False, "Common trade confidence below threshold"
     if _strategy_score(snapshot, action) < CONFIG.shadow_journal_min_strategy_score:
         return False, "Strategy score below threshold"
     selected_plan = {
@@ -303,19 +307,8 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
 
 def _paper_snapshot(snapshot):
     """Select a test candidate on a copy; never mutate the real AI/position."""
-    action = snapshot.trade_plan.selected_setup
-    if action == "WAIT":
-        future = snapshot.metadata.get("future_brain") or {}
-        preferred = str(future.get("preferred_direction") or "")
-        choices = {
-            "UP": (("PE SELL", snapshot.decision.pe_sell), ("CE BUY", snapshot.decision.ce_buy)),
-            "DOWN": (("CE SELL", snapshot.decision.ce_sell), ("PE BUY", snapshot.decision.pe_buy)),
-            "RANGE": (("IRON CONDOR", snapshot.decision.iron_condor),),
-        }.get(preferred, ())
-        action = (
-            max(choices, key=lambda item: float(item[1].score))[0]
-            if choices else snapshot.trade_plan.candidate_setup
-        )
+    common = snapshot.metadata.get("common_decision") or {}
+    action = str(common.get("final_action") or "WAIT")
     if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
         return snapshot
     plan = replace(snapshot.trade_plan, selected_setup=action)

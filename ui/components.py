@@ -889,7 +889,7 @@ def _render_pair_comparison(plan_map):
 
 
 def render_protected_candidates(snapshot: MarketSnapshot) -> None:
-    """Rank all One-Brain strategies with strike and premium-value context."""
+    """Rank strategies under the Future Brain/Common Gate contract."""
 
     evaluations = _decision_evaluations(snapshot)
     bundle = snapshot.trade_plan
@@ -900,16 +900,19 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         "PE SELL": bundle.pe_sell,
         "IRON CONDOR": bundle.iron_condor,
     }
-    selected = snapshot.decision.final_action.replace(" WITH HEDGE", "")
-    forecast = build_canonical_forecast(snapshot)
-    allowed = compatible_strategies(forecast.direction)
-    eligible = [name for name in evaluations if name in allowed]
-    leader = max(eligible or list(evaluations), key=lambda name: evaluations[name].score)
+    common = getattr(snapshot, "metadata", {}).get("common_decision") or {}
+    selected = str(common.get("final_action") or "WAIT")
+    leader = str(common.get("best_strategy") or "WAIT")
+    future_direction = str(common.get("direction") or "MIXED")
+    allowed = compatible_strategies(future_direction)
+    if leader not in evaluations:
+        eligible = [name for name in evaluations if name in allowed]
+        leader = max(eligible or list(evaluations), key=lambda name: evaluations[name].score)
 
     st.subheader("🛡️ Best Strategy + Strike Value Table")
     st.caption(
-        "CE BUY, CE SELL, PE BUY, PE SELL aur IRON CONDOR ka same One-Brain comparison. "
-        "Fit suitability hai, guaranteed profit nahi. Har directional setup protected/hedged hai."
+        "Future Brain direction ke compatible CE/PE/Condor setups. Current Brain context aur "
+        "Common Gate pass hone par hi ENTRY; har directional setup protected/hedged hai."
     )
 
     def _premium_value(plan: Any | None) -> tuple[str, str]:
@@ -935,18 +938,20 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         return premium, grade
 
     rows: list[dict[str, Any]] = []
-    ranked = sorted(evaluations, key=lambda name: evaluations[name].score, reverse=True)
+    ranked = [name for name in common.get("ranked_strategies", ()) if name in evaluations]
+    if not ranked:
+        ranked = sorted(evaluations, key=lambda name: evaluations[name].score, reverse=True)
     for rank, name in enumerate(ranked, start=1):
         strategy = evaluations[name]
         plan = plan_map[name]
         premium, value_grade = _premium_value(plan)
         if not snapshot.market_session.is_live:
             status = "REFERENCE ONLY"
-        elif snapshot.decision.final_action != "WAIT" and name == selected:
+        elif common.get("entry_allowed") and name == selected:
             status = "BEST • ENTRY READY" if plan.available else "BEST • STRIKE BLOCKED"
         elif allowed and name not in allowed:
             status = "DIRECTION BLOCKED"
-        elif snapshot.decision.final_action == "WAIT" and name == leader:
+        elif not common.get("entry_allowed") and name == leader:
             status = "BEST AVAILABLE • WAIT"
         elif not plan.available:
             status = "BLOCKED"
@@ -976,18 +981,15 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     styled = frame.style.apply(_strategy_style, axis=1)
     st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
     best_plan = plan_map.get(leader)
-    guidance = build_entry_guidance(
-        best_plan,
-        entry_ready=snapshot.execution_guard.readiness == "ENTRY READY" and selected == leader,
-        live=snapshot.market_session.is_live,
-    )
+    common_entry = common.get("entry") or {}
+    guidance = build_entry_guidance(best_plan, entry_ready=bool(common.get("entry_allowed")), live=snapshot.market_session.is_live)
     with st.container(border=True):
         st.markdown(f"**Best compatible entry — {leader}: {guidance.status}**")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Current package", guidance.current)
-        c2.metric("Preferred limit zone", guidance.preferred_zone)
-        c3.metric("Do-not-cross", guidance.minimum)
-        st.caption(guidance.instruction)
+        c1.metric("Current package", common_entry.get("current", guidance.current))
+        c2.metric("Preferred limit zone", common_entry.get("preferred_zone", guidance.preferred_zone))
+        c3.metric("Do-not-cross", common_entry.get("minimum", guidance.minimum))
+        st.caption(common_entry.get("instruction", guidance.instruction))
     with st.expander("Advanced strike quality / pair comparison", expanded=False):
         details = []
         for name in ranked:
@@ -998,9 +1000,9 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         _render_pair_comparison(plan_map)
     if not snapshot.market_session.is_live:
         st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
-    elif snapshot.decision.final_action == "WAIT":
+    elif not common.get("entry_allowed"):
         st.info(
-            "Final Action WAIT hai—table sirf reference ranking hai, koi entry confirmed nahi."
+            "Common Final Gate WAIT hai—table Future Brain reference ranking hai, koi entry confirmed nahi."
         )
     st.caption(
         "Decay Edge me SELL ka absolute theta hedge se zyada hona better hai. "
@@ -1011,6 +1013,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
 
 def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     decision = snapshot.decision
+    common = getattr(snapshot, "metadata", {}).get("common_decision") or {}
     name, score, plan, is_selected = best_existing_candidate(snapshot)
     direction, direction_score, direction_note = market_rukh_display(snapshot)
     direction_text = {
@@ -1019,17 +1022,25 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
         "MIXED": "Market abhi mixed hai",
         "RANGE": "Market range me reh sakta hai",
     }.get(direction, f"Market direction {direction}")
-    entry_ready = (
-        getattr(getattr(snapshot, "execution_guard", None), "readiness", "BLOCKED")
-        == "ENTRY READY"
-    )
-    if decision.final_action == "WAIT" or not entry_ready:
+    entry_ready = bool(common.get("entry_allowed"))
+    common_action = str(common.get("final_action") or "WAIT")
+    bundle = getattr(snapshot, "trade_plan", None)
+    plan_map = ({"CE BUY": bundle.ce_buy, "PE BUY": bundle.pe_buy,
+                 "CE SELL": bundle.ce_sell, "PE SELL": bundle.pe_sell,
+                 "IRON CONDOR": bundle.iron_condor} if bundle is not None else {})
+    eval_map = {key: getattr(decision, key.lower().replace(" ", "_"), None)
+                for key in ("CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR")}
+    common_best = str(common.get("best_strategy") or "WAIT")
+    if common_best in plan_map:
+        name, plan = common_best, plan_map[common_best]
+        score = float(getattr(eval_map.get(common_best), "score", 0) or 0)
+    if common_action == "WAIT" or not entry_ready:
         css_class = "wait"
         title = "WAIT"
         if not snapshot.market_session.is_live:
             subtitle = "REFERENCE ONLY — fresh strategy ranking band"
             structure = snapshot.market_session.message
-        elif decision.final_action == "WAIT":
+        elif common_action == "WAIT":
             subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — entry abhi WAIT"
             reference = (
                 f"Reference {name} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
@@ -1045,7 +1056,7 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
                 + str(decision.blocker or "Evidence conflict / confirmation pending")
             )
         else:
-            candidate = decision.final_action.replace(" WITH HEDGE", "")
+            candidate = common_action
             subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — ENTRY BLOCKED"
             structure = (
                 f"Candidate {candidate} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
@@ -1053,9 +1064,9 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
             )
     else:
         css_class = "ready"
-        title = decision.final_action
-        subtitle = f"BEST selected · Brain fit {score:.1f}%"
-        structure = _plan_structure_text(plan)
+        title = common_action
+        subtitle = f"COMMON GATE PASS · Trade confidence {float(common.get('trade_confidence') or 0):.1f}/100"
+        structure = _plan_structure_text(plan_map.get(common_action))
     live_text = "LIVE" if feed_ok else "LAST DATA"
     hero = (
         '<style>'
@@ -1072,7 +1083,7 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
         '</style>'
         f'<div class="brain-hero {css_class}">'
         '<div class="brain-hero-top"><div>'
-        '<div class="brain-hero-label">FINAL ONE-BRAIN</div>'
+        '<div class="brain-hero-label">COMMON FINAL DECISION</div>'
         f'<div class="brain-hero-action">{escape(title)}</div></div>'
         f'<div class="brain-hero-badge">{escape(live_text)}</div></div>'
         f'<div class="brain-hero-sub">{escape(subtitle)}</div>'
@@ -1108,7 +1119,7 @@ def render_main_ai_market_view(
     direction, direction_score, direction_note = market_rukh_display(snapshot)
     spot = snapshot.nifty_quote.get("last_price")
 
-    st.subheader("🧠 Main AI — Simple Trading View")
+    st.subheader("🧠 Two-Brain Trading Workspace")
 
     critical_feeds = [
         snapshot.feed_status.get(key)
@@ -1149,12 +1160,12 @@ def render_main_ai_market_view(
         _render_final_action_hero(snapshot, feed_ok)
         future = snapshot.metadata.get("future_brain") or {}
         if future:
-            st.markdown("### 🧠 Brain 1 — Current Market")
+            st.markdown("### 🧠 Current Brain — Market Now")
             st.markdown(
                 f"**Abhi: {future.get('current_direction', 'RANGE')} · "
                 f"Current strength {float(future.get('current_strength') or 0):.1f}/100**"
             )
-            st.markdown("### 🔮 Brain 2 — Next Move")
+            st.markdown("### 🔮 Future Brain — Next Move")
             st.markdown(
                 f"**{future.get('transition', 'MIXED / TRANSITION')}** · "
                 f"{future.get('model_label', 'FORECAST SCORE')}"
@@ -1179,6 +1190,19 @@ def render_main_ai_market_view(
                 f"({future.get('historical_status', 'INSUFFICIENT DATA')}). "
                 "Forecast score/probability profit guarantee nahi hai."
             )
+            common = snapshot.metadata.get("common_decision") or {}
+            if common:
+                st.markdown("### ⚖️ Common Final Gate")
+                a, b, c = st.columns(3)
+                a.metric("Best strategy", common.get("best_strategy", "WAIT"))
+                b.metric("Trade confidence", f"{float(common.get('trade_confidence') or 0):.1f}/100")
+                history = common.get("historical_hit_rate")
+                c.metric("Historical hit rate", f"{float(history):.1f}%" if history is not None else "Learning")
+                blockers = common.get("blockers") or []
+                if common.get("entry_allowed"):
+                    st.success("ENTRY ALLOWED — Current context + Future direction + safety gates pass")
+                else:
+                    st.warning("WAIT — " + str(blockers[0] if blockers else "confirmation pending"))
             with st.expander("Future Brain ke reasons", expanded=False):
                 for reason in future.get("reasons") or ("Leading evidence warming up",):
                     st.write("• " + str(reason))
