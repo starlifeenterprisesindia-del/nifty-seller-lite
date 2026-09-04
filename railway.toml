@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "sh -c 'MALLOC_ARENA_MAX=2 PYTHONMALLOC=malloc uvicorn live_server:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 8'"
+startCommand = "sh -c 'MALLOC_ARENA_MAX=2 PYTHONMALLOC=malloc uvicorn live_server:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 16 --timeout-keep-alive 5'"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
@@ -11,3 +11,5 @@ restartPolicyMaxRetries = 10
 [variables]
 WEB_CONCURRENCY = "1"
 MALLOC_ARENA_MAX = "2"
+DHAN_GATEWAY_CACHE_MAX_ENTRIES = "32"
+DAY_MEMORY_MIN_IDLE_SECONDS = "25"

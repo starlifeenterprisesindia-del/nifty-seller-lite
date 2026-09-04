@@ -1,0 +1,29 @@
+Nifty Seller Lite v2.43.1 — Railway Memory Hotfix
+=================================================
+
+Root cause confirmed from Railway logs
+---------------------------------------
+The gateway cache used a minute-changing candle request key but never removed
+old response bodies. Seven-day candle JSON responses accumulated until Railway
+killed the process. The log showed Killed/restart events at 14:24 IST on
+03-Sep and 09:16 / 10:40 IST on 04-Sep.
+
+Permanent fixes
+---------------
+- Dhan gateway response cache now has per-item TTL expiry and a hard 32-entry
+  LRU ceiling.
+- Background day recorder yields to recent foreground app traffic.
+- Dhan WebSocket has a single supervisor and retries after restart-overlap 429
+  or a closed socket; it stays off outside the market window.
+- Railway remains one worker, with concurrency tuned to 16 and short keep-alive.
+- /health exposes peak RSS, bounded-cache status/count and recorder state.
+- Streamlit gateway request timeout is shorter and failure text is actionable.
+- Existing v2.43.0 One-Brain, journal, range and entry-price changes remain.
+
+Deployment
+----------
+Upload this cumulative update over the repository root and redeploy Railway.
+After this hotfix is running, DAY_MEMORY_ENABLED may be set back to 1. Keep a
+single Railway replica. Existing persistent records are not deleted.
+
+Verification: 399 automated tests passed.

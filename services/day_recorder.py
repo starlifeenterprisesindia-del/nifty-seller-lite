@@ -86,8 +86,15 @@ class DayRecorder:
             if recording_time(now):
                 started = clock.monotonic()
                 try:
+                    gateway = self.gateway_factory()
+                    idle_seconds = gateway.foreground_idle_seconds()
+                    minimum_idle = max(10.0, float(os.getenv("DAY_MEMORY_MIN_IDLE_SECONDS", "25") or 25))
+                    if idle_seconds < minimum_idle:
+                        self.status = f"WAIT — app request priority ({idle_seconds:.0f}s idle)"
+                        self.stop_event.wait(max(1.0, 60.0 - clock.time() % 60.0))
+                        continue
                     if service is None:
-                        service = SnapshotService.background_observer(GatewayReader(self.gateway_factory()), root)
+                        service = SnapshotService.background_observer(GatewayReader(gateway), root)
                     snapshot = service.build()
                     stored = self.store.record(snapshot)
                     if self.paper_monitor:

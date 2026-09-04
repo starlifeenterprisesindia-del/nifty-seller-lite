@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Callable
 
@@ -16,10 +18,27 @@ class DhanGateway:
     def __init__(self, client_id: str, access_token: str) -> None:
         self.client = DhanClient(Credentials(client_id=client_id, access_token=access_token))
         self._lock = threading.RLock()
-        self._cache: dict[str, tuple[float, Any]] = {}
+        # Responses can contain seven days of candles. A plain dict keyed by the
+        # minute-specific to_date retained every old response forever and slowly
+        # exhausted Railway RAM. Store TTL per item and enforce a hard LRU cap.
+        self._cache: OrderedDict[str, tuple[float, float, Any]] = OrderedDict()
+        self._cache_max_entries = max(
+            8, min(64, int(os.getenv("DHAN_GATEWAY_CACHE_MAX_ENTRIES", "32") or 32))
+        )
         self._last_call: dict[str, float] = {}
         self._blocked_until = 0.0
         self.last_error = ""
+        self._last_foreground_at = 0.0
+
+    def mark_foreground(self) -> None:
+        with self._lock:
+            self._last_foreground_at = time.monotonic()
+
+    def foreground_idle_seconds(self) -> float:
+        with self._lock:
+            if self._last_foreground_at <= 0:
+                return 9999.0
+            return max(0.0, time.monotonic() - self._last_foreground_at)
 
     @staticmethod
     def _key(name: str, payload: Any) -> str:
@@ -37,12 +56,20 @@ class DhanGateway:
         key = self._key(name, payload)
         with self._lock:
             now = time.monotonic()
+            expired = [
+                cache_key
+                for cache_key, (saved_at, ttl, _value) in self._cache.items()
+                if now - saved_at > ttl
+            ]
+            for cache_key in expired:
+                self._cache.pop(cache_key, None)
             cached = self._cache.get(key)
-            if cached and now - cached[0] <= cache_seconds:
-                return cached[1]
+            if cached and now - cached[0] <= cached[1]:
+                self._cache.move_to_end(key)
+                return cached[2]
             if now < self._blocked_until:
                 if cached:
-                    return cached[1]
+                    return cached[2]
                 raise RuntimeError(
                     f"Dhan rate-limit cooldown active; {self._blocked_until - now:.1f}s wait"
                 )
@@ -57,10 +84,13 @@ class DhanGateway:
                 if "429" in self.last_error or "Too many requests" in self.last_error:
                     self._blocked_until = time.monotonic() + 15.0
                 if cached:
-                    return cached[1]
+                    return cached[2]
                 raise
             self.last_error = ""
-            self._cache[key] = (time.monotonic(), result)
+            self._cache[key] = (time.monotonic(), cache_seconds, result)
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._cache_max_entries:
+                self._cache.popitem(last=False)
             return result
 
     def market_quote(self, instruments: dict[str, list[int]]) -> dict[str, Any]:
@@ -133,4 +163,5 @@ class DhanGateway:
             "rate_limit_cooldown_seconds": round(remaining, 1),
             "last_error": self.last_error,
             "cache_entries": len(self._cache),
+            "cache_max_entries": self._cache_max_entries,
         }

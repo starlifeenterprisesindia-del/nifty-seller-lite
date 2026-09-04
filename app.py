@@ -625,7 +625,7 @@ if "snapshot" not in st.session_state or refresh:
                 client = RailwayDhanClient(
                     live_server_url,
                     live_server_api_key,
-                    timeout_seconds=max(15.0, CONFIG.request_timeout_seconds * 2),
+                    timeout_seconds=max(8.0, CONFIG.request_timeout_seconds),
                 )
             else:
                 credentials = Credentials(client_id=client_id, access_token=access_token)
@@ -650,7 +650,10 @@ if "snapshot" not in st.session_state or refresh:
             st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
             st.session_state.pop("auto_snapshot_reserved_at", None)
     except Exception as exc:
-        st.error(f"Snapshot failed safely: {exc}")
+        st.error(
+            f"Snapshot failed safely: {exc}. Railway restart/health check karo; "
+            "Fetch button baar-baar na dabayein."
+        )
         st.stop()
 
 snapshot = st.session_state.snapshot

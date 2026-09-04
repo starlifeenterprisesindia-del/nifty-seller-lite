@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import resource
 import threading
 import time
 from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, time as wall_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -43,6 +44,8 @@ class LiveFeedState:
         self._lock = threading.Lock()
         self._feed: Any = None
         self._thread: threading.Thread | None = None
+        self._supervisor_thread: threading.Thread | None = None
+        self._stop = threading.Event()
         self._history: deque[dict[str, Any]] = deque(maxlen=720)
         self.started_at: float | None = None
         self.last_tick_at: float | None = None
@@ -104,7 +107,12 @@ class LiveFeedState:
                 now_ts=captured,
             )
 
-    def start(self) -> None:
+    @staticmethod
+    def _market_window() -> bool:
+        now = datetime.now(IST)
+        return now.weekday() < 5 and wall_time(9, 0) <= now.time() <= wall_time(15, 45)
+
+    def _connect_once(self) -> None:
         client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
         access_token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
         if not client_id or not access_token:
@@ -131,7 +139,33 @@ class LiveFeedState:
         except Exception as exc:
             self._on_error(None, exc)
 
+    def _supervise(self) -> None:
+        while not self._stop.is_set():
+            if self._market_window() and (
+                self._thread is None or not self._thread.is_alive()
+            ):
+                # Railway rolling restart can briefly overlap the old Dhan socket
+                # and receive HTTP 429. Backoff and retry instead of permanently
+                # losing the live feed thread.
+                if self._feed is not None:
+                    try:
+                        self._feed.close_connection()
+                    except Exception:
+                        pass
+                self._connect_once()
+            self._stop.wait(45.0)
+
+    def start(self) -> None:
+        if self._supervisor_thread and self._supervisor_thread.is_alive():
+            return
+        self._stop.clear()
+        self._supervisor_thread = threading.Thread(
+            target=self._supervise, daemon=True, name="dhan-feed-supervisor"
+        )
+        self._supervisor_thread.start()
+
     def stop(self) -> None:
+        self._stop.set()
         if self._feed is not None:
             try:
                 self._feed.close_connection()
@@ -217,6 +251,7 @@ def _gateway() -> DhanGateway:
 
 def _gateway_result(function: Any) -> dict[str, Any]:
     try:
+        _gateway().mark_foreground()
         return {"ok": True, "data": function()}
     except HTTPException:
         raise
@@ -322,6 +357,15 @@ def health() -> dict[str, Any]:
     payload["premium_alerts"] = (
         PREMIUM_MONITOR.status() if PREMIUM_MONITOR is not None else {"active": 0, "last_error": "monitor unavailable"}
     )
+    # Linux ru_maxrss is KiB. This exposes a number only, never environment data.
+    payload["memory"] = {
+        "peak_rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1),
+        "cache_bounded": True,
+    }
+    payload["day_recorder"] = {
+        "status": DAY_RECORDER.status,
+        "last_build_seconds": DAY_RECORDER.last_build_seconds,
+    }
     return payload
 
 
