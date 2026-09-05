@@ -1,0 +1,11 @@
+Upload the complete contents of this ZIP to the existing GitHub repository root.
+Replace matching code files. Keep Railway / Streamlit secrets unchanged.
+
+After deployment, confirm the sidebar version is:
+2.46.0_REWARD_AWARE_STRIKE_ENGINE
+
+Keep the Railway persistent volume mounted at /data. Do not wipe the volume and do
+not delete stored evidence, FII/DII records, calibration history or paper journal data.
+
+Suggested commit message:
+feat: add reward-aware future-aligned strike engine

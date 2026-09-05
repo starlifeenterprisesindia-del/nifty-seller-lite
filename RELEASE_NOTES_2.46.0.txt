@@ -1,0 +1,31 @@
+Nifty Seller Lite 2.46.0 — Reward-Aware Strike Engine
+
+Calculation release. Existing UI order, data recording, Current Brain, Common Gate,
+paper journal and Railway persistent-volume behaviour remain intact.
+
+Changes
+- Best CE SELL, PE SELL, CE BUY and PE BUY candidates now include Future Brain
+  alignment while retaining barrier, delta, liquidity, live bid/ask and risk gates.
+- SELL pair rank is reward-aware: quality 35%, credit/risk 25%, net decay 25%
+  and Future Brain alignment 15%. Premium equality is not an objective.
+- Pair audit now includes net theta edge and a labelled theta-only 15-minute estimate.
+- Iron Condor jointly compares protected CE x PE wing combinations instead of simply
+  joining two independently selected wings.
+- Future UP widens CE risk room and may allow a closer PE decay wing; Future DOWN
+  applies the reverse; RANGE prefers balanced spot risk room.
+- Extremely low reward spreads/condors are blocked as SAFE BUT LOW REWARD.
+- Directional buy spreads keep meaningful delta response and reject extremely weak
+  maximum-profit/debit combinations.
+- After Future Brain is calculated, the protected trade plan is re-ranked and the
+  Execution Guard is recalculated from that exact plan.
+- Spot-to-Premium remains connected to R1/R2/S1/S2 barriers, barrier strength and
+  break pressure, VIX remaining move, short-horizon speed and opposite-barrier stop.
+
+Safety
+- Future Brain cannot bypass Current Brain, Common Gate, live bid/ask, barrier,
+  liquidity, hedge, max-risk or market-session blocks.
+- Calculations are estimates for paper testing, not guaranteed profit.
+
+Verification
+- Python compile check passed.
+- Full automated regression suite: 412 passed.

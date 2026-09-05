@@ -628,6 +628,42 @@ snapshot.metadata["future_brain"] = calculate_future_brain(
     previous_snapshot,
     snapshot.metadata.get("learning_outcomes") or [],
 ).to_dict()
+# Second pass: Future Brain only re-ranks already protected strike candidates.
+# Current Brain, Common Gate, bid/ask, barrier and risk-budget gates remain authoritative.
+from analysis.trade_plan import calculate_trade_plan
+from analysis.execution_guard import calculate_execution_guard
+future_view = snapshot.metadata["future_brain"]
+future_direction = future_view.get("preferred_direction") or future_view.get("next_direction") or "WAIT"
+future_strength = max(
+    float(future_view.get("up_15m") or 0.0),
+    float(future_view.get("down_15m") or 0.0),
+    float(future_view.get("range_15m") or 0.0),
+)
+snapshot.trade_plan = calculate_trade_plan(
+    frame=snapshot.option_chain,
+    spot=float(snapshot.nifty_quote.get("last_price") or 0.0),
+    expiry=snapshot.expiry,
+    levels=snapshot.levels,
+    options=snapshot.option_intelligence,
+    decision=snapshot.decision,
+    market_session=snapshot.market_session,
+    indicators=snapshot.indicators,
+    risk_profile=snapshot.risk_profile,
+    future_direction=future_direction,
+    future_strength=future_strength,
+)
+snapshot.execution_guard = calculate_execution_guard(
+    decision=snapshot.decision,
+    trade_plan=snapshot.trade_plan,
+    market_session=snapshot.market_session,
+    option_intelligence=snapshot.option_intelligence,
+    price_action=snapshot.price_action,
+    risk_profile=snapshot.risk_profile,
+    discipline_state=snapshot.discipline_state,
+    big_player=snapshot.big_player_activity,
+    feed_status=snapshot.feed_status,
+    as_of=snapshot.created_at,
+)
 snapshot.metadata["common_decision"] = build_common_decision(snapshot)
 shadow_entries = process_auto_shadow_journal(
     snapshot,
