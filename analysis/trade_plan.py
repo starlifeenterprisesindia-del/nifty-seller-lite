@@ -29,6 +29,61 @@ def _number(value: Any) -> float | None:
     return result if isfinite(result) else None
 
 
+def _future_direction(value: Any) -> str:
+    text = str(value or "").upper()
+    if text in {"UP", "BULLISH"}:
+        return "UP"
+    if text in {"DOWN", "BEARISH"}:
+        return "DOWN"
+    if text in {"RANGE", "SIDEWAYS"}:
+        return "RANGE"
+    return "WAIT"
+
+
+def _future_alignment(action: str, direction: str, strength: float) -> float:
+    """Future Brain may rank candidates, but it never bypasses safety gates."""
+    direction = _future_direction(direction)
+    wanted = {
+        "PE SELL": "UP", "CE BUY": "UP",
+        "CE SELL": "DOWN", "PE BUY": "DOWN",
+        "IRON CONDOR": "RANGE",
+    }.get(action, "WAIT")
+    if direction == "WAIT":
+        return 50.0
+    confidence = clamp(float(strength or 0.0), 0.0, 100.0)
+    if direction == wanted:
+        return 55.0 + confidence * 0.45
+    if direction == "RANGE" or wanted == "RANGE":
+        return 48.0
+    return max(5.0, 45.0 - confidence * 0.40)
+
+
+def _row_for_leg(frame: pd.DataFrame, leg: OptionLeg) -> pd.Series | None:
+    rows = frame[
+        frame["side"].astype(str).str.upper().eq(leg.side)
+        & pd.to_numeric(frame["strike"], errors="coerce").eq(leg.strike)
+    ]
+    return None if rows.empty else rows.iloc[0]
+
+
+def _plan_decay_edge(frame: pd.DataFrame, plan: SetupPlan) -> float | None:
+    sold = bought = 0.0
+    seen = False
+    for leg in plan.short_legs:
+        row = _row_for_leg(frame, leg)
+        theta = _number(row.get("theta")) if row is not None else None
+        if theta is not None:
+            sold += abs(theta)
+            seen = True
+    for leg in plan.hedge_legs:
+        row = _row_for_leg(frame, leg)
+        theta = _number(row.get("theta")) if row is not None else None
+        if theta is not None:
+            bought += abs(theta)
+            seen = True
+    return sold - bought if seen else None
+
+
 def _percentile_score(value: float | None, series: pd.Series) -> float:
     if value is None or series.empty:
         return 35.0
@@ -175,6 +230,8 @@ def _select_long_leg(
     target_delta: float = 0.50,
     min_delta: float = 0.30,
     max_delta: float = 0.72,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _buy_candidate_rows(frame, side, spot)
     if not rows.empty:
@@ -217,17 +274,19 @@ def _select_long_leg(
             100.0,
         )
         level_score, level_reason = _buy_level_score(side, strike, ask, spot, levels)
+        alignment = _future_alignment(f"{side} BUY", future_direction, future_strength)
         total = (
-            liquidity * 0.42
+            liquidity * 0.30
             + _buy_delta_score(
                 _number(row.get("delta")),
                 target=target_delta,
                 minimum=min_delta,
                 maximum=max_delta,
             )
-            * 0.28
-            + distance_score * 0.12
-            + level_score * 0.18
+            * 0.25
+            + distance_score * 0.10
+            + level_score * 0.20
+            + alignment * 0.15
         )
         scored.append((total, row, spread_pct, liquidity, level_reason))
     if not scored:
@@ -247,6 +306,7 @@ def _select_long_leg(
         level_reason,
         f"Delta {leg.delta:.2f}" if leg.delta is not None else "Delta unavailable",
         f"Liquidity score {liquidity:.1f}/100",
+        f"Future Brain alignment {_future_alignment(f'{side} BUY', future_direction, future_strength):.1f}/100",
     )
 
 
@@ -261,6 +321,8 @@ def _buy_plan(
     min_delta: float = 0.30,
     max_delta: float = 0.72,
     hedge_steps: int = 3,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> SetupPlan:
     leg, quality, reasons = _select_long_leg(
         frame,
@@ -270,6 +332,8 @@ def _buy_plan(
         target_delta=target_delta,
         min_delta=min_delta,
         max_delta=max_delta,
+        future_direction=future_direction,
+        future_strength=future_strength,
     )
     if leg is None:
         return SetupPlan.unavailable(name, reasons[0])
@@ -293,6 +357,10 @@ def _buy_plan(
     quality = round(
         clamp(quality * 0.75 + hedge.liquidity_score * 0.25, 0.0, 100.0), 1
     )
+    max_profit = width - debit
+    payoff_ratio = max_profit / debit
+    if payoff_ratio < 0.20:
+        return SetupPlan.unavailable(name, "SAFE BUT LOW REWARD — projected spread benefit is too small")
     status = "READY" if quality >= CONFIG.buy_min_plan_quality else "CAUTION"
     return SetupPlan(
         name=name,
@@ -308,7 +376,8 @@ def _buy_plan(
         reasons=reasons
         + (
             f"Farther-OTM hedge {hedge.strike:,.0f} {side}",
-            f"Defined max profit {width - debit:.2f} points",
+            f"Defined max profit {max_profit:.2f} points",
+            f"Reward/debit {payoff_ratio:.2f}; meaningful-move filter passed",
         ),
         blocker=(
             "None"
@@ -467,6 +536,8 @@ def _select_short_leg(
     max_delta: float = 0.38,
     only_strike: float | None = None,
     minimum_hedge_steps: int | None = None,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> tuple[OptionLeg | None, float, tuple[str, ...]]:
     rows = _candidate_rows(frame, side, spot)
     had_directional_rows = not rows.empty
@@ -513,18 +584,24 @@ def _select_short_leg(
         liquidity = spread_score * 0.50 + oi_score * 0.30 + volume_score * 0.20
         level_score, level_reason = _level_score(side, strike, levels)
         wall_score, wall_reason = _wall_score(side, strike, options)
+        theta = _number(row.get("theta"))
+        theta_values = pd.to_numeric(rows.get("theta", pd.Series(dtype=float)), errors="coerce").abs()
+        theta_score = _percentile_score(abs(theta) if theta is not None else None, theta_values)
+        alignment = _future_alignment(f"{side} SELL", future_direction, future_strength)
         total = (
-            liquidity * 0.35
+            liquidity * 0.25
             + _delta_score(
                 _number(row.get("delta")),
                 target=target_delta,
                 minimum=min_delta,
                 maximum=max_delta,
             )
-            * 0.25
-            + _distance_score(distance_pct) * 0.20
-            + level_score * 0.10
+            * 0.15
+            + _distance_score(distance_pct) * 0.10
+            + level_score * 0.15
             + wall_score * 0.10
+            + theta_score * 0.15
+            + alignment * 0.10
         )
         scores.append((total, row, spread_pct, liquidity, level_reason, wall_reason))
 
@@ -543,6 +620,7 @@ def _select_short_leg(
         level_reason,
         wall_reason,
         f"Liquidity score {liquidity:.1f}/100",
+        f"Future Brain alignment {_future_alignment(f'{side} SELL', future_direction, future_strength):.1f}/100",
     )
     return leg, round(clamp(score, 0.0, 100.0), 1), reasons
 
@@ -703,6 +781,8 @@ def _vertical_plan_for_short(
     only_strike: float | None = None,
     max_risk_points: float | None = None,
     only_hedge: float | None = None,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> SetupPlan:
     short, quality, reasons = _select_short_leg(
         frame,
@@ -715,6 +795,8 @@ def _vertical_plan_for_short(
         max_delta=max_delta,
         only_strike=only_strike,
         minimum_hedge_steps=1 if max_risk_points is not None else None,
+        future_direction=future_direction,
+        future_strength=future_strength,
     )
     if short is None:
         return SetupPlan.unavailable(name, reasons[0])
@@ -793,7 +875,8 @@ def _vertical_plan_for_short(
 
 
 def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28,
-                   min_delta=.08, max_delta=.38, hedge_steps=3, max_risk_points=None):
+                   min_delta=.08, max_delta=.38, hedge_steps=3, max_risk_points=None,
+                   future_direction="WAIT", future_strength=0.0):
     """Rank complete protected pairs, not a short premium in isolation."""
     candidates = _candidate_rows(frame, side, spot)
     if candidates.empty:
@@ -813,25 +896,39 @@ def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28
     plans = [_vertical_plan_for_short(name=name, side=side, frame=frame, spot=spot,
               levels=levels, options=options, target_delta=target_delta, min_delta=min_delta,
               max_delta=max_delta, hedge_steps=hedge_steps, only_strike=float(strike),
-              max_risk_points=max_risk_points, only_hedge=hedge) for strike,hedge in pairs]
+              max_risk_points=max_risk_points, only_hedge=hedge,
+              future_direction=future_direction, future_strength=future_strength) for strike,hedge in pairs]
     usable = [p for p in plans if p.available and p.max_risk_points and p.estimated_credit_points]
     if not usable:
         detail = f"; one-lot budget limit {max_risk_points:.2f} points" if max_risk_points is not None else ""
         return SetupPlan.unavailable(name, "No liquid short/hedge pair passes credit/book/risk checks" + detail)
     def value(plan):
         reward_risk = plan.estimated_credit_points / plan.max_risk_points
-        return plan.quality_score * .75 + min(100, reward_risk * 200) * .25
+        decay = _plan_decay_edge(frame, plan)
+        decay_score = 55.0 if decay is None else clamp(50.0 + decay * 8.0, 0.0, 100.0)
+        reward_score = min(100, reward_risk * 240)
+        alignment = _future_alignment(name, future_direction, future_strength)
+        return plan.quality_score * .35 + reward_score * .25 + decay_score * .25 + alignment * .15
     chosen = max(usable, key=value)
+    chosen_reward_risk = chosen.estimated_credit_points / chosen.max_risk_points
+    if chosen_reward_risk < .06:
+        return replace(
+            chosen,
+            status="BLOCKED",
+            blocker="SAFE BUT LOW REWARD — spread credit/risk is too small",
+        )
     comparison = tuple({"short": p.short_legs[0].strike, "hedge": p.hedge_legs[0].strike,
         "credit_points": p.estimated_credit_points, "max_loss_points": p.max_risk_points,
         "credit_risk": round(p.estimated_credit_points/p.max_risk_points,3),
         "spot_buffer_points": round(abs(p.short_legs[0].strike-spot),2),
+        "net_theta_edge": None if _plan_decay_edge(frame, p) is None else round(_plan_decay_edge(frame, p), 3),
+        "theta_15m_points": None if _plan_decay_edge(frame, p) is None else round(_plan_decay_edge(frame, p) * 15 / 1440, 3),
         "pair_score": round(value(p),1), "quality": p.status,
         "expiry_pnl_at_short": p.estimated_credit_points,
         "expiry_pnl_at_hedge": -p.max_risk_points}
         for p in sorted(usable,key=value,reverse=True)[:3])
     return replace(chosen, pair_comparison=comparison, reasons=(*chosen.reasons,
-        f"Compared {len(usable)} executable pairs; balanced quality 75% + credit/risk 25%, not win probability",
+        f"Compared {len(usable)} executable pairs; quality 35% + reward 25% + decay 25% + Future Brain 15%, not win probability",
         f"Pair comparison: net credit/risk {chosen.estimated_credit_points / chosen.max_risk_points:.2f}; expiry payoff, not expected return"))
 
 
@@ -843,6 +940,9 @@ def _condor_plan(
     levels: LevelBundle | None = None,
     options: OptionIntelligence | None = None,
     indicators: IndicatorBundle | None = None,
+    frame: pd.DataFrame | None = None,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> SetupPlan:
     if not ce.available or not pe.available:
         return SetupPlan.unavailable(
@@ -876,7 +976,20 @@ def _condor_plan(
         balance_reasons.append(
             f"Risk room UP {up_distance:.0f} / DN {down_distance:.0f} pts"
         )
-        if distance_ratio > 1.8:
+        future = _future_direction(future_direction)
+        if future == "UP":
+            skew_score = clamp(60.0 + (up_distance - down_distance) / 4.0, 0.0, 100.0)
+            balance_reasons.append(f"Future Brain UP skew {skew_score:.0f}/100: CE room should be wider")
+            quality += (skew_score - 50.0) * 0.12
+        elif future == "DOWN":
+            skew_score = clamp(60.0 + (down_distance - up_distance) / 4.0, 0.0, 100.0)
+            balance_reasons.append(f"Future Brain DOWN skew {skew_score:.0f}/100: PE room should be wider")
+            quality += (skew_score - 50.0) * 0.12
+        else:
+            skew_score = clamp(100.0 - abs(up_distance - down_distance) / 2.0, 0.0, 100.0)
+            balance_reasons.append(f"Future Brain neutral room balance {skew_score:.0f}/100")
+            quality += (skew_score - 50.0) * 0.08
+        if distance_ratio > 2.2:
             blockers.append("Upper/lower short-strike room is imbalanced")
             quality -= min(18.0, (distance_ratio - 1.0) * 10.0)
 
@@ -884,7 +997,9 @@ def _condor_plan(
     pe_credit = float(pe.estimated_credit_points or 0.0)
     credit_ratio = max(ce_credit, pe_credit) / max(0.01, min(ce_credit, pe_credit))
     balance_reasons.append(f"Wing credit CE {ce_credit:.2f} / PE {pe_credit:.2f}")
-    if credit_ratio > 2.5:
+    # Premium equality is not a target: skewed spot room and decay may correctly
+    # produce unequal CE/PE credits. Only extreme imbalance remains a safety flag.
+    if credit_ratio > 3.5:
         blockers.append("CE/PE wing credits are excessively imbalanced")
         quality -= min(15.0, (credit_ratio - 1.0) * 6.0)
 
@@ -904,6 +1019,19 @@ def _condor_plan(
         if options.confidence >= 75 and "PERSISTENT" in options.persistence:
             blockers.append("Persistent directional option flow blocks Iron Condor")
             quality -= 20.0
+
+    if frame is not None:
+        combined_shell = SetupPlan(
+            name="IRON CONDOR", short_legs=(pe_short, ce_short),
+            hedge_legs=(pe.hedge_legs[0], ce.hedge_legs[0]),
+            estimated_credit_points=credit, width_points=max_width,
+            max_risk_points=max_risk, lower_breakeven=None, upper_breakeven=None,
+            quality_score=quality, status="CAUTION", reasons=(), blocker="None",
+        )
+        decay = _plan_decay_edge(frame, combined_shell)
+        if decay is not None:
+            balance_reasons.append(f"Combined net theta edge {decay:+.2f}; decay-first rank")
+            quality += clamp(decay * 1.5, -10.0, 12.0)
 
     quality = round(clamp(quality, 0.0, 100.0), 1)
     status = (
@@ -933,6 +1061,50 @@ def _condor_plan(
         ),
         blocker="None" if status == "READY" else "; ".join(blockers) or "One or both wings have weak quality",
     )
+
+
+def _best_condor_plan(
+    *, frame: pd.DataFrame, spot: float, levels: LevelBundle,
+    options: OptionIntelligence, indicators: IndicatorBundle | None,
+    max_risk_points: float | None, future_direction: str, future_strength: float,
+) -> SetupPlan:
+    """Jointly rank CE×PE protected wings; equal premium is deliberately irrelevant."""
+    wing_specs = ((.18, .08, .26), (.25, .15, .34), (.32, .22, .40))
+    ce_wings = [
+        _vertical_plan(name="CE SELL", side="CE", frame=frame, spot=spot,
+            levels=levels, options=options, target_delta=t, min_delta=lo,
+            max_delta=hi, max_risk_points=max_risk_points,
+            future_direction=future_direction, future_strength=future_strength)
+        for t, lo, hi in wing_specs
+    ]
+    pe_wings = [
+        _vertical_plan(name="PE SELL", side="PE", frame=frame, spot=spot,
+            levels=levels, options=options, target_delta=t, min_delta=lo,
+            max_delta=hi, max_risk_points=max_risk_points,
+            future_direction=future_direction, future_strength=future_strength)
+        for t, lo, hi in wing_specs
+    ]
+    candidates = [
+        _condor_plan(ce, pe, spot=spot, levels=levels, options=options,
+            indicators=indicators, frame=frame, future_direction=future_direction,
+            future_strength=future_strength)
+        for ce in ce_wings for pe in pe_wings if ce.available and pe.available
+    ]
+    usable = [item for item in candidates if item.available and item.max_risk_points]
+    if not usable:
+        return SetupPlan.unavailable("IRON CONDOR", "No jointly valid CE/PE protected combination")
+
+    def score(plan: SetupPlan) -> float:
+        reward = float(plan.estimated_credit_points or 0.0) / max(float(plan.max_risk_points or 0.0), .01)
+        decay = _plan_decay_edge(frame, plan)
+        decay_score = 55.0 if decay is None else clamp(50.0 + decay * 7.0, 0.0, 100.0)
+        return plan.quality_score * .45 + min(100.0, reward * 220.0) * .25 + decay_score * .30
+
+    chosen = max(usable, key=score)
+    if (chosen.estimated_credit_points or 0.0) / max(chosen.max_risk_points or 0.0, .01) < .08:
+        return replace(chosen, status="BLOCKED", blocker="SAFE BUT LOW REWARD — condor credit/risk is too small")
+    return replace(chosen, reasons=(*chosen.reasons,
+        f"Jointly compared {len(usable)} CE×PE wing combinations; premium equality was not used"))
 
 
 def _apply_runtime_status(
@@ -996,6 +1168,8 @@ def _protected_candidate_profiles(
     levels: LevelBundle,
     options: OptionIntelligence,
     max_risk_points: float | None = None,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> tuple[ProtectedCandidate, ...]:
     side = "CE" if action.startswith("CE") else "PE"
     is_buy = action.endswith("BUY")
@@ -1025,6 +1199,8 @@ def _protected_candidate_profiles(
                 min_delta=minimum,
                 max_delta=maximum,
                 hedge_steps=steps,
+                future_direction=future_direction,
+                future_strength=future_strength,
             )
         else:
             plan = _vertical_plan(
@@ -1039,6 +1215,8 @@ def _protected_candidate_profiles(
                 max_delta=maximum,
                 hedge_steps=steps,
                 max_risk_points=max_risk_points,
+                future_direction=future_direction,
+                future_strength=future_strength,
             )
         result.append(
             ProtectedCandidate(
@@ -1062,6 +1240,8 @@ def calculate_trade_plan(
     market_session: MarketSession,
     indicators: IndicatorBundle | None = None,
     risk_profile=None,
+    future_direction: str = "WAIT",
+    future_strength: float = 0.0,
 ) -> TradePlanBundle:
     """Convert the same One-Brain choice into a concrete option structure.
 
@@ -1091,27 +1271,28 @@ def calculate_trade_plan(
         if risk_profile.lot_size > 0 and risk_profile.max_lots_cap >= 1 else 0.0)
     ce_sell = _vertical_plan(
         name="CE SELL", side="CE", frame=frame, spot=spot, levels=levels, options=options,
-        max_risk_points=max_risk_points
+        max_risk_points=max_risk_points, future_direction=future_direction,
+        future_strength=future_strength,
     )
     pe_sell = _vertical_plan(
         name="PE SELL", side="PE", frame=frame, spot=spot, levels=levels, options=options,
-        max_risk_points=max_risk_points
+        max_risk_points=max_risk_points, future_direction=future_direction,
+        future_strength=future_strength,
     )
-    condor = _condor_plan(
-        ce_sell,
-        pe_sell,
-        spot=spot,
-        levels=levels,
-        options=options,
-        indicators=indicators,
+    condor = _best_condor_plan(
+        frame=frame, spot=spot, levels=levels, options=options,
+        indicators=indicators, max_risk_points=max_risk_points,
+        future_direction=future_direction, future_strength=future_strength,
     )
     ce_buy = _buy_plan(
         name="CE BUY", side="CE", frame=frame, spot=spot, levels=levels,
         target_delta=0.58, min_delta=0.46, max_delta=0.68, hedge_steps=3,
+        future_direction=future_direction, future_strength=future_strength,
     )
     pe_buy = _buy_plan(
         name="PE BUY", side="PE", frame=frame, spot=spot, levels=levels,
         target_delta=0.58, min_delta=0.46, max_delta=0.68, hedge_steps=3,
+        future_direction=future_direction, future_strength=future_strength,
     )
 
     selected = decision.final_action.replace(" WITH HEDGE", "")
@@ -1123,6 +1304,8 @@ def calculate_trade_plan(
         levels=levels,
         options=options,
         max_risk_points=max_risk_points,
+        future_direction=future_direction,
+        future_strength=future_strength,
     )
     plans = {
         "CE BUY": ce_buy,
@@ -1141,17 +1324,8 @@ def calculate_trade_plan(
     )
     if balanced is not None and candidate_setup in plans:
         plans[candidate_setup] = balanced
-    # The audit must show one internally consistent protected structure. If the
-    # balanced directional candidate changed a CE/PE sell wing, rebuild the condor
-    # from those exact displayed standalone sell legs.
-    plans["IRON CONDOR"] = _condor_plan(
-        plans["CE SELL"],
-        plans["PE SELL"],
-        spot=spot,
-        levels=levels,
-        options=options,
-        indicators=indicators,
-    )
+    # Condor is independently joint-ranked; it need not reuse standalone winners.
+    plans["IRON CONDOR"] = condor
     if max_risk_points is not None:
         plans = {name: (SetupPlan.unavailable(name, "One-lot defined risk exceeds configured budget")
                  if plan.available and (plan.max_risk_points is None or plan.max_risk_points > max_risk_points)
