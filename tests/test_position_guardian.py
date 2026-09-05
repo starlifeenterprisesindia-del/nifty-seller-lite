@@ -375,3 +375,56 @@ def test_ce_buy_trade_record_and_guardian_use_long_option_value():
     assert result.current_debit_points == 28.0
     assert result.unrealized_pnl_points == 7.5
     assert result.instruction == "TARGET REACHED"
+
+
+def test_ce_buy_debit_spread_guardian_subtracts_short_hedge_buyback():
+    long_leg = OptionLeg(
+        role="LONG", side="CE", strike=24350, last_price=120.0, delta=0.5,
+        oi=15000, volume=9000, bid=119.5, ask=120.5, spread_pct=1.0,
+        distance_points=0.0, liquidity_score=85, status="READY",
+    )
+    short_hedge = OptionLeg(
+        role="HEDGE SHORT", side="CE", strike=24500, last_price=87.0,
+        delta=0.3, oi=14000, volume=8000, bid=86.5, ask=87.5,
+        spread_pct=1.2, distance_points=150.0, liquidity_score=82,
+        status="READY",
+    )
+    buy_setup = SetupPlan(
+        name="CE BUY", short_legs=(short_hedge,), hedge_legs=(),
+        estimated_credit_points=None, width_points=150,
+        max_risk_points=34.0, lower_breakeven=None,
+        upper_breakeven=24384.0, quality_score=85, status="READY",
+        reasons=("protected debit spread",), blocker="None",
+        long_legs=(long_leg,), estimated_debit_points=34.0,
+    )
+    d = FinalDecision(**{
+        **decision().__dict__, "final_action": "CE BUY", "hedge_required": True,
+        "ce_buy": evaluation("CE BUY", 88),
+    })
+    b = TradePlanBundle(**{
+        **bundle().__dict__, "selected_setup": "CE BUY", "ce_buy": buy_setup,
+    })
+    g = ExecutionGuard(**{
+        **guard().__dict__, "selected_setup": "CE BUY",
+        "target_capture_points": 5.0, "target_exit_debit_points": 39.0,
+        "stop_loss_points": 5.0, "stop_exit_debit_points": 29.0,
+    })
+    record = create_trade_record(
+        captured_at=NOW, decision=d, trade_plan=b, execution_guard=g,
+        lots=1, lot_size=65, spot=24350,
+    )
+    frame = pd.DataFrame([
+        {"strike": 24350.0, "side": "CE", "last_price": 120.0,
+         "top_bid_price": 119.5, "top_ask_price": 120.5},
+        {"strike": 24500.0, "side": "CE", "last_price": 87.0,
+         "top_bid_price": 86.5, "top_ask_price": 87.5},
+    ])
+    result = calculate_position_guardian(
+        discipline_state=discipline(record), option_chain=frame,
+        current_expiry="2026-07-21", current_spot=24350,
+        market_session=MarketSession("LIVE", "LIVE", True, "fresh"),
+        option_chain_live=True, as_of=NOW,
+    )
+    assert result.current_debit_points == 32.0
+    assert result.unrealized_pnl_points == -2.0
+    assert result.unrealized_pnl_rupees == -130.0

@@ -154,6 +154,26 @@ def test_bad_book_or_wrong_contract_not_profit():
     assert frozen_basket(body)==([],None)
 
 
+def test_debit_spread_basket_records_and_marks_both_legs():
+    body = {
+        "expiry": "2026-09-01", "version": "TEST",
+        "legs": [
+            {"role": "BUY", "side": "CE", "strike": 24100,
+             "security_id": "11", "top_bid_price": 99, "top_ask_price": 101},
+            {"role": "SELL", "side": "CE", "strike": 24200,
+             "security_id": "12", "top_bid_price": 49, "top_ask_price": 51},
+        ],
+    }
+    legs, debit = frozen_basket(body)
+    assert debit == 52
+    signal_row = {**body, "legs": legs, "structure_type": "DEBIT", "entry_debit": debit}
+    sample = {"expiry": body["expiry"], "version": "TEST", "options": [
+        {**body["legs"][0], "top_bid_price": 110, "top_ask_price": 112},
+        {**body["legs"][1], "top_bid_price": 45, "top_ask_price": 47},
+    ]}
+    assert mark_spread(signal_row, sample) == 11
+
+
 def context_sample(at,**kwargs):
     return {"at":at.isoformat(),"expiry":"2026-09-01","version":"TEST","direction":"BEARISH",**kwargs}
 

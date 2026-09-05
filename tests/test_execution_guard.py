@@ -239,6 +239,15 @@ def test_three_fresh_confirmations_and_risk_budget_make_entry_ready():
     assert result.spot_invalidation_low == 24300
 
 
+def test_override_checks_the_common_candidate_instead_of_stale_bundle_selection():
+    result = run(
+        selected_setup_override="PE SELL",
+        final_action_override="PE SELL",
+    )
+    assert result.selected_setup == "PE SELL"
+    assert result.readiness == "ENTRY READY"
+
+
 def test_first_signal_is_blocked_until_persistence_is_ready():
     result = run(discipline_state=discipline(confirmations=1))
     assert result.readiness == "BLOCKED"

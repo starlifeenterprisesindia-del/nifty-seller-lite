@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from analysis.trade_plan import calculate_trade_plan
+from analysis.trade_plan import calculate_trade_plan, activate_plan_candidate
 from test_trade_plan import decision, levels, live_session, option_frame, option_intelligence
 
 
@@ -36,7 +36,7 @@ def test_pair_audit_contains_decay_and_reward_aware_score():
     assert plan.pair_comparison
     assert "net_theta_edge" in plan.pair_comparison[0]
     assert "theta_15m_points" in plan.pair_comparison[0]
-    assert any("decay 25%" in reason for reason in plan.reasons)
+    assert any("decay 20%" in reason for reason in plan.reasons)
     assert any("Future Brain alignment" in reason for reason in plan.reasons)
 
 
@@ -55,3 +55,42 @@ def test_condor_does_not_use_equal_premium_as_objective():
     assert any("premium equality was not used" in reason for reason in plan.reasons)
     assert plan.estimated_credit_points > 0
 
+
+def test_directional_buy_never_becomes_ready_from_ltp_only_rows():
+    frame = _theta_frame()
+    frame["top_bid_price"] = None
+    frame["top_ask_price"] = None
+    options = replace(option_intelligence(), market_bias="MIXED", persistence="RANGE")
+    plan = calculate_trade_plan(
+        frame=frame, spot=24350, expiry="2026-07-21", levels=levels(),
+        options=options, decision=decision("WAIT"), market_session=live_session(),
+        future_direction="UP", future_strength=70,
+    )
+    assert not plan.ce_buy.available
+    assert not plan.pe_buy.available
+
+
+def test_common_candidate_activation_restores_intrinsic_ready_status():
+    plan = _plan("UP")
+    activated = activate_plan_candidate(plan, "PE SELL", live_session())
+    assert activated.selected_setup == "PE SELL"
+    assert activated.pe_sell.status in {"READY", "CAUTION"}
+    assert activated.pe_sell.status != "WATCH ONLY"
+
+
+def test_future_alignment_is_strike_specific_not_a_constant_bonus():
+    from analysis.trade_plan import _future_strike_alignment
+    near = _future_strike_alignment(
+        "PE SELL", "UP", 80, strike=24300, spot=24350
+    )
+    far = _future_strike_alignment(
+        "PE SELL", "UP", 80, strike=24150, spot=24350
+    )
+    assert near > far
+
+
+def test_conflicting_future_direction_moves_seller_strike_farther_from_spot():
+    up = _plan("UP")
+    down = _plan("DOWN")
+    assert down.pe_sell.short_legs[0].strike < up.pe_sell.short_legs[0].strike
+    assert up.ce_sell.short_legs[0].strike > down.ce_sell.short_legs[0].strike

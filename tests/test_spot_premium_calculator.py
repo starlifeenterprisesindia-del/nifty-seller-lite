@@ -353,6 +353,23 @@ def test_sideways_decay_shows_15_30_60_minutes_and_respects_intrinsic_floor():
     assert result.decay_scenarios[-1].total_pnl > result.decay_scenarios[0].total_pnl
 
 
+def test_sideways_decay_uses_expiry_aware_theta_curve():
+    far = calculate_spot_premium_range(
+        option_chain=sample_chain(), side="CE", position="SELL", strike=24000,
+        current_spot=24010, current_premium=65, entry_premium=65,
+        lower_spot=23980, upper_spot=24060, target_minutes=15,
+        lot_size=65, lots=1, feed_state="LIVE", minutes_to_expiry=1440,
+    )
+    near = calculate_spot_premium_range(
+        option_chain=sample_chain(), side="CE", position="SELL", strike=24000,
+        current_spot=24010, current_premium=65, entry_premium=65,
+        lower_spot=23980, upper_spot=24060, target_minutes=15,
+        lot_size=65, lots=1, feed_state="LIVE", minutes_to_expiry=90,
+    )
+    assert near.decay_scenarios[0].total_pnl > far.decay_scenarios[0].total_pnl
+    assert "expiry-aware" in near.decay_scenarios[0].note
+
+
 def test_driver_breakdown_exposes_spot_theta_iv_and_chain_components():
     result = calculate_spot_premium_range(
         option_chain=sample_chain(),

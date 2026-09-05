@@ -51,3 +51,24 @@ def test_common_gate_is_reference_only_when_market_closed():
     assert result["entry_allowed"] is False
     assert result["status"] == "REFERENCE ONLY"
 
+
+def test_common_gate_cannot_allow_entry_when_exact_execution_guard_blocks():
+    item = _snapshot()
+    item.metadata["future_brain"] = {
+        "current_direction": "UP", "current_strength": 80,
+        "preferred_direction": "UP", "final_gate": "UP CONTINUATION WATCH",
+        "up_15m": 80, "down_15m": 10, "range_15m": 10,
+    }
+    proposal = build_common_decision(item)
+    candidate = proposal["best_strategy"]
+    blocked_guard = replace(
+        item.execution_guard,
+        selected_setup=candidate,
+        readiness="BLOCKED",
+        blockers=("Fresh confirmation missing",),
+    )
+    result = build_common_decision(item, execution_guard=blocked_guard)
+    assert result["entry_allowed"] is False
+    assert result["final_action"] == "WAIT"
+    assert result["execution_readiness"] == "BLOCKED"
+    assert "Fresh confirmation missing" in result["blockers"]
