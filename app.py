@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import gc
+from dataclasses import replace
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +43,12 @@ from services.live_monitor import (
     monitor_timestamp,
 )
 from services.railway_live_client import RailwayDhanClient, fetch_railway_live_state
-from ui.day_memory import render_day_memory, render_evidence_download, sync_day_memory
+from ui.day_memory import (
+    render_day_memory,
+    render_evidence_download,
+    sync_day_memory,
+    record_final_day_memory,
+)
 from ui.components import (
     render_candles,
     render_evidence_matrix,
@@ -622,7 +628,10 @@ from analysis.decision_workspace import build_common_decision
 snapshot.metadata["future_brain"] = calculate_future_brain(
     snapshot, previous_snapshot, []
 ).to_dict()
-sync_day_memory(snapshot, live_server_url, live_server_api_key)
+# Fetch completed outcomes first, but do not record a half-built observation.
+sync_day_memory(
+    snapshot, live_server_url, live_server_api_key, record_event=False
+)
 snapshot.metadata["future_brain"] = calculate_future_brain(
     snapshot,
     previous_snapshot,
@@ -630,7 +639,7 @@ snapshot.metadata["future_brain"] = calculate_future_brain(
 ).to_dict()
 # Second pass: Future Brain only re-ranks already protected strike candidates.
 # Current Brain, Common Gate, bid/ask, barrier and risk-budget gates remain authoritative.
-from analysis.trade_plan import calculate_trade_plan
+from analysis.trade_plan import calculate_trade_plan, activate_plan_candidate
 from analysis.execution_guard import calculate_execution_guard
 future_view = snapshot.metadata["future_brain"]
 future_direction = future_view.get("preferred_direction") or future_view.get("next_direction") or "WAIT"
@@ -652,6 +661,14 @@ snapshot.trade_plan = calculate_trade_plan(
     future_direction=future_direction,
     future_strength=future_strength,
 )
+# Common workspace proposes one Future-compatible candidate.  The Execution
+# Guard then evaluates that exact plan; only the second Common pass may publish
+# ENTRY ALLOWED.
+common_proposal = build_common_decision(snapshot)
+common_candidate = str(common_proposal.get("best_strategy") or "WAIT")
+snapshot.trade_plan = activate_plan_candidate(
+    snapshot.trade_plan, common_candidate, snapshot.market_session
+)
 snapshot.execution_guard = calculate_execution_guard(
     decision=snapshot.decision,
     trade_plan=snapshot.trade_plan,
@@ -663,8 +680,14 @@ snapshot.execution_guard = calculate_execution_guard(
     big_player=snapshot.big_player_activity,
     feed_status=snapshot.feed_status,
     as_of=snapshot.created_at,
+    selected_setup_override=common_candidate,
+    final_action_override=common_candidate,
 )
-snapshot.metadata["common_decision"] = build_common_decision(snapshot)
+snapshot.metadata["common_decision"] = build_common_decision(
+    snapshot, execution_guard=snapshot.execution_guard
+)
+snapshot.metadata["canonical_finalized"] = True
+record_final_day_memory(snapshot, live_server_url, live_server_api_key)
 shadow_entries = process_auto_shadow_journal(
     snapshot,
     shadow_journal_store,

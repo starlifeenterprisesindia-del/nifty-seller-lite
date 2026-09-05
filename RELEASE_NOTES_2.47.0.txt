@@ -1,0 +1,22 @@
+Nifty Seller Lite 2.47.0 — Canonical Final Pipeline
+
+- CE/PE BUY Position Guardian now values the full debit spread: long bid minus
+  short-hedge ask. P&L, target and stop alerts no longer use the long leg alone.
+- Directional BUY plans require a valid bounded live bid/ask book on both legs;
+  LTP-only rows cannot become an executable plan.
+- Common Gate proposes one exact candidate and the Execution Guard validates that
+  same candidate. ENTRY ALLOWED requires ENTRY READY from the canonical guard.
+- Future Brain strike alignment is candidate-specific, so it can influence the
+  actual standalone strike ranking instead of adding one constant strategy bonus.
+- Vertical and Iron Condor ranking prioritises reward-eligible READY candidates,
+  then CAUTION; blocked/low-reward winners cannot hide a safer valid alternative.
+- Evidence is recorded only after Future Brain, final strike plan, Execution Guard
+  and Common Decision are complete. Railway history fetch remains earlier so
+  completed outcomes can still inform the current Future Brain pass.
+- Debit spreads are now frozen and marked in expiry-cycle learning using both
+  executable legs.
+- Sideways 15/30/60-minute premium scenarios use the same bounded expiry-aware
+  theta curve as the main premium projection.
+
+No storage reset is required. Keep the existing Railway /data volume. Deploy the
+same cumulative version to the app and Railway service.

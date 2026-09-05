@@ -1,12 +1,18 @@
-# Architecture - V2.42
+# Architecture - V2.47
 
 ## One authoritative snapshot
 
 `services/snapshot_service.py` builds one immutable `MarketSnapshot`. Screen and PDFs consume the same snapshot.
 
-## One strategy brain
+## Two brains, one canonical final gate
 
-`analysis/decision.py::calculate_final_decision` is the only CE Buy, PE Buy, CE Sell, PE Sell, Iron Condor and WAIT selector. No UI or report function may recalculate or override it.
+`analysis/decision.py::calculate_final_decision` owns Current Brain evidence.
+`analysis/future_brain.py` owns the next-move forecast and never bypasses safety.
+`analysis/decision_workspace.py` proposes one Future-compatible strategy from the
+already protected plans. `analysis/execution_guard.py` validates that exact
+candidate. Only an `ENTRY READY` guard may become Common Final `ENTRY ALLOWED`.
+No UI, report, evidence or journal function may independently select or approve a
+different strategy.
 
 The production decision is one normalized 100-point calculation: completed 15m
 permission + completed 3m trigger + indicators/core 40, option OI/flow 15,
@@ -36,6 +42,11 @@ context; unavailable news has zero weight.
 ## State and reports
 
 FII/DII keeps a bounded 15-session journal with local and optional private-cloud persistence. Option-flow history remains bounded by session. Quick and Full Audit PDFs render the same presentation-safe snapshot and never call market APIs or the decision brain.
+
+Railway history is fetched before Future Brain so completed outcomes are
+available, but the app observation is posted only after Future Brain, protected
+strike re-ranking, the exact Execution Guard and Common Final decision are all
+complete. Credit and debit spreads both freeze executable bid/ask legs.
 
 ## Read-only boundary
 
