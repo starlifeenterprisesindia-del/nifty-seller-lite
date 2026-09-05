@@ -303,7 +303,7 @@ class HeavyweightBundle:
     recent_contribution_points: float | None = None
     recent_coverage_pct: float = 0.0
     recent_state: str = "WARMING UP"
-    weight_date: str = "2026-07-31"
+    weight_date: str = "2026-08-31"
 
 
 @dataclass(frozen=True)

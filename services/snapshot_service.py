@@ -430,7 +430,7 @@ class SnapshotService:
             grouped.setdefault(future_ref.exchange_segment, []).append(
                 future_ref.security_id
             )
-        for item in CONFIG.top7:
+        for item in CONFIG.top9:
             grouped.setdefault(item.exchange_segment, []).append(int(item.security_id))
 
         quote_response = self.client.market_quote(grouped)
@@ -458,7 +458,7 @@ class SnapshotService:
         )
 
         heavyweight_quotes: list[dict[str, Any]] = []
-        for item in CONFIG.top7:
+        for item in CONFIG.top9:
             quote = self._extract_quote(
                 quote_response, item.exchange_segment, item.security_id
             )
@@ -575,26 +575,26 @@ class SnapshotService:
         )
         statuses["instruments"] = FeedStatus(
             name="instruments",
-            ok=len(heavyweight_quotes) == len(CONFIG.top7),
+            ok=len(heavyweight_quotes) == len(CONFIG.top9),
             fetched_at=current,
-            message=f"Received {len(heavyweight_quotes)}/{len(CONFIG.top7)} configured heavyweight quotes",
+            message=f"Received {len(heavyweight_quotes)}/{len(CONFIG.top9)} configured heavyweight quotes",
             source="Configured Dhan security IDs",
             use_state="READY"
-            if len(heavyweight_quotes) == len(CONFIG.top7)
+            if len(heavyweight_quotes) == len(CONFIG.top9)
             else "CAUTION",
         )
         statuses["heavyweights"] = FeedStatus(
             name="heavyweights",
-            ok=len(analysis_heavyweight_quotes) == len(CONFIG.top7),
+            ok=len(analysis_heavyweight_quotes) == len(CONFIG.top9),
             fetched_at=current,
             message=(
-                f"Usable Top-9 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top7)}"
+                f"Usable Top-9 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top9)}"
             ),
             source="Grouped Dhan market quote",
             use_state=(
                 "LIVE"
                 if market_session.is_live
-                and len(analysis_heavyweight_quotes) == len(CONFIG.top7)
+                and len(analysis_heavyweight_quotes) == len(CONFIG.top9)
                 else "CAUTION"
                 if market_session.is_live
                 else "REFERENCE"
@@ -1321,7 +1321,7 @@ class SnapshotService:
                     statuses.get("expiry_close_quality") is None
                     or statuses["expiry_close_quality"].ok
                 ),
-                "top7_configured": list(CONFIG.top7_symbols),
+                "top9_configured": list(CONFIG.top9_symbols),
                 "vix_resolved": bool(vix_quote),
                 "vix_security_id": vix_ref.security_id,
                 "future_resolved": bool(future_quote),
@@ -1330,7 +1330,7 @@ class SnapshotService:
                 "future_volume_resolved": future_candle_available,
                 "option_state_prior_snapshots": len(option_history),
                 "option_state_current_stored": state_appended,
-                "top7_weight_date": CONFIG.top7_weight_date,
+                "top9_weight_date": CONFIG.top9_weight_date,
                 "strategy_scores_enabled": True,
                 "decision_engine": "analysis.decision.calculate_final_decision",
                 "pre_touch_engine": "analysis.pre_touch_barriers.calculate_pre_touch_barriers",

@@ -1377,7 +1377,7 @@ def calculate_final_decision(
             else _top_reasons(
                 (f"Core bearish evidence {core.bearish_score:.1f}/100",),
                 (f"Bearish option flow {options.bearish_score:.1f}%",),
-                (f"Top-7 state: {heavyweights.state}",),
+                (f"Top-9 state: {heavyweights.state}",),
             )
         ),
         cautions=tuple(dict.fromkeys(ce_cautions))[:3],
@@ -1392,7 +1392,7 @@ def calculate_final_decision(
             else _top_reasons(
                 (f"Core bullish evidence {core.bullish_score:.1f}/100",),
                 (f"Bullish option flow {options.bullish_score:.1f}%",),
-                (f"Top-7 state: {heavyweights.state}",),
+                (f"Top-9 state: {heavyweights.state}",),
             )
         ),
         cautions=tuple(dict.fromkeys(pe_cautions))[:3],

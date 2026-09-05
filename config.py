@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.45.0_FUTURE_DECISION_WORKSPACE"
+    version: str = "2.45.1_TOP9_AND_EVIDENCE_ALIGNMENT"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -57,21 +57,21 @@ class AppConfig:
         symbol="INDIA VIX",
     )
 
-    # Official NIFTY 50 top-nine weights as at 31-Jul-2026. Security IDs are
+    # Official NIFTY 50 top-nine weights as at 31-Aug-2026. Security IDs are
     # Dhan/NSE instrument identifiers used by the already grouped quote request.
-    top7_weight_date: str = "2026-07-31"
-    top7: tuple[InstrumentRef, ...] = (
-        InstrumentRef("HDFC Bank", "1333", "NSE_EQ", "EQUITY", "HDFCBANK", 10.27),
-        InstrumentRef("ICICI Bank", "4963", "NSE_EQ", "EQUITY", "ICICIBANK", 9.22),
+    top9_weight_date: str = "2026-08-31"
+    top9: tuple[InstrumentRef, ...] = (
+        InstrumentRef("HDFC Bank", "1333", "NSE_EQ", "EQUITY", "HDFCBANK", 9.85),
+        InstrumentRef("ICICI Bank", "4963", "NSE_EQ", "EQUITY", "ICICIBANK", 9.45),
         InstrumentRef(
-            "Reliance Industries", "2885", "NSE_EQ", "EQUITY", "RELIANCE", 7.92
+            "Reliance Industries", "2885", "NSE_EQ", "EQUITY", "RELIANCE", 7.83
         ),
-        InstrumentRef("Bharti Airtel", "10604", "NSE_EQ", "EQUITY", "BHARTIARTL", 5.37),
-        InstrumentRef("Larsen & Toubro", "11483", "NSE_EQ", "EQUITY", "LT", 4.13),
-        InstrumentRef("State Bank of India", "3045", "NSE_EQ", "EQUITY", "SBIN", 3.81),
-        InstrumentRef("Infosys", "1594", "NSE_EQ", "EQUITY", "INFY", 3.55),
-        InstrumentRef("Axis Bank", "5900", "NSE_EQ", "EQUITY", "AXISBANK", 3.16),
-        InstrumentRef("Bajaj Finance", "317", "NSE_EQ", "EQUITY", "BAJFINANCE", 2.74),
+        InstrumentRef("Bharti Airtel", "10604", "NSE_EQ", "EQUITY", "BHARTIARTL", 5.00),
+        InstrumentRef("Larsen & Toubro", "11483", "NSE_EQ", "EQUITY", "LT", 4.30),
+        InstrumentRef("State Bank of India", "3045", "NSE_EQ", "EQUITY", "SBIN", 3.98),
+        InstrumentRef("Infosys", "1594", "NSE_EQ", "EQUITY", "INFY", 3.61),
+        InstrumentRef("Axis Bank", "5900", "NSE_EQ", "EQUITY", "AXISBANK", 3.39),
+        InstrumentRef("Kotak Mahindra Bank", "1922", "NSE_EQ", "EQUITY", "KOTAKBANK", 2.80),
     )
     option_strikes_each_side: int = 7
     candle_lookback_days: int = 7
@@ -257,12 +257,29 @@ class AppConfig:
     shadow_journal_estimated_charges_per_trade: float = 40.0
 
     @property
+    def top9_symbols(self) -> tuple[str, ...]:
+        return tuple(item.symbol for item in self.top9)
+
+    @property
+    def top9_weight_map(self) -> dict[str, float]:
+        return {item.symbol: item.weight_pct for item in self.top9}
+
+    # Compatibility aliases for older internal names/support bundles.
+    @property
+    def top7(self) -> tuple[InstrumentRef, ...]:
+        return self.top9
+
+    @property
     def top7_symbols(self) -> tuple[str, ...]:
-        return tuple(item.symbol for item in self.top7)
+        return self.top9_symbols
 
     @property
     def top7_weight_map(self) -> dict[str, float]:
-        return {item.symbol: item.weight_pct for item in self.top7}
+        return self.top9_weight_map
+
+    @property
+    def top7_weight_date(self) -> str:
+        return self.top9_weight_date
 
 
 CONFIG = AppConfig()

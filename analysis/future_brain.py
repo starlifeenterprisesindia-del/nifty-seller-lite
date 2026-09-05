@@ -179,7 +179,10 @@ def calculate_future_brain(snapshot: Any, previous_snapshot: Any | None = None, 
     if option_bias == "UP": up += option_weight
     elif option_bias == "DOWN": down += option_weight
     else: sideways += option_weight
-    heavy_move = _num(snapshot.heavyweights.recent_3m_move_pct)
+    heavy_coverage = float(snapshot.heavyweights.recent_coverage_pct or 0) / max(
+        float(snapshot.heavyweights.covered_weight_pct or 0), .01
+    )
+    heavy_move = _num(snapshot.heavyweights.recent_3m_move_pct) if heavy_coverage >= .8 else None
     if heavy_move is not None:
         if heavy_move >= .03: up += 7
         elif heavy_move <= -.03: down += 7

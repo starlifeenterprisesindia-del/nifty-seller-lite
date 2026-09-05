@@ -21,8 +21,9 @@ def record_quotes(quotes, nifty_quote, captured_at, path="data/recent_top9.json"
             continue
     history = list(valid)
     if not valid or (captured_at - datetime.fromisoformat(valid[-1]["at"])).total_seconds() >= 5:
+        prices = {q["symbol"]: q.get("last_price") for q in quotes if q.get("symbol")}
         valid.append({"at": captured_at.isoformat(), "nifty": nifty_quote.get("last_price"),
-                      "prices": {q["symbol"]: q.get("last_price") for q in quotes if q.get("symbol")}})
+                      "universe": sorted(prices), "prices": prices})
         target.parent.mkdir(parents=True, exist_ok=True)
         temp = target.with_suffix(".tmp")
         temp.write_text(json.dumps(valid[-400:]))

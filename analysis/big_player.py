@@ -194,7 +194,10 @@ def calculate_big_player_activity(
     option_gap = float(options.bullish_score) - float(options.bearish_score)
     option_direction = "BUY" if option_gap >= 8 else "SELL" if option_gap <= -8 else "NEUTRAL"
     option_strength = min(100.0, abs(option_gap) * 1.8 + float(options.confidence) * 0.35)
-    top_move = getattr(heavyweights, "recent_15m_move_pct", None)
+    top_coverage = float(getattr(heavyweights, "recent_coverage_pct", 0) or 0) / max(
+        float(getattr(heavyweights, "covered_weight_pct", 0) or 0), .01
+    )
+    top_move = getattr(heavyweights, "recent_15m_move_pct", None) if top_coverage >= .8 else None
     top7_direction = "BUY" if top_move is not None and top_move > 0.03 else "SELL" if top_move is not None and top_move < -0.03 else "NEUTRAL"
     top7_strength = min(100.0, abs(float(top_move or 0.0)) * 85.0 + 30.0) if top_move is not None else 0.0
     strongest_volume = volume.three_minute

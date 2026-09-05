@@ -1,0 +1,47 @@
+Nifty Seller Lite 2.45.1 — Official Top-9 + Evidence Alignment
+
+This is cumulative over v2.45.0. Current Brain, Future Brain, Common Final Gate,
+strategy/strike/entry alignment, journal safety and streamed evidence download
+remain included.
+
+TOP-9 CORRECTIONS
+
+- Top-nine composition now follows the official Nifty 50 factsheet dated
+  31-Aug-2026.
+- Bajaj Finance was removed from this basket and Kotak Mahindra Bank was added.
+- Official weights are now:
+  HDFCBANK 9.85, ICICIBANK 9.45, RELIANCE 7.83, BHARTIARTL 5.00,
+  LT 4.30, SBIN 3.98, INFY 3.61, AXISBANK 3.39, KOTAKBANK 2.80.
+- Kotak Bank uses Dhan/NSE security ID 1922.
+- Internal configuration is named Top-9. Read-only Top-7 aliases remain only
+  for compatibility with old support bundles.
+
+CALCULATION SAFETY
+
+- Old Bajaj-based history cannot be silently mixed with the new Kotak-based
+  basket.
+- A 3m/15m Top-9 vote requires at least 80% of configured basket weight.
+- Partial history remains WARMING UP and cannot give a full Future Brain or Big
+  Player vote.
+- The displayed weight date now comes from the active configuration.
+
+EVIDENCE / RAILWAY
+
+- New compact samples include previous close for each Top-9 quote so day-change
+  values can be independently audited.
+- New Top-9 history rows store their exact symbol universe.
+- Full active barrier maps remain in minute samples.
+- The event log now records barrier state only for active zones and stores only
+  meaningful 3m break/rejection/retest events. Old records are preserved; future
+  database growth is reduced.
+- Streamed full evidence download from v2.45.0 remains enabled.
+
+DEPLOYMENT
+
+- Upload all files from this cumulative package together.
+- Deploy the same version to Streamlit and Railway.
+- Keep the Railway volume mounted at /data and keep DAY_MEMORY_SLIM=1.
+- Do not wipe the existing volume.
+- After deployment, Top-9 will show WARMING UP for about 15 minutes while a clean
+  Kotak-based history is collected. This is intentional.
+

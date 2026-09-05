@@ -1,0 +1,12 @@
+1. Extract this cumulative ZIP.
+2. Upload/replace every included project file together.
+3. Commit message:
+   fix: align official top9 history and compact evidence events
+4. Wait for both Railway and Streamlit deployments.
+5. Confirm sidebar version: 2.45.1_TOP9_AND_EVIDENCE_ALIGNMENT.
+6. Keep Railway volume /data. Do not wipe/delete it.
+7. Keep DAY_MEMORY_SLIM=1.
+8. During the next live session allow about 15 minutes for new Top-9 history.
+9. Confirm the basket contains KOTAKBANK and does not contain BAJFINANCE.
+10. Download evidence after the live session for final validation.
+

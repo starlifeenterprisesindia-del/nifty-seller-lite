@@ -32,7 +32,7 @@ def calculate_heavyweight_bundle(
     covered_weight = 0.0
     usable_weight = 0.0
 
-    for configured in CONFIG.top7:
+    for configured in CONFIG.top9:
         quote = by_symbol.get(configured.symbol, {})
         change = _change_pct(quote) if quote else None
         last = quote.get("last_price") if quote else None
@@ -125,14 +125,18 @@ def calculate_heavyweight_bundle(
         remaining_weight_pct=round(remaining_weight, 2),
         estimated_remaining_move_pct=round(remaining_move, 4) if remaining_move is not None else None,
         market_disagreement=disagreement,
+        weight_date=CONFIG.top9_weight_date,
     )
     if reference_only:
         return bundle
     anchors = {}
     for minutes in (3, 15):
         candidates = []
+        required_symbols = {item.symbol for item in CONFIG.top9}
         for observation in history or []:
             try:
+                if not required_symbols.issubset((observation.get("prices") or {}).keys()):
+                    continue
                 age = (captured_at - datetime.fromisoformat(observation["at"])).total_seconds()
                 stamp = datetime.fromisoformat(observation["at"])
                 if stamp.date() == captured_at.date() and minutes * 60 <= age <= minutes * 60 + 90:
@@ -167,7 +171,8 @@ def calculate_heavyweight_bundle(
                                 contribution_15m_points=contribution, recent_state=recent))
     move15 = sums[15] / covered[15] if covered[15] else None
     move3 = sums[3] / covered[3] if covered[3] else None
-    recent_state = "WARMING UP" if move15 is None else "RECOVERY" if move15 > 0.03 and (weighted_move or 0) < 0 else "PULLBACK" if move15 < -0.03 and (weighted_move or 0) > 0 else "BUYING SUPPORT" if move15 > 0.03 else "SELLING PRESSURE" if move15 < -0.03 else "MIXED / FLAT"
+    coverage_ratio = covered[15] / max(covered_weight, 0.01)
+    recent_state = "WARMING UP" if move15 is None or coverage_ratio < .8 else "RECOVERY" if move15 > 0.03 and (weighted_move or 0) < 0 else "PULLBACK" if move15 < -0.03 and (weighted_move or 0) > 0 else "BUYING SUPPORT" if move15 > 0.03 else "SELLING PRESSURE" if move15 < -0.03 else "MIXED / FLAT"
     return replace(bundle, rows=tuple(enriched), recent_15m_move_pct=move15, recent_3m_move_pct=move3,
                    recent_contribution_points=points if covered[15] else None,
                    recent_coverage_pct=round(covered[15], 2), recent_state=recent_state)

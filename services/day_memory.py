@@ -100,8 +100,9 @@ def compact(snapshot, tracked_strikes=()):
             if field in frame:
                 frame[field] = None
     def quotes(rows):
-        return [{k: row.get(k) for k in ("symbol", "security_id", "last_price", "volume", "oi",
-                                        "last_trade_time", "timestamp")} for row in rows]
+        return [{**{k: row.get(k) for k in ("symbol", "security_id", "last_price", "volume", "oi",
+                                           "last_trade_time", "timestamp")},
+                 "previous_close": (row.get("ohlc") or {}).get("close")} for row in rows]
     if slim:
         evidence = {
             "price_action": summary.get("price_action"),
@@ -367,19 +368,25 @@ class DayMemory:
                     fields = {k: row.get(k) for k in ("open", "high", "low", "close", "volume", "open_interest")}
                     db.execute("INSERT OR IGNORE INTO candles VALUES (?,?,?)", (name, dt.isoformat(), encode(fields)))
             # Preserve old zones even when nearest level changes after a break.
+            active_zone_ids = set()
             for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
                 level = body["barriers"].get(name)
                 if not level or body["spot"] is None:
                     continue
                 lo, hi = level["lower"], level["upper"]
                 identity = f'{level["side"]}:{lo}:{hi}'
+                active_zone_ids.add(identity)
                 db.execute("INSERT OR IGNORE INTO zones VALUES (?,?)", (identity, encode({"lower": lo, "upper": hi, "side": level["side"], "first_seen": stamp})))
             for identity, raw in db.execute("SELECT identity,body FROM zones"):
                 level = json.loads(raw)
                 lo, hi = level["lower"], level["upper"]
                 p = body["spot"]
                 status = "ZONE KE ANDAR" if lo <= p <= hi else "ZONE KE UPAR" if p > hi else "ZONE KE NEECHE"
-                self._event(db, stamp, "BARRIER", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": status})
+                # Samples already preserve the complete active barrier map. Keep
+                # event history only for the four active zones, not every old
+                # zone on every later price crossing.
+                if identity in active_zone_ids:
+                    self._event(db, stamp, "BARRIER", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": status})
                 candles = completed_candles(snapshot.candles_3m)
                 if not candles.empty:
                     candle = candles.iloc[-1]
@@ -392,8 +399,10 @@ class DayMemory:
                         reaction, broken = candle_reaction(level, candle)
                         level.update(broken=broken, last_candle=candle_at.isoformat())
                         db.execute("UPDATE zones SET body=? WHERE identity=?", (encode(level), identity))
-                        self._event(db, stamp, "3m REACTION", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": reaction,
-                            "expiry": body["expiry"], "version": body["version"]})
+                        if reaction in {"BREAK — 3m CLOSE", "BREAK FAILED — 3m CLOSE",
+                                        "REJECTION — 3m CLOSE", "RETEST HOLD — 3m CLOSE"}:
+                            self._event(db, stamp, "3m REACTION", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": level["side"], "status": reaction,
+                                "expiry": body["expiry"], "version": body["version"]})
             from analysis.pattern_alerts import aligned_pattern_alert
             pattern = aligned_pattern_alert(snapshot)
             if pattern:
