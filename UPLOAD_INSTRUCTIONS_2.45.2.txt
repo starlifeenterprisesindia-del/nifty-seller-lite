@@ -1,0 +1,11 @@
+Upload the complete contents of this ZIP to the existing GitHub repository root.
+Replace matching files and keep Railway / Streamlit secrets unchanged.
+
+After deployment, confirm the sidebar version is:
+2.45.2_UI_WORKSPACE_REORDER
+
+Keep the Railway persistent volume mounted at /data. No stored evidence,
+FII/DII records or paper journal data needs to be deleted or restored for this update.
+
+Suggested commit message:
+refactor: reorder trading workspace and centralize diagnostics

@@ -1,0 +1,20 @@
+Nifty Seller Lite 2.45.2 — UI Workspace Reorder
+
+Layout-only release. Trading calculations, weights, data collection, alerts,
+Current Brain, Future Brain and Common Final Gate logic are unchanged.
+
+Changes
+- Market Decision Ka Reason moved directly below Common Final Gate; collapsed by default.
+- Best Strategy, entry-price guidance and advanced strike/pair comparison moved together
+  directly below the full barrier map.
+- Duplicate visible Strategy Audit panel removed; authoritative strategy calculation remains.
+- Detailed evidence and Recorded Data + Calibration moved to the lower diagnostic area.
+- Expiry-cycle record remains inside Recorded Data + Calibration.
+- FII/DII long explanatory paragraph removed; inputs, saved rows and sync remain unchanged.
+- Reports, evidence export, Shadow Journal CSV, FII/DII backup/restore and app/feed checks
+  are consolidated in the bottom Checks & Downloads Centre.
+- Existing responsive Streamlit columns remain: desktop and phone use the same logical order.
+
+Verification
+- Python compile check passed.
+- Full automated regression suite: 409 passed.

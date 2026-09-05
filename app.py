@@ -42,10 +42,9 @@ from services.live_monitor import (
     monitor_timestamp,
 )
 from services.railway_live_client import RailwayDhanClient, fetch_railway_live_state
-from ui.day_memory import render_day_memory, sync_day_memory
+from ui.day_memory import render_day_memory, render_evidence_download, sync_day_memory
 from ui.components import (
     render_candles,
-    render_decision,
     render_evidence_matrix,
     render_core_evidence,
     render_heavyweight_intelligence,
@@ -58,6 +57,7 @@ from ui.components import (
     render_news_context,
     render_main_ai_market_view,
     render_data_health,
+    render_detailed_evidence,
     render_option_chain,
     render_option_flow_matrix,
     render_option_intelligence,
@@ -72,7 +72,11 @@ from ui.components import (
 )
 from ui.premium_calculator import render_spot_premium_calculator
 from ui.alerts import render_market_alerts
-from ui.shadow_journal import render_auto_shadow_journal, render_shadow_journal_status
+from ui.shadow_journal import (
+    render_auto_shadow_journal,
+    render_shadow_journal_download,
+    render_shadow_journal_status,
+)
 from ui.pattern_alerts import render_pattern_alerts
 from ui.timeframe_outlook import render_timeframe_outlook
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
@@ -481,12 +485,6 @@ with st.sidebar:
             width="stretch",
             key=f"save_context_{context_key}",
         )
-        st.caption(
-            "One row per trading date. Same date updates only that row; a new date adds a row. "
-            "Latest 15 sessions local primary + mirror + rescue copies me save hote hain; cloud configured ho to private journal se auto-sync bhi hote hain. "
-            "Blank value purane valid number ko erase nahi karti. Cash ₹ crore me hai; Index Futures contracts + Long/Short % me save hote hain."
-        )
-
         saved_rows = list(reversed(context_store.load()))
         if saved_rows:
             st.dataframe(
@@ -505,24 +503,6 @@ with st.sidebar:
                 width="stretch",
                 hide_index=True,
             )
-
-        st.download_button(
-            "Download 15-session backup JSON",
-            data=context_store.export_bytes(),
-            file_name="nifty_seller_lite_fii_dii_15_sessions.json",
-            mime="application/json",
-            width="stretch",
-        )
-        context_backup = st.file_uploader(
-            "Restore journal backup (JSON)",
-            type=["json"],
-            key="context_backup_upload",
-        )
-        restore_context = st.button(
-            "Restore uploaded backup",
-            width="stretch",
-            disabled=context_backup is None,
-        )
 
     if sync_context_now:
         try:
@@ -564,29 +544,6 @@ with st.sidebar:
             st.rerun()
         except Exception as exc:
             st.error(f"Context not saved: {exc}")
-    if restore_context and context_backup is not None:
-        try:
-            context_store.import_bytes(context_backup.getvalue())
-            for key in list(st.session_state):
-                if key.startswith(
-                    (
-                        "fii_cash_",
-                        "dii_cash_",
-                        "fii_futures_",
-                        "fii_futures_contracts_",
-                        "fii_futures_long_",
-                        "fii_futures_short_",
-                        "event_level_",
-                        "event_verified_",
-                        "event_note_",
-                    )
-                ):
-                    st.session_state.pop(key, None)
-            st.session_state.pop("snapshot", None)
-            st.success("15-session institutional journal restored")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Backup not restored: {exc}")
     if clear_instrument_cache:
         cache = Path("data/instrument_master.csv")
         if cache.exists():
@@ -800,12 +757,36 @@ def render_fast_live_monitor() -> None:
 
 render_fast_live_monitor()
 
+
+def render_market_decision_reason_panel() -> None:
+    """Display the existing decision evidence beside its Common Final Gate."""
+    with persistent_panel(
+        "Market Decision Ka Reason",
+        "panel_decision_reason_open",
+    ) as panel_open:
+        if not panel_open:
+            return
+        render_core_evidence(view_snapshot)
+        core_tabs = st.tabs(
+            ["Price Action", "Support & Resistance", "Volume", "EMA / MACD / RSI"]
+        )
+        with core_tabs[0]:
+            render_price_action(view_snapshot)
+        with core_tabs[1]:
+            render_levels(view_snapshot)
+        with core_tabs[2]:
+            render_volume(view_snapshot)
+        with core_tabs[3]:
+            render_indicators(view_snapshot)
+
 render_compact_status_bar(view_snapshot)
-render_main_ai_market_view(view_snapshot, previous_view_snapshot)
+render_main_ai_market_view(
+    view_snapshot,
+    previous_view_snapshot,
+    decision_reason_renderer=render_market_decision_reason_panel,
+)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
-with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
-    if panel_open:
-        render_day_memory(snapshot, live_server_url, live_server_api_key)
+render_protected_candidates(view_snapshot)
 with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
     if panel_open:
         render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
@@ -821,7 +802,6 @@ with persistent_panel(
 ) as panel_open:
     if panel_open:
         render_rsi_reversal_setup(snapshot, previous_snapshot, record_trade=discipline_store.mark_trade)
-render_protected_candidates(view_snapshot)
 render_shadow_journal_status(shadow_entries, shadow_journal_store)
 with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
     if panel_open:
@@ -854,34 +834,6 @@ with persistent_panel(
         render_evidence_matrix(view_snapshot, previous_view_snapshot)
         render_market_outlook(view_snapshot)
 
-with persistent_panel("Strategy Audit", "panel_strategy_audit_open") as panel_open:
-    if panel_open:
-        render_decision(view_snapshot, audit_only=True)
-
-with persistent_panel(
-    "Market Decision Ka Reason",
-    "panel_decision_reason_open",
-) as panel_open:
-    if panel_open:
-        render_core_evidence(view_snapshot)
-
-        core_tabs = st.tabs(
-            [
-                "Price Action",
-                "Support & Resistance",
-                "Volume",
-                "EMA / MACD / RSI",
-            ]
-        )
-        with core_tabs[0]:
-            render_price_action(view_snapshot)
-        with core_tabs[1]:
-            render_levels(view_snapshot)
-        with core_tabs[2]:
-            render_volume(view_snapshot)
-        with core_tabs[3]:
-            render_indicators(view_snapshot)
-
 with persistent_panel(
     "Advanced Options Evidence",
     "panel_advanced_options_open",
@@ -913,6 +865,11 @@ with persistent_panel(
             render_market_context(view_snapshot)
         with option_tabs[6]:
             render_news_context(view_snapshot)
+
+render_detailed_evidence(view_snapshot)
+with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
+    if panel_open:
+        render_day_memory(snapshot, live_server_url, live_server_api_key)
 
 with st.expander("🧰 Checks & Downloads Centre", expanded=False):
 
@@ -990,6 +947,70 @@ with st.expander("🧰 Checks & Downloads Centre", expanded=False):
                 file_name=support_bundle_filename(snapshot),
                 mime="application/zip",
                 width="stretch",
+            )
+
+    st.divider()
+    st.markdown("**Recorded data and backups**")
+    evidence_col, journal_col = st.columns(2)
+    with evidence_col:
+        render_evidence_download(live_server_url, live_server_api_key)
+    with journal_col:
+        render_shadow_journal_download(
+            shadow_entries, view_snapshot.created_at.date().isoformat()
+        )
+
+    st.download_button(
+        "Download FII/DII 15-session Backup JSON",
+        data=context_store.export_bytes(),
+        file_name="nifty_seller_lite_fii_dii_15_sessions.json",
+        mime="application/json",
+        width="stretch",
+    )
+    context_backup = st.file_uploader(
+        "Restore FII/DII Journal Backup (JSON)",
+        type=["json"],
+        key="context_backup_upload",
+    )
+    if st.button(
+        "Restore Uploaded FII/DII Backup",
+        width="stretch",
+        disabled=context_backup is None,
+    ) and context_backup is not None:
+        try:
+            context_store.import_bytes(context_backup.getvalue())
+            for key in list(st.session_state):
+                if key.startswith(
+                    (
+                        "fii_cash_", "dii_cash_", "fii_futures_",
+                        "fii_futures_contracts_", "fii_futures_long_",
+                        "fii_futures_short_", "event_level_",
+                        "event_verified_", "event_note_",
+                    )
+                ):
+                    st.session_state.pop(key, None)
+            st.session_state.pop("snapshot", None)
+            st.success("15-session institutional journal restored")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Backup not restored: {exc}")
+
+    with st.expander("App, Railway and feed checks", expanded=False):
+        st.write(f"App version: `{CONFIG.version}`")
+        st.write(
+            "Railway gateway: "
+            + ("READY" if railway_ready else "NOT CONFIGURED / LEGACY MODE")
+        )
+        for name, status in view_snapshot.feed_status.items():
+            st.caption(
+                f"{name}: {getattr(status, 'use_state', '—')} · "
+                f"{getattr(status, 'message', '')}"
+            )
+        diagnostics = snapshot.metadata.get("recording_diagnostics") or {}
+        if diagnostics:
+            st.caption(
+                "Evidence recorder: "
+                + ("AVAILABLE" if diagnostics.get("available") else "UNAVAILABLE")
+                + f" · {diagnostics.get('recording_health') or diagnostics.get('error') or '—'}"
             )
     st.caption("Railway memory safety: ek time par sirf ek generated report RAM me rakhi jati hai; next snapshot par clear hoti hai.")
     gc.collect()
