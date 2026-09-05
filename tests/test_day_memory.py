@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace as NS
 from threading import RLock
+import gzip
 
 import pandas as pd
 import pytest
@@ -78,6 +79,17 @@ def test_actual_app_event_separate_and_stale_rejected(tmp_path):
     assert store.app_event(at, event)
     assert not store.app_event(at+timedelta(minutes=4), event)
     assert len([x for x in store.report()["events"] if x["kind"] == "APP AI"]) == 1
+
+
+def test_streaming_export_writes_complete_gzip_file(tmp_path):
+    store = DayMemory(tmp_path / "day.sqlite3")
+    at = datetime(2026, 8, 27, 10, tzinfo=IST)
+    store.record(snapshot(at))
+    target = store.export_file(tmp_path / "full-evidence.jsonl.gz")
+    with gzip.open(target, "rt", encoding="utf-8") as handle:
+        text = handle.read()
+    assert '"format":"nifty-evidence-jsonl"' in text
+    assert '"table":"samples"' in text
 
 
 def test_old_zone_is_tracked_after_nearest_changes(tmp_path):

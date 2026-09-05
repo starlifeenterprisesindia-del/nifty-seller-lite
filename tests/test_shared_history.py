@@ -62,10 +62,22 @@ def test_history_endpoint_auth(monkeypatch):
 def test_top9_from_recorded_observations():
     from config import CONFIG
     from analysis.heavyweights import calculate_heavyweight_bundle
-    quotes = [{"symbol": item.symbol, "last_price": 101, "ohlc": {"close": 100}} for item in CONFIG.top7]
-    prices = {item.symbol: 100 for item in CONFIG.top7}
+    quotes = [{"symbol": item.symbol, "last_price": 101, "ohlc": {"close": 100}} for item in CONFIG.top9]
+    prices = {item.symbol: 100 for item in CONFIG.top9}
     history = [{"at": (NOW-timedelta(seconds=seconds)).isoformat(), "prices": prices, "nifty": 24000} for seconds in (970, 250)]
     result = calculate_heavyweight_bundle(quotes, NOW, history=history)
     assert result.recent_15m_move_pct is not None
     assert result.recent_3m_move_pct is not None
     assert result.recent_state != "WARMING UP"
+
+
+def test_old_or_partial_top9_universe_cannot_drive_recent_signal():
+    from config import CONFIG
+    from analysis.heavyweights import calculate_heavyweight_bundle
+    quotes = [{"symbol": item.symbol, "last_price": 101, "ohlc": {"close": 100}} for item in CONFIG.top9]
+    old_prices = {item.symbol: 100 for item in CONFIG.top9 if item.symbol != "KOTAKBANK"}
+    old_prices["BAJFINANCE"] = 100
+    history = [{"at": (NOW-timedelta(minutes=15)).isoformat(), "prices": old_prices, "nifty": 24000}]
+    result = calculate_heavyweight_bundle(quotes, NOW, history=history)
+    assert result.recent_15m_move_pct is None
+    assert result.recent_state == "WARMING UP"

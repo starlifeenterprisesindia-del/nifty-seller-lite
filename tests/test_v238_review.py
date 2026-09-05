@@ -71,17 +71,17 @@ def test_no_momentum_or_retest_waits_without_invented_estimate():
     assert result.premium_range is None
 
 
-def test_recent_top9_recovers_while_day_negative_and_partial_residual_hidden():
-    symbol = CONFIG.top7[0].symbol
+def test_partial_top9_history_is_warming_and_residual_hidden():
+    symbol = CONFIG.top9[0].symbol
     history = [{"at": (NOW - timedelta(minutes=m)).isoformat(), "nifty": 24000.,
                 "prices": {symbol: 97. if m == 15 else 98.}} for m in (15, 3)]
     result = calculate_heavyweight_bundle([{"symbol": symbol, "last_price": 99., "ohlc": {"close": 100.}}],
         NOW, {"last_price": 24000., "ohlc": {"close": 24100.}}, history=history)
-    assert result.rows[0].recent_state == "RECOVERY"
-    assert result.recent_15m_move_pct > 0
+    assert result.rows[0].recent_state == "WARMING UP"
+    assert result.recent_15m_move_pct is None
     assert result.rows[0].change_pct < 0
     assert result.estimated_remaining_move_pct is None
-    assert result.recent_contribution_points > 0
+    assert result.recent_contribution_points is None
 
 
 def test_day_change_is_not_recent_vote():
@@ -135,7 +135,7 @@ def test_paper_threshold_only():
     assert CONFIG.decision_minimum_score == 62
 
 
-def test_paper_wait_candidate_55_records_without_changing_main(tmp_path):
+def test_paper_wait_candidate_does_not_bypass_common_gate(tmp_path):
     from test_snapshot_service import StubClient, StubMaster
     import test_execution_guard as fixtures
     from test_position_guardian import bundle
@@ -154,44 +154,10 @@ def test_paper_wait_candidate_55_records_without_changing_main(tmp_path):
         feed_status=fixtures.feeds())
     store = ShadowJournalStore(tmp_path / "paper.json")
     entries = process_auto_shadow_journal(snap, store, enabled=True)
-    assert len(entries) == 1, store.last_blocker
-    assert entries[0]["setup"] == "PE SELL"
-    assert entries[0]["real_ai_action"] == "WAIT"
-    assert entries[0]["stop_loss_points"] > 0
-    assert entries[0]["score_band"] == "55–59"
-    assert entries[0]["counts_for_ai_accuracy"] is False
+    assert entries == []
+    assert "Common Gate" in store.last_blocker
     assert snap.trade_plan.selected_setup == snap.decision.final_action == "WAIT"
-    assert len(process_auto_shadow_journal(snap, store, enabled=True)) == 1
-    assert "already open" in store.last_blocker
-    low_risk = replace(snap, risk_profile=fixtures.risk_profile(capital=100))
-    low_store = ShadowJournalStore(tmp_path / "low.json")
-    assert process_auto_shadow_journal(low_risk, low_store, enabled=True) == []
-    assert "risk" in low_store.last_blocker
-
-    low_credit_plan = replace(
-        snap.trade_plan,
-        pe_sell=replace(snap.trade_plan.pe_sell, estimated_credit_points=1.9),
-    )
-    low_credit = replace(snap, trade_plan=low_credit_plan)
-    credit_store = ShadowJournalStore(tmp_path / "low-credit.json")
-    assert process_auto_shadow_journal(low_credit, credit_store, enabled=True) == []
-    assert "credit" in credit_store.last_blocker.lower()
-
-    bearish_15m = replace(
-        snap.price_action.fifteen_minute,
-        structure="BEARISH LH/LL",
-        event="BEARISH CONTINUATION",
-        bullish_score=10,
-        bearish_score=80,
-    )
-    counter_trend = replace(
-        snap,
-        price_action=replace(snap.price_action, fifteen_minute=bearish_15m),
-    )
-    trend_store = ShadowJournalStore(tmp_path / "counter-trend.json")
-    counter_entries = process_auto_shadow_journal(counter_trend, trend_store, enabled=True)
-    assert counter_entries == []
-    assert "15m permission" in trend_store.last_blocker.lower()
+    assert process_auto_shadow_journal(snap, store, enabled=True) == []
 
 
 def test_live_guard_not_lowered_to_paper_50():

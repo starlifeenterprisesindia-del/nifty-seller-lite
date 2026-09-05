@@ -2,10 +2,10 @@ from config import CONFIG
 
 
 def test_top9_have_unique_direct_security_ids():
-    assert len(CONFIG.top7) == 9
-    ids = [item.security_id for item in CONFIG.top7]
+    assert len(CONFIG.top9) == 9
+    ids = [item.security_id for item in CONFIG.top9]
     assert len(ids) == len(set(ids))
-    assert all(item.exchange_segment == "NSE_EQ" for item in CONFIG.top7)
+    assert all(item.exchange_segment == "NSE_EQ" for item in CONFIG.top9)
 
 
 def test_vix_has_direct_index_reference():
@@ -14,10 +14,10 @@ def test_vix_has_direct_index_reference():
 
 
 def test_top9_weights_are_unique_and_positive():
-    weights = [item.weight_pct for item in CONFIG.top7]
+    weights = [item.weight_pct for item in CONFIG.top9]
     assert all(weight > 0 for weight in weights)
-    assert round(sum(weights), 2) == 50.17
-    assert CONFIG.top7_symbols == (
+    assert round(sum(weights), 2) == 50.21
+    assert CONFIG.top9_symbols == (
         "HDFCBANK",
         "ICICIBANK",
         "RELIANCE",
@@ -26,5 +26,6 @@ def test_top9_weights_are_unique_and_positive():
         "SBIN",
         "INFY",
         "AXISBANK",
-        "BAJFINANCE",
+        "KOTAKBANK",
     )
+    assert CONFIG.top9[-1].security_id == "1922"

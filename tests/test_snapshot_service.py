@@ -25,7 +25,7 @@ class StubClient:
             int(CONFIG.nifty.security_id),
             int(CONFIG.india_vix.security_id),
         }
-        assert set(grouped["NSE_EQ"]) == {int(item.security_id) for item in CONFIG.top7}
+        assert set(grouped["NSE_EQ"]) == {int(item.security_id) for item in CONFIG.top9}
         quote_time = int(datetime(2026, 7, 17, 15, 29, tzinfo=IST).timestamp())
         equities = {
             item.security_id: {
@@ -34,7 +34,7 @@ class StubClient:
                 "ohlc": {"open": 99, "high": 101, "low": 98, "close": 99.5},
                 "volume": 1000,
             }
-            for item in CONFIG.top7
+            for item in CONFIG.top9
         }
         return {
             "status": "success",
@@ -246,7 +246,7 @@ def test_shared_top9_history_reaches_app_calculation(tmp_path):
         def market_history(self, expiry):
             return {"options": [], "top9": [
                 {"at": (now-timedelta(seconds=seconds)).isoformat(),
-                 "prices": {item.symbol: 99 for item in CONFIG.top7}, "nifty": 24300}
+                 "prices": {item.symbol: 99 for item in CONFIG.top9}, "nifty": 24300}
                 for seconds in (970, 250)]}
 
     service = SnapshotService(SharedClient(), StubMaster(), recent_quotes_path=str(tmp_path / "top9.json"))

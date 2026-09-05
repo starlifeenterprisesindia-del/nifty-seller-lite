@@ -11,7 +11,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 def test_official_top9_weights_and_broad_bullish_state():
     quotes = []
-    for item in CONFIG.top7:
+    for item in CONFIG.top9:
         quotes.append(
             {
                 "symbol": item.symbol,
@@ -23,9 +23,10 @@ def test_official_top9_weights_and_broad_bullish_state():
     result = calculate_heavyweight_bundle(
         quotes, datetime(2026, 7, 20, 10, 0, tzinfo=IST)
     )
-    assert CONFIG.top7_weight_date == "2026-07-31"
-    assert round(sum(item.weight_pct for item in CONFIG.top7), 2) == 50.17
-    assert result.covered_weight_pct == 50.17
+    assert CONFIG.top9_weight_date == "2026-08-31"
+    assert round(sum(item.weight_pct for item in CONFIG.top9), 2) == 50.21
+    assert result.covered_weight_pct == 50.21
+    assert result.weight_date == "2026-08-31"
     assert result.advancing == 9
     assert result.state == "BROAD BULLISH"
     assert result.status == "READY"

@@ -106,7 +106,8 @@ def test_pdf_has_independent_required_feed_status_and_completed_filter():
 def test_app_consolidates_status_in_main_ai_without_duplicate_top_sections():
     root = Path(__file__).resolve().parents[1]
     text = (root / "app.py").read_text(encoding="utf-8")
-    assert "render_main_ai_market_view(view_snapshot, previous_view_snapshot)" in text
+    assert "render_main_ai_market_view(" in text
+    assert "decision_reason_renderer=render_market_decision_reason_panel" in text
     assert "render_compact_barrier_map(view_snapshot, previous_view_snapshot)" in text
     assert "render_evidence_matrix(view_snapshot, previous_view_snapshot)" in text
     assert "render_pre_touch_barriers(snapshot)" not in text
