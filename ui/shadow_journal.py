@@ -124,6 +124,11 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
     if selected_item.get("legs"):
         st.dataframe(pd.DataFrame(selected_item["legs"]), width="stretch", hide_index=True)
 
+    # Downloads live in the single Checks & Downloads Centre.
+
+
+def render_shadow_journal_download(entries: list[dict[str, Any]], session_date: str) -> None:
+    rows = [item for item in entries if str(item.get("session_date")) == session_date]
     csv = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download Shadow Journal CSV",

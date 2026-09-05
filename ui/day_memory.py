@@ -125,16 +125,6 @@ def render_day_memory(snapshot, url, key):
             st.caption("Calculation history: " + str(history_feed.message))
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
-        if st.button("Prepare full evidence download", key="prepare_evidence_export"):
-            try:
-                st.session_state.evidence_download = RailwayDhanClient(url,key,timeout_seconds=60).download_bytes("/day-memory-export-file")
-                st.session_state.pop("evidence_download_error", None)
-            except Exception as exc:
-                st.session_state.evidence_download_error = str(exc)[:220]
-                st.error("Export nahi mila: " + st.session_state.evidence_download_error + ". Records delete nahi kiye.")
-        if st.session_state.get("evidence_download"):
-            st.download_button("Download full recorded evidence", st.session_state.evidence_download,
-                               file_name="nifty-evidence.jsonl.gz", mime="application/gzip")
         analytics = snapshot.metadata.get("history_analytics", {})
         st.write("**OI history — pehle aur ab**")
         st.caption("Extra vote 0: existing OI engine already uses rolling history. Labels inference hain, trader counts nahi.")
@@ -188,6 +178,34 @@ def render_day_memory(snapshot, url, key):
             st.write("Completed expiry cycles")
             st.json(cached["cycle_summaries"],expanded=False)
         st.caption("Latest 30 events shown; diary retains current-cycle detail. Background direction app ke manual context se different ho sakti hai. App AI events sirf app fetch hone par.")
+
+
+def render_evidence_download(url, key):
+    """Centralised evidence export control for the downloads centre."""
+    if not url or not key:
+        st.info("Evidence download ke liye Railway connection chahiye.")
+        return
+    if st.button("Prepare Full Evidence Download", key="prepare_evidence_export"):
+        try:
+            st.session_state.evidence_download = RailwayDhanClient(
+                url, key, timeout_seconds=60
+            ).download_bytes("/day-memory-export-file")
+            st.session_state.pop("evidence_download_error", None)
+        except Exception as exc:
+            st.session_state.evidence_download_error = str(exc)[:220]
+            st.error(
+                "Export nahi mila: "
+                + st.session_state.evidence_download_error
+                + ". Records delete nahi kiye."
+            )
+    if st.session_state.get("evidence_download"):
+        st.download_button(
+            "Download Full Recorded Evidence",
+            st.session_state.evidence_download,
+            file_name="nifty-evidence.jsonl.gz",
+            mime="application/gzip",
+            width="stretch",
+        )
 
 
 def render_cycle_prices(view):

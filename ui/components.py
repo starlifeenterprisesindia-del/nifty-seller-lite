@@ -6,7 +6,7 @@ import re
 from dataclasses import asdict
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import streamlit as st
@@ -1109,18 +1109,8 @@ def _pattern_compact_text(item: Any | None, *, fallback: str) -> tuple[str, str]
     return item.name, " · ".join(note_bits)
 
 
-def render_main_ai_market_view(
-    snapshot: MarketSnapshot, previous_snapshot: MarketSnapshot | None = None
-) -> None:
-    """Simple top-screen view of the existing canonical MarketSnapshot."""
-
-    barrier = snapshot.barrier_map
-    feed_ok, _feed_text = required_live_feed_state(snapshot)
-    direction, direction_score, direction_note = market_rukh_display(snapshot)
-    spot = snapshot.nifty_quote.get("last_price")
-
-    st.subheader("🧠 Two-Brain Trading Workspace")
-
+def render_detailed_evidence(snapshot: MarketSnapshot) -> None:
+    """Render diagnostics only; this view never recalculates or changes a decision."""
     critical_feeds = [
         snapshot.feed_status.get(key)
         for key in ("quotes", "candles", "option_chain", "future_volume", "vix")
@@ -1133,9 +1123,8 @@ def render_main_ai_market_view(
         if critical_feeds
         else 0.0
     )
-    final_direction = str(snapshot.decision.market_direction or "RANGE").upper()
 
-    def _evidence_direction(value: str) -> str:
+    def evidence_direction(value: str) -> str:
         text = str(value or "").upper()
         if "BULL" in text or "BUYING" in text:
             return "BULLISH"
@@ -1143,18 +1132,35 @@ def render_main_ai_market_view(
             return "BEARISH"
         return "RANGE"
 
-    # MIXED / RANGE / RANGE-MIXED are the same neutral direction for agreement.
-    final_direction = _evidence_direction(final_direction)
+    final_direction = evidence_direction(snapshot.decision.market_direction)
+    sources = (
+        evidence_direction(snapshot.core_evidence.market_state),
+        evidence_direction(snapshot.option_intelligence.market_bias),
+        evidence_direction(snapshot.price_action.combined_state),
+        evidence_direction(snapshot.big_player_activity.direction),
+    )
+    agreement = round(100.0 * sum(item == final_direction for item in sources) / len(sources))
+    with st.expander("Detailed evidence, agreement, Greeks and history", expanded=False):
+        st.caption("🎯 " + unified_direction_line(snapshot))
+        st.caption(f"Feed coverage {data_quality:.0f}% · Direction agreement {agreement:.0f}%")
+        for line in snapshot.metadata.get("history_context", {}).get("lines", []):
+            st.caption("History context: " + line)
+        render_greeks_health(snapshot.option_chain)
 
-    agreement_sources = (
-        _evidence_direction(snapshot.core_evidence.market_state),
-        _evidence_direction(snapshot.option_intelligence.market_bias),
-        _evidence_direction(snapshot.price_action.combined_state),
-        _evidence_direction(snapshot.big_player_activity.direction),
-    )
-    direction_agreement = round(
-        100.0 * sum(item == final_direction for item in agreement_sources) / len(agreement_sources)
-    )
+
+def render_main_ai_market_view(
+    snapshot: MarketSnapshot,
+    previous_snapshot: MarketSnapshot | None = None,
+    decision_reason_renderer: Callable[[], None] | None = None,
+) -> None:
+    """Simple top-screen view of the existing canonical MarketSnapshot."""
+
+    barrier = snapshot.barrier_map
+    feed_ok, _feed_text = required_live_feed_state(snapshot)
+    direction, direction_score, direction_note = market_rukh_display(snapshot)
+    spot = snapshot.nifty_quote.get("last_price")
+
+    st.subheader("🧠 Two-Brain Trading Workspace")
 
     with st.container(border=True):
         _render_final_action_hero(snapshot, feed_ok)
@@ -1203,6 +1209,8 @@ def render_main_ai_market_view(
                     st.success("ENTRY ALLOWED — Current context + Future direction + safety gates pass")
                 else:
                     st.warning("WAIT — " + str(blockers[0] if blockers else "confirmation pending"))
+            if decision_reason_renderer is not None:
+                decision_reason_renderer()
             with st.expander("Future Brain ke reasons", expanded=False):
                 for reason in future.get("reasons") or ("Leading evidence warming up",):
                     st.write("• " + str(reason))
@@ -1225,14 +1233,6 @@ def render_main_ai_market_view(
             "🧠 **AI samajh:** "
             + safe_brain_hinglish_line(snapshot, previous_snapshot)
         )
-        with st.expander("Detailed evidence, agreement, Greeks and history", expanded=False):
-            st.caption("🎯 " + unified_direction_line(snapshot))
-            st.caption(f"Feed coverage {data_quality:.0f}% · Direction agreement {direction_agreement:.0f}%")
-            memory = snapshot.metadata.get("history_context", {})
-            for line in memory.get("lines", []):
-                st.caption("History context: " + line)
-            render_greeks_health(snapshot.option_chain)
-
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(
             patterns.wm_3m if patterns is not None else None,
