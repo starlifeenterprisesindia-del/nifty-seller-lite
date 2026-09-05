@@ -612,9 +612,15 @@ def _sideways_decay_estimate(
     lot_size: int,
     lots: int,
     feed_state: str,
+    minutes_to_expiry: int | None = None,
 ) -> SidewaysDecayEstimate:
     intrinsic = _intrinsic_value(side=side, strike=strike, spot=current_spot)
-    theta_effect = theta * (minutes / 1440.0) if theta is not None else 0.0
+    theta_effect = _expiry_aware_theta_effect(
+        theta=theta,
+        target_minutes=minutes,
+        minutes_to_expiry=minutes_to_expiry,
+        current_time_value=max(0.0, current_premium - intrinsic),
+    )
     estimated = max(intrinsic, current_premium + theta_effect, 0.0)
     pnl_per_quantity = _position_pnl(
         position=position, entry_premium=entry_premium, estimated_premium=estimated
@@ -627,7 +633,7 @@ def _sideways_decay_estimate(
     else:
         outcome = "NEAR ENTRY"
     reliability = 72.0 if theta is not None and feed_state == "LIVE" else 38.0
-    note = "Spot aur IV same maan kar Theta-only estimate"
+    note = "Spot aur IV same maan kar expiry-aware Theta-only estimate"
     if theta is None:
         note = "Theta unavailable; premium unchanged reference"
     return SidewaysDecayEstimate(
@@ -778,6 +784,7 @@ def calculate_spot_premium_range(
             lot_size=int(lot_size),
             lots=int(lots),
             feed_state=feed_state,
+            minutes_to_expiry=minutes_to_expiry,
         )
         for minutes in (15, 30, 60)
     )

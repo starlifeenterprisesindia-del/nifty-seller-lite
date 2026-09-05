@@ -80,7 +80,9 @@ def _confirmation_count(
     count = 0
     next_time = as_of
     for sample in reversed(samples):
-        if str(sample.get("action") or "").upper() != action:
+        sample_action = str(sample.get("action") or "").upper().replace(" WITH HEDGE", "")
+        wanted_action = str(action or "").upper().replace(" WITH HEDGE", "")
+        if sample_action != wanted_action:
             break
         if str(sample.get("execution_status") or "").upper() not in {
             "READY",
@@ -219,6 +221,8 @@ def calculate_execution_guard(
     feed_status: dict[str, FeedStatus],
     as_of: datetime,
     big_player: BigPlayerActivity | None = None,
+    selected_setup_override: str | None = None,
+    final_action_override: str | None = None,
 ) -> ExecutionGuard:
     """Convert the chosen setup into a read-only entry/risk gate.
 
@@ -227,10 +231,17 @@ def calculate_execution_guard(
     to the already-selected final action and protected plan.
     """
 
-    plan = _selected_plan(trade_plan)
-    setup = trade_plan.selected_setup
+    setup = str(selected_setup_override or trade_plan.selected_setup or "WAIT").upper()
+    plan = {
+        "CE BUY": trade_plan.ce_buy,
+        "PE BUY": trade_plan.pe_buy,
+        "CE SELL": trade_plan.ce_sell,
+        "PE SELL": trade_plan.pe_sell,
+        "IRON CONDOR": trade_plan.iron_condor,
+    }.get(setup)
+    effective_action = str(final_action_override or decision.final_action or "WAIT").upper()
     confirmations = _confirmation_count(
-        discipline_state.signal_history, decision.final_action, as_of
+        discipline_state.signal_history, effective_action, as_of
     )
     if confirmations >= CONFIG.execution_required_confirmations:
         signal_state = f"CONFIRMED ×{confirmations}"
@@ -262,7 +273,7 @@ def calculate_execution_guard(
         readiness = "REFERENCE ONLY"
         blockers.append("Market session is reference-only")
     else:
-        if decision.final_action == "WAIT":
+        if effective_action == "WAIT":
             blockers.append(f"Final one-brain action is WAIT: {decision.blocker}")
         evaluation = {
             "CE BUY": decision.ce_buy,

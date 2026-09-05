@@ -318,6 +318,8 @@ def _paper_snapshot(snapshot):
         risk_profile=snapshot.risk_profile, discipline_state=snapshot.discipline_state,
         feed_status=snapshot.feed_status, as_of=snapshot.created_at,
         big_player=snapshot.big_player_activity,
+        selected_setup_override=action,
+        final_action_override=action,
     )
     return replace(snapshot, trade_plan=plan, execution_guard=guard)
 

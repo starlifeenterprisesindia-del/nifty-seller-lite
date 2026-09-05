@@ -58,6 +58,40 @@ def _future_alignment(action: str, direction: str, strength: float) -> float:
     return max(5.0, 45.0 - confidence * 0.40)
 
 
+def _future_strike_alignment(
+    action: str,
+    direction: str,
+    strength: float,
+    *,
+    strike: float,
+    spot: float,
+) -> float:
+    """Make Future Brain alignment specific to each candidate strike.
+
+    A strong matching forecast may prefer a nearer, more responsive/rewarding
+    strike after barrier and delta safety have passed.  A conflicting forecast
+    rewards additional distance.  This changes ranking rather than adding the
+    same cosmetic constant to every row.
+    """
+    base = _future_alignment(action, direction, strength)
+    future = _future_direction(direction)
+    wanted = {
+        "PE SELL": "UP", "CE BUY": "UP",
+        "CE SELL": "DOWN", "PE BUY": "DOWN",
+    }.get(action, "WAIT")
+    distance_score = clamp(abs(float(strike) - float(spot)) / 200.0 * 100.0, 0.0, 100.0)
+    if future == "WAIT":
+        strike_score = 50.0
+    elif future == wanted:
+        strike_score = 100.0 - distance_score
+    elif future == "RANGE":
+        strike_score = 60.0
+    else:
+        strike_score = distance_score
+    influence = clamp(float(strength or 0.0), 0.0, 100.0) / 100.0
+    return clamp(base * (1.0 - 0.45 * influence) + strike_score * 0.45 * influence, 0.0, 100.0)
+
+
 def _row_for_leg(frame: pd.DataFrame, leg: OptionLeg) -> pd.Series | None:
     rows = frame[
         frame["side"].astype(str).str.upper().eq(leg.side)
@@ -105,6 +139,20 @@ def _spread_metrics(row: pd.Series) -> tuple[float | None, float]:
     spread_pct = (ask - bid) / midpoint * 100.0
     score = clamp(100.0 - max(0.0, spread_pct - 1.0) * 6.0, 0.0, 100.0)
     return round(spread_pct, 2), score
+
+
+def _executable_book(row: pd.Series, *, maximum_spread_pct: float = 10.0) -> bool:
+    """Require a real, bounded bid/ask book for an entry leg.
+
+    LTP remains useful for display, but it is not an executable protected-spread
+    price and must never make a candidate READY by itself.
+    """
+    bid = _number(row.get("top_bid_price"))
+    ask = _number(row.get("top_ask_price"))
+    if bid is None or ask is None or not 0 < bid <= ask:
+        return False
+    midpoint = (bid + ask) / 2.0
+    return midpoint > 0 and (ask - bid) / midpoint * 100.0 <= maximum_spread_pct
 
 
 def _distance_score(distance_pct: float) -> float:
@@ -257,7 +305,9 @@ def _select_long_leg(
     scored: list[tuple[float, pd.Series, float | None, float, str]] = []
     for _, row in rows.iterrows():
         strike = float(row["strike"])
-        ask = _number(row.get("top_ask_price")) or _number(row.get("last_price"))
+        if not _executable_book(row):
+            continue
+        ask = _number(row.get("top_ask_price"))
         if ask is None or ask <= 0:
             continue
         spread_pct, spread_score = _spread_metrics(row)
@@ -274,7 +324,10 @@ def _select_long_leg(
             100.0,
         )
         level_score, level_reason = _buy_level_score(side, strike, ask, spot, levels)
-        alignment = _future_alignment(f"{side} BUY", future_direction, future_strength)
+        alignment = _future_strike_alignment(
+            f"{side} BUY", future_direction, future_strength,
+            strike=strike, spot=spot,
+        )
         total = (
             liquidity * 0.30
             + _buy_delta_score(
@@ -306,7 +359,7 @@ def _select_long_leg(
         level_reason,
         f"Delta {leg.delta:.2f}" if leg.delta is not None else "Delta unavailable",
         f"Liquidity score {liquidity:.1f}/100",
-        f"Future Brain alignment {_future_alignment(f'{side} BUY', future_direction, future_strength):.1f}/100",
+        f"Future Brain alignment {_future_strike_alignment(f'{side} BUY', future_direction, future_strength, strike=leg.strike, spot=spot):.1f}/100 (strike-specific)",
     )
 
 
@@ -347,7 +400,7 @@ def _buy_plan(
     long_price = _buy_price(leg)
     hedge_price = _sell_price(hedge)
     if long_price is None or hedge_price is None:
-        return SetupPlan.unavailable(name, "Executable ask/LTP is missing")
+        return SetupPlan.unavailable(name, "Executable bid/ask is missing; no LTP-only entry")
     debit = long_price - hedge_price
     width = abs(hedge.strike - leg.strike)
     if debit <= 0 or width <= 0 or debit >= width:
@@ -415,13 +468,20 @@ def _select_buy_hedge_leg(
     step = _strike_step(frame)
     if step is None or step <= 0:
         return None
+    maximum_gap = max(1, int(CONFIG.trade_max_hedge_steps)) * step
+    gap = rows["strike"] - main.strike if side == "CE" else main.strike - rows["strike"]
+    rows = rows[gap.le(maximum_gap)]
+    if rows.empty:
+        return None
     target_gap = max(1, int(target_steps)) * step
     target_strike = main.strike + target_gap if side == "CE" else main.strike - target_gap
     oi_series = rows.get("oi", pd.Series(dtype=float))
     volume_series = rows.get("volume", pd.Series(dtype=float))
     scored: list[tuple[float, pd.Series, float | None, float]] = []
     for _, row in rows.iterrows():
-        bid = _number(row.get("top_bid_price")) or _number(row.get("last_price"))
+        if not _executable_book(row):
+            continue
+        bid = _number(row.get("top_bid_price"))
         if bid is None or bid <= 0:
             continue
         spread_pct, spread_score = _spread_metrics(row)
@@ -587,7 +647,10 @@ def _select_short_leg(
         theta = _number(row.get("theta"))
         theta_values = pd.to_numeric(rows.get("theta", pd.Series(dtype=float)), errors="coerce").abs()
         theta_score = _percentile_score(abs(theta) if theta is not None else None, theta_values)
-        alignment = _future_alignment(f"{side} SELL", future_direction, future_strength)
+        alignment = _future_strike_alignment(
+            f"{side} SELL", future_direction, future_strength,
+            strike=strike, spot=spot,
+        )
         total = (
             liquidity * 0.25
             + _delta_score(
@@ -620,7 +683,7 @@ def _select_short_leg(
         level_reason,
         wall_reason,
         f"Liquidity score {liquidity:.1f}/100",
-        f"Future Brain alignment {_future_alignment(f'{side} SELL', future_direction, future_strength):.1f}/100",
+        f"Future Brain alignment {_future_strike_alignment(f'{side} SELL', future_direction, future_strength, strike=leg.strike, spot=spot):.1f}/100 (strike-specific)",
     )
     return leg, round(clamp(score, 0.0, 100.0), 1), reasons
 
@@ -907,11 +970,23 @@ def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28
         decay = _plan_decay_edge(frame, plan)
         decay_score = 55.0 if decay is None else clamp(50.0 + decay * 8.0, 0.0, 100.0)
         reward_score = min(100, reward_risk * 240)
-        alignment = _future_alignment(name, future_direction, future_strength)
-        return plan.quality_score * .35 + reward_score * .25 + decay_score * .25 + alignment * .15
-    chosen = max(usable, key=value)
+        alignment = _future_strike_alignment(
+            name, future_direction, future_strength,
+            strike=plan.short_legs[0].strike, spot=spot,
+        )
+        # Future alignment must be strong enough to alter a close ranking, while
+        # executable book, barrier, delta and reward gates remain mandatory.
+        return plan.quality_score * .25 + reward_score * .20 + decay_score * .20 + alignment * .35
+    reward_eligible = [
+        p for p in usable
+        if p.estimated_credit_points / p.max_risk_points >= .06
+    ]
+    status_pool = [p for p in reward_eligible if p.status == "READY"]
+    if not status_pool:
+        status_pool = [p for p in reward_eligible if p.status == "CAUTION"]
+    chosen = max(status_pool or usable, key=value)
     chosen_reward_risk = chosen.estimated_credit_points / chosen.max_risk_points
-    if chosen_reward_risk < .06:
+    if not reward_eligible:
         return replace(
             chosen,
             status="BLOCKED",
@@ -928,7 +1003,7 @@ def _vertical_plan(*, name, side, frame, spot, levels, options, target_delta=.28
         "expiry_pnl_at_hedge": -p.max_risk_points}
         for p in sorted(usable,key=value,reverse=True)[:3])
     return replace(chosen, pair_comparison=comparison, reasons=(*chosen.reasons,
-        f"Compared {len(usable)} executable pairs; quality 35% + reward 25% + decay 25% + Future Brain 15%, not win probability",
+        f"Compared {len(usable)} executable pairs; quality 25% + reward 20% + decay 20% + Future Brain strike alignment 35%, not win probability",
         f"Pair comparison: net credit/risk {chosen.estimated_credit_points / chosen.max_risk_points:.2f}; expiry payoff, not expected return"))
 
 
@@ -1100,8 +1175,14 @@ def _best_condor_plan(
         decay_score = 55.0 if decay is None else clamp(50.0 + decay * 7.0, 0.0, 100.0)
         return plan.quality_score * .45 + min(100.0, reward * 220.0) * .25 + decay_score * .30
 
-    chosen = max(usable, key=score)
-    if (chosen.estimated_credit_points or 0.0) / max(chosen.max_risk_points or 0.0, .01) < .08:
+    reward_eligible = [
+        item for item in usable
+        if (item.estimated_credit_points or 0.0) / max(item.max_risk_points or 0.0, .01) >= .08
+    ]
+    ready = [item for item in reward_eligible if item.status == "READY"]
+    caution = [item for item in reward_eligible if item.status == "CAUTION"]
+    chosen = max(ready or caution or usable, key=score)
+    if not reward_eligible:
         return replace(chosen, status="BLOCKED", blocker="SAFE BUT LOW REWARD — condor credit/risk is too small")
     return replace(chosen, reasons=(*chosen.reasons,
         f"Jointly compared {len(usable)} CE×PE wing combinations; premium equality was not used"))
@@ -1134,6 +1215,45 @@ def _apply_runtime_status(
             plan, status="BLOCKED", blocker="Selected candidate quality is too low"
         )
     return replace(plan, status="READY", blocker="None")
+
+
+def activate_plan_candidate(
+    bundle: TradePlanBundle,
+    candidate: str,
+    market_session: MarketSession,
+) -> TradePlanBundle:
+    """Activate the Common Gate candidate without rebuilding any strike math.
+
+    Runtime labels such as ALTERNATIVE/WATCH ONLY are presentation states.  The
+    candidate's intrinsic quality is restored here, while hard BLOCKED and
+    unavailable plans remain blocked.
+    """
+    candidate = str(candidate or "WAIT").upper()
+    plans = {
+        "CE BUY": bundle.ce_buy,
+        "PE BUY": bundle.pe_buy,
+        "CE SELL": bundle.ce_sell,
+        "PE SELL": bundle.pe_sell,
+        "IRON CONDOR": bundle.iron_condor,
+    }
+    plan = plans.get(candidate)
+    if plan is not None and plan.available and plan.status != "BLOCKED":
+        if not market_session.is_live:
+            plan = replace(plan, status="REFERENCE ONLY", blocker="Market is not live")
+        else:
+            floor = CONFIG.buy_min_plan_quality if plan.is_buy else CONFIG.trade_min_plan_quality
+            plan = replace(
+                plan,
+                status="READY" if plan.quality_score >= floor else "CAUTION",
+                blocker="None" if plan.quality_score >= floor else "Candidate quality is below the ready threshold",
+            )
+        plans[candidate] = plan
+    return replace(
+        bundle,
+        ce_buy=plans["CE BUY"], pe_buy=plans["PE BUY"],
+        ce_sell=plans["CE SELL"], pe_sell=plans["PE SELL"],
+        iron_condor=plans["IRON CONDOR"], selected_setup=candidate,
+    )
 
 
 def _candidate_action(decision: FinalDecision, selected: str) -> str:

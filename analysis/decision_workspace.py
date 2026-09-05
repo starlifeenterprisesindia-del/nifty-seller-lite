@@ -41,7 +41,9 @@ def _evaluation_map(snapshot: Any) -> dict[str, Any]:
     }
 
 
-def build_common_decision(snapshot: Any) -> dict[str, Any]:
+def build_common_decision(
+    snapshot: Any, *, execution_guard: Any | None = None
+) -> dict[str, Any]:
     """Produce one auditable strategy gate without mutating either brain."""
     future = snapshot.metadata.get("future_brain") or {}
     current = str(future.get("current_direction") or "RANGE").upper()
@@ -98,6 +100,22 @@ def build_common_decision(snapshot: Any) -> dict[str, Any]:
     )
     if plan and (risk_per_lot <= 0 or risk_per_lot > float(snapshot.risk_profile.risk_budget_rupees or 0)):
         blockers.append("Risk budget does not allow one protected lot")
+    # The Common Gate is presentation/coordination only.  It may announce entry
+    # only after the canonical Execution Guard has approved this exact candidate.
+    if execution_guard is not None:
+        guard_setup = str(getattr(execution_guard, "selected_setup", "WAIT") or "WAIT")
+        guard_ready = str(getattr(execution_guard, "readiness", "BLOCKED") or "BLOCKED")
+        if guard_setup != candidate:
+            blockers.append(
+                f"Execution Guard candidate mismatch: {guard_setup} != {candidate}"
+            )
+        if guard_ready != "ENTRY READY":
+            guard_blockers = tuple(getattr(execution_guard, "blockers", ()) or ())
+            blockers.append(
+                str(guard_blockers[0])
+                if guard_blockers
+                else f"Execution Guard is {guard_ready}"
+            )
     # Preserve order while removing duplicate explanations.
     blockers = list(dict.fromkeys(item for item in blockers if item))
     entry_allowed = not blockers and candidate != "WAIT"
@@ -120,6 +138,10 @@ def build_common_decision(snapshot: Any) -> dict[str, Any]:
         "final_action": candidate if entry_allowed else "WAIT",
         "best_strategy": candidate,
         "entry_allowed": entry_allowed,
+        "execution_readiness": (
+            str(getattr(execution_guard, "readiness", "NOT CHECKED"))
+            if execution_guard is not None else "NOT CHECKED"
+        ),
         "direction": preferred if preferred in STRATEGIES else "MIXED",
         "current_direction": current,
         "future_gate": future_gate,

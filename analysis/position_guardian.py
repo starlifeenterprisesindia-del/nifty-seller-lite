@@ -303,7 +303,11 @@ def calculate_position_guardian(
     progress = None
     if not blockers:
         if is_buy and entry_debit is not None:
-            current_debit = round(max(0.0, long_value), 2)
+            # Directional BUY plans are protected debit spreads: the long option
+            # must be valued at its executable bid and the short hedge at its
+            # executable ask.  Looking at the long leg alone materially
+            # overstates both the close value and live P&L.
+            current_debit = round(max(0.0, long_value - short_cost), 2)
             pnl_points = round(current_debit - entry_debit, 2)
         elif not is_buy and entry_credit is not None:
             current_debit = round(max(0.0, short_cost - hedge_value), 2)

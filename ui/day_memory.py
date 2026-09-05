@@ -21,7 +21,14 @@ def app_observation(snapshot):
     legs = []
     valid = True
     if plan:
-        for role, items in (("SELL", plan.short_legs), ("HEDGE", plan.hedge_legs), ("BUY", plan.long_legs)):
+        # Debit spreads contain a BUY long plus a SELL farther-OTM hedge;
+        # credit spreads contain SELL shorts plus bought HEDGE legs.
+        leg_groups = (
+            (("SELL", plan.short_legs), ("BUY", plan.long_legs))
+            if getattr(plan, "is_buy", False)
+            else (("SELL", plan.short_legs), ("HEDGE", plan.hedge_legs))
+        )
+        for role, items in leg_groups:
             for leg in items:
                 matches = snapshot.option_chain[(snapshot.option_chain["strike"] == leg.strike) & (snapshot.option_chain["side"] == leg.side)]
                 if len(matches) != 1:
@@ -47,7 +54,7 @@ def app_observation(snapshot):
                   "fresh": snapshot.market_session.is_live and all(getattr(snapshot.feed_status.get(k),"use_state","")=="LIVE" for k in ("quotes","candles","option_chain"))})
 
 
-def sync_day_memory(snapshot, url, key):
+def sync_day_memory(snapshot, url, key, *, record_event: bool = True):
     """Called before presentation; fresh same-version history only, never a vote."""
     now = datetime.now().timestamp()
     connection = hashlib.sha256(f"{url}|{key}".encode()).hexdigest()
@@ -58,7 +65,11 @@ def sync_day_memory(snapshot, url, key):
     if url and key and now-st.session_state.get("day_memory_fetch_at",0)>=60:
         try:
             client = RailwayDhanClient(url,key,timeout_seconds=3)
-            event = app_observation(snapshot) if snapshot.market_session.is_live else None
+            event = (
+                app_observation(snapshot)
+                if record_event and snapshot.market_session.is_live
+                else None
+            )
             st.session_state.day_memory_report = client._post("/day-memory", {"event":event})
             st.session_state.pop("day_memory_error",None)
         except Exception:
@@ -80,6 +91,35 @@ def sync_day_memory(snapshot, url, key):
         "history_context": snapshot.metadata["history_context"],
         "usage": "OI/Top9 history supplies rolling calculations via analysis_history feed. Diary supplies context only; no extra vote or automatic training.",
     })
+
+
+def record_final_day_memory(snapshot, url, key):
+    """Record exactly one fully-finalized app observation per snapshot.
+
+    History can be fetched before Future Brain is calculated, but evidence must
+    never be posted until the Future-aware plan, exact Execution Guard and Common
+    final decision all exist.
+    """
+    if not url or not key or not snapshot.market_session.is_live:
+        return
+    snapshot_key = str(getattr(snapshot, "snapshot_id", "") or snapshot.created_at.isoformat())
+    if st.session_state.get("day_memory_final_snapshot") == snapshot_key:
+        return
+    common = snapshot.metadata.get("common_decision") or {}
+    if not snapshot.metadata.get("future_brain") or not common or not getattr(snapshot, "execution_guard", None):
+        snapshot.metadata["recording_skip_reason"] = "FINAL_CALCULATION_INCOMPLETE"
+        return
+    try:
+        client = RailwayDhanClient(url, key, timeout_seconds=3)
+        st.session_state.day_memory_report = client._post(
+            "/day-memory", {"event": app_observation(snapshot)}
+        )
+        st.session_state.day_memory_final_snapshot = snapshot_key
+        st.session_state.pop("day_memory_error", None)
+    except Exception:
+        st.session_state.day_memory_error = (
+            "Final evidence sync pending — calculation safe; Railway connection check karo."
+        )
 
 
 def render_day_memory(snapshot, url, key):

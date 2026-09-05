@@ -38,18 +38,34 @@ def frozen_basket(body):
             return [], None
         prices = quote(row)
         strike = number(row.get("strike"))
-        if not prices or strike is None or strike <= 0 or contract_id(row.get("security_id")) is None or row.get("side") not in ("CE", "PE") or row.get("role") not in ("SELL", "HEDGE"):
+        if not prices or strike is None or strike <= 0 or contract_id(row.get("security_id")) is None or row.get("side") not in ("CE", "PE") or row.get("role") not in ("BUY", "SELL", "HEDGE"):
             return [], None
         item = {k: row.get(k) for k in ("strike", "side", "role", "security_id", "top_bid_price", "top_ask_price")}
         item["strike"] = strike
         item["top_bid_price"], item["top_ask_price"] = prices
         item["security_id"] = contract_id(item["security_id"])
-        credit += prices[0] if row["role"] == "SELL" else -prices[1]
         saved.append(item)
     # Only protected equal-quantity spreads; never a naked or duplicated leg.
     keys = {(x["strike"], x["side"]) for x in saved}
-    if len(keys) != len(saved) or sum(x["role"] == "SELL" for x in saved) != len(saved)//2:
+    if len(keys) != len(saved):
         return [], None
+    buys = [x for x in saved if x["role"] == "BUY"]
+    if buys:
+        sells = [x for x in saved if x["role"] == "SELL"]
+        if len(saved) != 2 or len(buys) != 1 or len(sells) != 1 or buys[0]["side"] != sells[0]["side"]:
+            return [], None
+        side = buys[0]["side"]
+        if (side == "CE" and sells[0]["strike"] <= buys[0]["strike"]) or (side == "PE" and sells[0]["strike"] >= buys[0]["strike"]):
+            return [], None
+        debit = buys[0]["top_ask_price"] - sells[0]["top_bid_price"]
+        width = abs(sells[0]["strike"] - buys[0]["strike"])
+        return (saved, debit) if 0 < debit < width else ([], None)
+    if sum(x["role"] == "SELL" for x in saved) != len(saved)//2:
+        return [], None
+    credit = sum(
+        x["top_bid_price"] if x["role"] == "SELL" else -x["top_ask_price"]
+        for x in saved
+    )
     widths = []
     for short in [x for x in saved if x["role"] == "SELL"]:
         hedges = [x for x in saved if x["role"] == "HEDGE" and x["side"] == short["side"]]
@@ -72,9 +88,13 @@ def record_signal(db, body):
     except ValueError:
         return
     legs, credit = frozen_basket(body)
+    is_debit = any(row.get("role") == "BUY" for row in legs)
     item = {"at": body["at"], "expiry": expiry, "spot": spot,
             "action": str(body.get("action", ""))[:80], "candidate": str(body.get("candidate", ""))[:80],
-            "version": str(body.get("version", ""))[:80], "legs": legs, "entry_credit": credit,
+            "version": str(body.get("version", ""))[:80], "legs": legs,
+            "structure_type": "DEBIT" if is_debit else "CREDIT",
+            "entry_credit": None if is_debit else credit,
+            "entry_debit": credit if is_debit else None,
             "score_band": int((number(body.get("score")) or 0)//5)*5,
             "label": "Candidate observation; no order/fill, no fees included"}
     future = body.get("future_brain") or {}
@@ -105,17 +125,31 @@ def record_signal(db, body):
 def mark_spread(signal, sample):
     if sample.get("expiry") != signal["expiry"] or sample.get("version") != signal["version"]:
         return None
-    if not signal.get("legs") or signal.get("entry_credit") is None:
+    if not signal.get("legs"):
         return None
-    cost = 0.0
+    is_debit = signal.get("structure_type") == "DEBIT" or any(
+        leg.get("role") == "BUY" for leg in signal["legs"]
+    )
+    if is_debit and signal.get("entry_debit") is None:
+        return None
+    if not is_debit and signal.get("entry_credit") is None:
+        return None
+    close_value = 0.0
     for leg in signal["legs"]:
         matches = [r for r in sample.get("options", []) if r.get("strike") == leg["strike"] and r.get("side") == leg["side"]
                    and contract_id(r.get("security_id")) == contract_id(leg.get("security_id"))]
         if len(matches) != 1 or not quote(matches[0]):
             return None
         bid, ask = quote(matches[0])
-        cost += ask if leg["role"] == "SELL" else -bid
-    return signal["entry_credit"] - cost
+        if is_debit:
+            close_value += bid if leg["role"] == "BUY" else -ask
+        else:
+            close_value += ask if leg["role"] == "SELL" else -bid
+    return (
+        close_value - signal["entry_debit"]
+        if is_debit
+        else signal["entry_credit"] - close_value
+    )
 
 
 def update_outcomes(db, sample):
