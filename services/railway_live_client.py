@@ -1,10 +1,39 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+import requests
+
+
+_SESSION_LOCK = threading.Lock()
+_SESSIONS: dict[str, requests.Session] = {}
+
+
+def _session_for(base_url: str) -> requests.Session:
+    """Return a process-wide keep-alive pool for one Railway service.
+
+    Full snapshots make several small protected calls to the same Railway host and
+    the 5-second live monitor polls it continuously. Reusing TCP/TLS connections
+    removes repeated handshake latency without changing any market calculation.
+    """
+
+    root = str(base_url or "").strip().rstrip("/")
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(root)
+        if session is None:
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=8, pool_maxsize=16, max_retries=0
+            )
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            _SESSIONS[root] = session
+        return session
 
 
 @dataclass(frozen=True)
@@ -41,20 +70,21 @@ def fetch_railway_live_state(
     if not root or not key:
         raise ValueError("Railway live URL or API key is missing")
 
-    request = Request(
-        f"{root}/live",
-        headers={"X-Live-Key": key, "Accept": "application/json"},
-        method="GET",
-    )
     try:
-        with urlopen(request, timeout=max(0.5, float(timeout_seconds))) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        if exc.code == 401:
-            raise RuntimeError("Railway LIVE_API_KEY match nahi hui") from exc
-        raise RuntimeError(f"Railway live server HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"Railway live server unavailable: {exc.reason}") from exc
+        response = _session_for(root).get(
+            f"{root}/live",
+            headers={"X-Live-Key": key, "Accept": "application/json"},
+            timeout=max(0.5, float(timeout_seconds)),
+        )
+        if response.status_code == 401:
+            raise RuntimeError("Railway LIVE_API_KEY match nahi hui")
+        if response.status_code >= 400:
+            raise RuntimeError(f"Railway live server HTTP {response.status_code}")
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Railway live server unavailable: {exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError("Railway live server returned invalid JSON") from exc
 
     nifty = payload.get("nifty") or {}
     impulse = payload.get("impulse") or {}
@@ -83,28 +113,35 @@ class RailwayDhanClient:
             raise ValueError("Railway live URL or API key is missing")
 
     def _post(self, path: str, payload: dict[str, Any]) -> Any:
-        request = Request(
-            f"{self.base_url}{path}",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "X-Live-Key": self.api_key,
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                envelope = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:300]
-            if exc.code == 401:
-                raise RuntimeError("Railway LIVE_API_KEY match nahi hui") from exc
-            raise RuntimeError(f"Railway Dhan gateway HTTP {exc.code}: {detail}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"Railway Dhan gateway unavailable: {exc.reason}") from exc
+            response = _session_for(self.base_url).post(
+                f"{self.base_url}{path}",
+                headers={
+                    "X-Live-Key": self.api_key,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Railway Dhan gateway unavailable: {exc}") from exc
+
+        if response.status_code == 401:
+            raise RuntimeError("Railway LIVE_API_KEY match nahi hui")
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise RuntimeError(
+                f"Railway Dhan gateway HTTP {response.status_code}: {detail}"
+            )
+        try:
+            envelope = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Railway Dhan gateway returned invalid JSON") from exc
         if not isinstance(envelope, dict) or not envelope.get("ok"):
-            raise RuntimeError(str(envelope.get("error") if isinstance(envelope, dict) else envelope))
+            raise RuntimeError(
+                str(envelope.get("error") if isinstance(envelope, dict) else envelope)
+            )
         return envelope.get("data")
 
     def download_bytes(self, path: str, *, maximum_bytes: int = 80 * 1024 * 1024) -> bytes:

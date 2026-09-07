@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time as clock
 from dataclasses import asdict, fields, replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -399,6 +400,16 @@ class SnapshotService:
         now: datetime | None = None,
         risk_profile: RiskProfile | None = None,
     ) -> MarketSnapshot:
+        perf_started = clock.perf_counter()
+        perf_last = perf_started
+        perf_stages: dict[str, float] = {}
+
+        def perf_mark(name: str) -> None:
+            nonlocal perf_last
+            moment = clock.perf_counter()
+            perf_stages[name] = round(moment - perf_last, 4)
+            perf_last = moment
+
         if now is None:
             current = datetime.now(IST)
         elif now.tzinfo:
@@ -419,6 +430,7 @@ class SnapshotService:
         )
 
         future_ref, vix_ref = self._resolve_market_references()
+        perf_mark("instrument_refs")
         # NIFTY and INDIA VIX share IDX_I. Incremental construction prevents
         # duplicate dictionary keys from overwriting an instrument.
         grouped: dict[str, list[int]] = {}
@@ -434,6 +446,7 @@ class SnapshotService:
             grouped.setdefault(item.exchange_segment, []).append(int(item.security_id))
 
         quote_response = self.client.market_quote(grouped)
+        perf_mark("grouped_quotes")
         nifty_quote = self._extract_quote(
             quote_response,
             CONFIG.nifty.exchange_segment,
@@ -481,6 +494,7 @@ class SnapshotService:
             from_date=from_date,
             current=current,
         )
+        perf_mark("spot_candles")
         # Closing-auction indicative/final-close rows remain broker reference data,
         # but must not manufacture EMA/MACD/RSI or swing evidence.
         candles_1m = exclude_session_from_time(candles_1m, CONFIG.cas_start)
@@ -507,6 +521,7 @@ class SnapshotService:
                 )
             except Exception as exc:
                 future_candle_error = str(exc)
+        perf_mark("future_candles")
 
         quote_age = self._quote_age_seconds(nifty_quote, current)
         latest_1m_age = self._latest_candle_age_seconds(
@@ -779,6 +794,7 @@ class SnapshotService:
                 message=str(exc),
                 use_state="UNAVAILABLE",
             )
+        perf_mark("option_chain")
 
         indicators = calculate_indicator_bundle(candles_3m, candles_15m)
         price_action = calculate_price_action_bundle(candles_3m, candles_15m)
@@ -813,6 +829,7 @@ class SnapshotService:
             market_session,
             future_volume_live=statuses["future_volume"].use_state == "LIVE",
         )
+        perf_mark("core_analysis")
         shared = {}
         history_message = "Local observations"
         if market_session.is_live and callable(getattr(self.client, "market_history", None)):
@@ -838,6 +855,7 @@ class SnapshotService:
             fetched_at=current, age_seconds=None,
             message=f"{history_message}; Top-9 samples={len(top9_history)}; oldest={top9_history[0]['at'] if top9_history else 'missing'}; latest={top9_history[-1]['at'] if top9_history else 'missing'}",
             source="Timestamp-checked market observations", use_state="READY" if top9_history or shared.get("options") else "WARMING UP")
+        perf_mark("history_sync")
         heavyweights = calculate_heavyweight_bundle(
             analysis_heavyweight_quotes,
             current,
@@ -942,6 +960,7 @@ class SnapshotService:
             ),
         )
 
+        perf_mark("option_intelligence")
         context_error: str | None = None
         try:
             context_entries = self.context_store.load()
@@ -971,6 +990,7 @@ class SnapshotService:
             ),
         )
 
+        perf_mark("market_context")
         if self.news_service is None:
             news_context = NewsContext(
                 as_of=current,
@@ -1019,6 +1039,7 @@ class SnapshotService:
             ),
         )
 
+        perf_mark("news")
         pre_touch_barriers = calculate_pre_touch_barriers(
             levels=levels,
             options=option_intelligence,
@@ -1119,6 +1140,7 @@ class SnapshotService:
                 status="UNAVAILABLE",
             )
 
+        perf_mark("barriers_big_player")
         decision = calculate_final_decision(
             core=core_evidence,
             options=option_intelligence,
@@ -1242,6 +1264,16 @@ class SnapshotService:
             ),
         )
 
+        perf_mark("decision_and_plan")
+        build_seconds = round(clock.perf_counter() - perf_started, 4)
+        performance = {
+            "build_seconds": build_seconds,
+            "stages": perf_stages,
+            "slowest_stage": (
+                max(perf_stages, key=perf_stages.get) if perf_stages else ""
+            ),
+        }
+
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),
             "market_state": market_session.code,
@@ -1305,6 +1337,7 @@ class SnapshotService:
             patterns=patterns,
             metadata={
                 "version": CONFIG.version,
+                "performance": performance,
                 "history_analytics": {
                     "oi": oi_history(option_history, option_state_snapshot, live=market_session.is_live and statuses["option_chain"].use_state == "LIVE"),
                     "vwap": futures_vwap(future_candles_1m, current),

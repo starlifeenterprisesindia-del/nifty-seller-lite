@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
+import threading
 
 import pandas as pd
 import requests
@@ -35,10 +36,43 @@ class ResolvedInstrument:
 
 
 class InstrumentMaster:
-    """Cached Dhan instrument resolver for the dynamic future and index references."""
+    """Cached Dhan instrument resolver for the dynamic future and index references.
+
+    The CSV is large enough that reparsing and renormalising it on every Streamlit
+    rerun can dominate otherwise-light UI work.  Keep a process-wide cache keyed by
+    file metadata; Railway/Streamlit workers naturally invalidate it when the cache
+    file is refreshed or replaced.
+    """
+
+    _memory_lock = threading.RLock()
+    _raw_memory: dict[str, tuple[int, int, pd.DataFrame]] = {}
+    _normalized_memory: dict[str, tuple[int, int, pd.DataFrame]] = {}
 
     def __init__(self, cache_path: Path | None = None):
         self.cache_path = cache_path or Path("data/instrument_master.csv")
+
+    def _cache_identity(self) -> tuple[str, int, int] | None:
+        try:
+            stat = self.cache_path.stat()
+        except OSError:
+            return None
+        return (str(self.cache_path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+    @classmethod
+    def _remember_raw(cls, identity: tuple[str, int, int], frame: pd.DataFrame) -> None:
+        path, mtime_ns, size = identity
+        with cls._memory_lock:
+            cls._raw_memory[path] = (mtime_ns, size, frame)
+            # New raw bytes invalidate the normalized view for this path.
+            normalized = cls._normalized_memory.get(path)
+            if normalized and normalized[:2] != (mtime_ns, size):
+                cls._normalized_memory.pop(path, None)
+
+    @classmethod
+    def clear_memory_cache(cls) -> None:
+        with cls._memory_lock:
+            cls._raw_memory.clear()
+            cls._normalized_memory.clear()
 
     @staticmethod
     def _first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -56,24 +90,39 @@ class InstrumentMaster:
         df = pd.read_csv(StringIO(response.text), low_memory=False)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(self.cache_path, index=False)
+        identity = self._cache_identity()
+        if identity is not None:
+            self._remember_raw(identity, df)
         return df
 
     def load(self, *, allow_download: bool = True) -> pd.DataFrame:
         cached: pd.DataFrame | None = None
         cache_is_fresh = False
-        if self.cache_path.exists():
+        identity = self._cache_identity()
+        if identity is not None:
+            path, mtime_ns, size = identity
+            with self._memory_lock:
+                memory = self._raw_memory.get(path)
+                if memory and memory[:2] == (mtime_ns, size):
+                    cached = memory[2]
+            if cached is None:
+                try:
+                    cached = pd.read_csv(self.cache_path, low_memory=False)
+                    if cached.empty:
+                        cached = None
+                    else:
+                        self._remember_raw(identity, cached)
+                except Exception:
+                    cached = None
             try:
-                cached = pd.read_csv(self.cache_path, low_memory=False)
                 age_seconds = max(
                     0.0, datetime.now().timestamp() - self.cache_path.stat().st_mtime
                 )
                 cache_is_fresh = (
                     age_seconds <= CONFIG.instrument_master_cache_max_age_hours * 3600
                 )
-                if cached.empty:
-                    cached = None
-            except Exception:
-                cached = None
+            except OSError:
+                cache_is_fresh = False
 
         if cached is not None and cache_is_fresh:
             return cached
@@ -89,6 +138,21 @@ class InstrumentMaster:
         raise SnapshotBuildError("Dhan instrument master is unavailable")
 
     def normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        identity = self._cache_identity()
+        if identity is not None:
+            path, mtime_ns, size = identity
+            with self._memory_lock:
+                raw = self._raw_memory.get(path)
+                normalized = self._normalized_memory.get(path)
+                if (
+                    raw
+                    and raw[:2] == (mtime_ns, size)
+                    and raw[2] is df
+                    and normalized
+                    and normalized[:2] == (mtime_ns, size)
+                ):
+                    return normalized[2]
+
         result = pd.DataFrame(index=df.index)
         for target, aliases in COLUMN_ALIASES.items():
             source = self._first_existing(df, aliases)
@@ -105,7 +169,15 @@ class InstrumentMaster:
         for col in text_columns:
             result[col] = result[col].fillna("").astype(str).str.upper().str.strip()
         result["expiry"] = pd.to_datetime(result["expiry"], errors="coerce")
-        return result.dropna(subset=["security_id"]).copy()
+        result = result.dropna(subset=["security_id"]).copy()
+
+        if identity is not None:
+            path, mtime_ns, size = identity
+            with self._memory_lock:
+                raw = self._raw_memory.get(path)
+                if raw and raw[:2] == (mtime_ns, size) and raw[2] is df:
+                    self._normalized_memory[path] = (mtime_ns, size, result)
+        return result
 
     def resolve_india_vix(
         self,

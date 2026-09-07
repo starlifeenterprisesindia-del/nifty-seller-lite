@@ -111,8 +111,10 @@ def record_final_day_memory(snapshot, url, key):
         return
     try:
         client = RailwayDhanClient(url, key, timeout_seconds=3)
-        st.session_state.day_memory_report = client._post(
-            "/day-memory", {"event": app_observation(snapshot)}
+        # Record-only call: the full history report already has a 60-second fetch TTL
+        # in sync_day_memory(). Avoid rebuilding/transferring it every 15-second snapshot.
+        client._post(
+            "/day-memory", {"event": app_observation(snapshot), "report": False}
         )
         st.session_state.day_memory_final_snapshot = snapshot_key
         st.session_state.pop("day_memory_error", None)
