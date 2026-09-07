@@ -1,0 +1,51 @@
+Nifty Seller Lite 2.47.1 — Speed & Stability Hotfix
+
+Purpose
+- Speed up the existing 2.47.0 canonical pipeline without changing strategy votes,
+  barrier logic, Future Brain logic, strike ranking rules, risk gates, or execution rules.
+
+Performance fixes
+- Fixed the Railway intraday-cache key: the rolling from_date seconds previously made
+  nominally identical candle requests miss the cache on repeated snapshots.
+- 1-minute candle cache is now keyed by completed-minute buckets; 15-minute candle
+  cache is keyed by completed 15-minute buckets. The actual Dhan request remains
+  unchanged on a cache miss, but repeated 15-second snapshots no longer refetch data
+  that cannot have changed yet.
+- Added bounded last-good fallback for quote/candle feeds during short Dhan errors or
+  rate-limit cooldowns. Existing timestamp/candle-age guards still decide LIVE vs STALE;
+  no synthetic market data is created.
+- Railway HTTP calls now reuse keep-alive connection pools, including the 5-second
+  /live monitor. This removes repeated TCP/TLS handshake latency.
+- Railway Dhan upstream timeout is configurable with
+  DHAN_GATEWAY_REQUEST_TIMEOUT_SECONDS and defaults to 6.5 seconds.
+- Instrument-master CSV and normalized frame are cached in process memory and
+  automatically invalidated when the file changes. It is no longer reparsed and
+  renormalized on every Streamlit rerun.
+- Housekeeping is throttled to once per 30 minutes instead of rescanning files on every
+  rerun.
+- Canonical Future Brain -> trade plan -> Common Gate -> Execution Guard finalization
+  now runs once per fresh snapshot. Opening/closing UI controls no longer recomputes the
+  same finalized brain or resends the same background work.
+- Presentation deep-copy normalization is cached per immutable snapshot.
+- Final day-memory writes are record-only ACK calls; the full Railway history report
+  remains on its existing 60-second fetch TTL.
+- Paper-monitor registration is limited to changed books or a 60-second recovery
+  heartbeat instead of every snapshot.
+
+Diagnostics
+- Each snapshot now records stage timings and total build time in metadata.
+- The app shows a compact Processing / snapshot / slowest-stage line so live-market
+  bottlenecks can be identified immediately.
+
+Validation
+- Python compile checks passed for app.py, live_server.py, services/, analysis/, and ui/.
+- 37 targeted architecture/snapshot/Dhan/cache/live-monitor tests passed.
+- 5 new/related performance-cache tests passed.
+- Full suite could not be completed in the build container because Streamlit is not
+  installed there and external package download is unavailable; no Streamlit runtime
+  dependency was changed in requirements.txt.
+
+Deployment
+- Deploy this same cumulative ZIP to both the Streamlit app source and Railway service.
+- Keep the existing Railway persistent /data volume and existing secrets/tokens.
+- No storage reset is required.

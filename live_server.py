@@ -294,11 +294,18 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
     if not os.getenv("LIVE_API_KEY", "").strip():
         raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
     _authorise("", x_live_key)
+    recorded = False
     if payload.get("event") and DAY_RECORDER.store:
         try:
             DAY_RECORDER.store.app_event(datetime.now(IST), payload["event"])
+            recorded = True
         except (ValueError, TypeError, KeyError):
             raise HTTPException(status_code=400, detail="Invalid history event")
+    # Final app evidence is posted every full snapshot. It does not need the full
+    # SQLite report back each time; the app fetches that report on its own 60s TTL.
+    # This keeps recording authoritative while removing repeated report-building work.
+    if payload.get("report", True) is False:
+        return {"ok": True, "data": {"recorded": recorded}}
     return {"ok": True, "data": DAY_RECORDER.report()}
 
 

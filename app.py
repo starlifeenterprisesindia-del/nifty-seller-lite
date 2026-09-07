@@ -211,9 +211,13 @@ access_token = secret_value("access_token")
 live_server_url = live_server_value("url")
 live_server_api_key = live_server_value("api_key")
 
-# Quiet housekeeping on every rerun. It prunes only temporary/raw market state older
-# than 24h; FII/DII journal, manual discipline/trade state and learning summaries remain.
-run_housekeeping(datetime.now(ZoneInfo(IST_TIMEZONE)))
+# Housekeeping is intentionally throttled. A Streamlit UI interaction or fast fragment
+# must not rescan the data directory every few seconds. It still prunes only temporary/
+# raw market state; FII/DII journal, manual discipline/trade state and learning stay.
+_housekeeping_now = time.time()
+if _housekeeping_now - float(st.session_state.get("last_housekeeping_ts", 0.0)) >= 1800:
+    run_housekeeping(datetime.now(ZoneInfo(IST_TIMEZONE)))
+    st.session_state.last_housekeeping_ts = _housekeeping_now
 state_store = OptionStateStore(Path(CONFIG.option_state_path))
 cloud_journal = GitHubJsonJournal.from_mapping(
     cloud_journal_values(), timeout_seconds=CONFIG.market_context_cloud_timeout_seconds
@@ -554,6 +558,7 @@ with st.sidebar:
         cache = Path("data/instrument_master.csv")
         if cache.exists():
             cache.unlink()
+        InstrumentMaster.clear_memory_cache()
         st.success("Instrument cache cleared")
     if clear_option_state:
         state_store.clear()
@@ -578,6 +583,9 @@ if not credentials_ready:
         language="toml",
     )
     st.stop()
+
+snapshot_built_now = False
+snapshot_pipeline_started = time.perf_counter()
 
 if "snapshot" not in st.session_state or refresh:
     try:
@@ -612,6 +620,7 @@ if "snapshot" not in st.session_state or refresh:
             st.session_state.snapshot = new_snapshot
             st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
             st.session_state.pop("auto_snapshot_reserved_at", None)
+            snapshot_built_now = True
     except Exception as exc:
         st.error(
             f"Snapshot failed safely: {exc}. Railway restart/health check karo; "
@@ -621,97 +630,179 @@ if "snapshot" not in st.session_state or refresh:
 
 snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
-from analysis.future_brain import calculate_future_brain
-from analysis.decision_workspace import build_common_decision
-# First pass is sent with the observation; the second pass adds any matching
-# Railway outcomes returned by the same sync call.
-snapshot.metadata["future_brain"] = calculate_future_brain(
-    snapshot, previous_snapshot, []
-).to_dict()
-# Fetch completed outcomes first, but do not record a half-built observation.
-sync_day_memory(
-    snapshot, live_server_url, live_server_api_key, record_event=False
-)
-snapshot.metadata["future_brain"] = calculate_future_brain(
-    snapshot,
-    previous_snapshot,
-    snapshot.metadata.get("learning_outcomes") or [],
-).to_dict()
-# Second pass: Future Brain only re-ranks already protected strike candidates.
-# Current Brain, Common Gate, bid/ask, barrier and risk-budget gates remain authoritative.
-from analysis.trade_plan import calculate_trade_plan, activate_plan_candidate
-from analysis.execution_guard import calculate_execution_guard
-future_view = snapshot.metadata["future_brain"]
-future_direction = future_view.get("preferred_direction") or future_view.get("next_direction") or "WAIT"
-future_strength = max(
-    float(future_view.get("up_15m") or 0.0),
-    float(future_view.get("down_15m") or 0.0),
-    float(future_view.get("range_15m") or 0.0),
-)
-snapshot.trade_plan = calculate_trade_plan(
-    frame=snapshot.option_chain,
-    spot=float(snapshot.nifty_quote.get("last_price") or 0.0),
-    expiry=snapshot.expiry,
-    levels=snapshot.levels,
-    options=snapshot.option_intelligence,
-    decision=snapshot.decision,
-    market_session=snapshot.market_session,
-    indicators=snapshot.indicators,
-    risk_profile=snapshot.risk_profile,
-    future_direction=future_direction,
-    future_strength=future_strength,
-)
-# Common workspace proposes one Future-compatible candidate.  The Execution
-# Guard then evaluates that exact plan; only the second Common pass may publish
-# ENTRY ALLOWED.
-common_proposal = build_common_decision(snapshot)
-common_candidate = str(common_proposal.get("best_strategy") or "WAIT")
-snapshot.trade_plan = activate_plan_candidate(
-    snapshot.trade_plan, common_candidate, snapshot.market_session
-)
-snapshot.execution_guard = calculate_execution_guard(
-    decision=snapshot.decision,
-    trade_plan=snapshot.trade_plan,
-    market_session=snapshot.market_session,
-    option_intelligence=snapshot.option_intelligence,
-    price_action=snapshot.price_action,
-    risk_profile=snapshot.risk_profile,
-    discipline_state=snapshot.discipline_state,
-    big_player=snapshot.big_player_activity,
-    feed_status=snapshot.feed_status,
-    as_of=snapshot.created_at,
-    selected_setup_override=common_candidate,
-    final_action_override=common_candidate,
-)
-snapshot.metadata["common_decision"] = build_common_decision(
-    snapshot, execution_guard=snapshot.execution_guard
-)
-snapshot.metadata["canonical_finalized"] = True
-record_final_day_memory(snapshot, live_server_url, live_server_api_key)
-shadow_entries = process_auto_shadow_journal(
-    snapshot,
-    shadow_journal_store,
-    enabled=bool(shadow_journal_enabled),
-)
-if live_server_url and live_server_api_key and shadow_entries:
-    # Server only monitors registered paper positions; local entry qualification stays unchanged.
-    from services.railway_live_client import RailwayDhanClient
-    try:
-        remote = RailwayDhanClient(live_server_url, live_server_api_key, timeout_seconds=3)._post(
-            "/paper-monitor", {"entries": shadow_entries})
-        if remote.get("entries") != shadow_entries:
-            shadow_entries = remote["entries"]
-            shadow_journal_store.save(shadow_entries, sync_cloud=False)
-    except Exception:
-        st.warning("Paper server sync pending — local journal safe; background exit monitoring not confirmed.")
+def _finalize_snapshot_once(snapshot, previous_snapshot):
+    """Run the canonical Future/Common/Guard pipeline once per fresh snapshot.
+
+    Streamlit reruns caused by opening controls must not recompute the brain, resend
+    history, or re-register paper positions. A fresh SnapshotService result clears the
+    marker naturally because it is a new object.
+    """
+
+    if snapshot.metadata.get("canonical_finalized"):
+        cached = st.session_state.get("shadow_entries_cache")
+        if isinstance(cached, list):
+            return cached
+        entries = shadow_journal_store.load(refresh_cloud=False)
+        st.session_state.shadow_entries_cache = entries
+        return entries
+
+    finalize_started = time.perf_counter()
+    from analysis.future_brain import calculate_future_brain
+    from analysis.decision_workspace import build_common_decision
+    from analysis.trade_plan import calculate_trade_plan, activate_plan_candidate
+    from analysis.execution_guard import calculate_execution_guard
+
+    # First pass is sent with the observation; the second pass adds any matching
+    # Railway outcomes returned by the same sync call.
+    snapshot.metadata["future_brain"] = calculate_future_brain(
+        snapshot, previous_snapshot, []
+    ).to_dict()
+    # Fetch completed outcomes first, but do not record a half-built observation.
+    sync_day_memory(
+        snapshot, live_server_url, live_server_api_key, record_event=False
+    )
+    snapshot.metadata["future_brain"] = calculate_future_brain(
+        snapshot,
+        previous_snapshot,
+        snapshot.metadata.get("learning_outcomes") or [],
+    ).to_dict()
+
+    # Future Brain only re-ranks already protected candidates. Current Brain,
+    # Common Gate, bid/ask, barriers and risk budget remain authoritative.
+    future_view = snapshot.metadata["future_brain"]
+    future_direction = (
+        future_view.get("preferred_direction")
+        or future_view.get("next_direction")
+        or "WAIT"
+    )
+    future_strength = max(
+        float(future_view.get("up_15m") or 0.0),
+        float(future_view.get("down_15m") or 0.0),
+        float(future_view.get("range_15m") or 0.0),
+    )
+    snapshot.trade_plan = calculate_trade_plan(
+        frame=snapshot.option_chain,
+        spot=float(snapshot.nifty_quote.get("last_price") or 0.0),
+        expiry=snapshot.expiry,
+        levels=snapshot.levels,
+        options=snapshot.option_intelligence,
+        decision=snapshot.decision,
+        market_session=snapshot.market_session,
+        indicators=snapshot.indicators,
+        risk_profile=snapshot.risk_profile,
+        future_direction=future_direction,
+        future_strength=future_strength,
+    )
+    common_proposal = build_common_decision(snapshot)
+    common_candidate = str(common_proposal.get("best_strategy") or "WAIT")
+    snapshot.trade_plan = activate_plan_candidate(
+        snapshot.trade_plan, common_candidate, snapshot.market_session
+    )
+    snapshot.execution_guard = calculate_execution_guard(
+        decision=snapshot.decision,
+        trade_plan=snapshot.trade_plan,
+        market_session=snapshot.market_session,
+        option_intelligence=snapshot.option_intelligence,
+        price_action=snapshot.price_action,
+        risk_profile=snapshot.risk_profile,
+        discipline_state=snapshot.discipline_state,
+        big_player=snapshot.big_player_activity,
+        feed_status=snapshot.feed_status,
+        as_of=snapshot.created_at,
+        selected_setup_override=common_candidate,
+        final_action_override=common_candidate,
+    )
+    snapshot.metadata["common_decision"] = build_common_decision(
+        snapshot, execution_guard=snapshot.execution_guard
+    )
+    snapshot.metadata["canonical_finalized"] = True
+
+    # Evidence remains exact, but the Railway endpoint now returns only an ACK for
+    # this frequent write; full history/report transfer stays on its 60-second TTL.
+    record_final_day_memory(snapshot, live_server_url, live_server_api_key)
+    entries = process_auto_shadow_journal(
+        snapshot,
+        shadow_journal_store,
+        enabled=bool(shadow_journal_enabled),
+    )
+
+    # Re-register the paper book at most once per minute unless its content changes.
+    # This preserves restart recovery without blocking every 15-second snapshot.
+    if live_server_url and live_server_api_key and entries:
+        paper_signature = tuple(
+            (
+                str(item.get("trade_id") or ""),
+                str(item.get("status") or item.get("state") or ""),
+                str(item.get("closed_at") or ""),
+            )
+            for item in entries
+            if isinstance(item, dict)
+        )
+        now_sync = time.time()
+        last_signature = st.session_state.get("paper_monitor_signature")
+        last_sync = float(st.session_state.get("paper_monitor_sync_at", 0.0))
+        paper_sync_due = paper_signature != last_signature or now_sync - last_sync >= 60.0
+        if paper_sync_due:
+            try:
+                remote = RailwayDhanClient(
+                    live_server_url, live_server_api_key, timeout_seconds=3
+                )._post("/paper-monitor", {"entries": entries})
+                if remote.get("entries") != entries:
+                    entries = remote["entries"]
+                    shadow_journal_store.save(entries, sync_cloud=False)
+                st.session_state.paper_monitor_signature = paper_signature
+                st.session_state.paper_monitor_sync_at = now_sync
+            except Exception:
+                st.warning(
+                    "Paper server sync pending — local journal safe; background exit monitoring not confirmed."
+                )
+
+    performance = snapshot.metadata.setdefault("performance", {})
+    performance["finalize_seconds"] = round(
+        time.perf_counter() - finalize_started, 4
+    )
+    if snapshot_built_now:
+        performance["pipeline_seconds"] = round(
+            time.perf_counter() - snapshot_pipeline_started, 4
+        )
+    st.session_state.shadow_entries_cache = entries
+    return entries
+
+
+shadow_entries = _finalize_snapshot_once(snapshot, previous_snapshot)
 # Presentation copy only: scores, strikes, final action and execution readiness remain
-# authoritative. It normalizes contradictory labels/reasons for screen and PDF output.
-view_snapshot = prepare_snapshot_for_presentation(snapshot)
-previous_view_snapshot = (
-    prepare_snapshot_for_presentation(previous_snapshot)
-    if previous_snapshot is not None
-    else None
-)
+# authoritative. Deep-copy normalization is cached per immutable snapshot so opening a
+# Streamlit panel does not clone all candle/option DataFrames again.
+_view_key = (snapshot.snapshot_id, bool(snapshot.metadata.get("canonical_finalized")))
+if st.session_state.get("view_snapshot_cache_key") != _view_key:
+    st.session_state.view_snapshot_cache = prepare_snapshot_for_presentation(snapshot)
+    st.session_state.view_snapshot_cache_key = _view_key
+view_snapshot = st.session_state.view_snapshot_cache
+
+if previous_snapshot is not None:
+    _previous_view_key = (
+        previous_snapshot.snapshot_id,
+        bool(previous_snapshot.metadata.get("canonical_finalized")),
+    )
+    if st.session_state.get("previous_view_snapshot_cache_key") != _previous_view_key:
+        st.session_state.previous_view_snapshot_cache = prepare_snapshot_for_presentation(
+            previous_snapshot
+        )
+        st.session_state.previous_view_snapshot_cache_key = _previous_view_key
+    previous_view_snapshot = st.session_state.previous_view_snapshot_cache
+else:
+    previous_view_snapshot = None
+
+_perf = snapshot.metadata.get("performance") or {}
+_stages = _perf.get("stages") or {}
+_slowest = str(_perf.get("slowest_stage") or "")
+_slowest_seconds = float(_stages.get(_slowest) or 0.0) if _slowest else 0.0
+if _perf.get("pipeline_seconds") is not None:
+    st.caption(
+        f"⚙️ Processing {float(_perf['pipeline_seconds']):.2f}s · "
+        f"snapshot {float(_perf.get('build_seconds') or 0.0):.2f}s · "
+        f"slowest {_slowest or '—'} {_slowest_seconds:.2f}s"
+    )
 
 
 @st.fragment(
