@@ -67,6 +67,32 @@ def _pct(value: Any) -> str:
         return str(value)
 
 
+def _operational_view(snapshot: MarketSnapshot) -> dict[str, Any]:
+    """Presentation-safe Simple One-Brain view with legacy fallback."""
+    metadata = getattr(snapshot, "metadata", {}) or {}
+    simple = metadata.get("simple_brain") or {}
+    common = metadata.get("common_decision") or {}
+    decision = snapshot.decision
+    action = str(common.get("final_action") or simple.get("final_action") or decision.final_action or "WAIT")
+    direction = str(simple.get("direction") or common.get("direction") or getattr(decision, "market_direction", "MIXED") or "MIXED")
+    entry = float(simple.get("entry_readiness") or common.get("trade_confidence") or decision.decision_confidence or 0.0)
+    strength = float(simple.get("direction_strength") or direction_evidence_score(snapshot) or 0.0)
+    return {
+        "action": action,
+        "direction": direction,
+        "direction_strength": strength,
+        "entry_readiness": entry,
+        "regime": str(simple.get("regime") or "LEGACY"),
+        "entry_state": str(simple.get("entry_state") or ("READY" if common.get("entry_allowed") else "WAIT")),
+        "candidate": str(simple.get("candidate_action") or common.get("best_strategy") or action),
+        "trigger": str(simple.get("trigger") or simple.get("instruction") or "-"),
+        "risk_notes": tuple(simple.get("risk_notes") or ()),
+        "next_level": simple.get("next_level"),
+        "blocks": simple.get("blocks") or {},
+        "simple": simple,
+    }
+
+
 def _paragraph(value: Any, style: ParagraphStyle) -> Paragraph:
     text = escape(_text(value)).replace("\n", "<br/>")
     return Paragraph(text, style)
@@ -476,8 +502,8 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
                 snapshot.nifty_quote.get("last_price"),
                 direction,
                 f"{direction_evidence_score(snapshot):.1f}/100",
-                snapshot.decision.final_action,
-                f"{snapshot.decision.decision_confidence:.1f}/100",
+                _operational_view(snapshot)["action"],
+                f"{_operational_view(snapshot)['entry_readiness']:.1f}/100",
                 f"{speed.state} {speed.score:.1f}/100",
                 _market_data_health(snapshot),
             ]],
@@ -496,7 +522,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     if future:
         story.append(_sub_title("Future Brain - Next 5 / 15 Minute"))
         story.append(_table(
-            ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Action gate", "History"],
+            ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Advisory", "History"],
             [[
                 future.get("transition"),
                 f"{future.get('up_5m')} / {future.get('down_5m')} / {future.get('range_5m')}",
@@ -561,8 +587,8 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
                 compact=True,
             )
         )
-        if not candidate_selected:
-            story.append(Paragraph("Final Action is WAIT; protected setup above is reference-only, not an entry signal.", styles["Body"]))
+        if _operational_view(snapshot)["action"] == "WAIT":
+            story.append(Paragraph("Simple One-Brain Action is WAIT; protected setup above is reference-only, not an entry signal.", styles["Body"]))
 
     # Feed integrity.
     story.append(_section_title("2. Snapshot and Feed Integrity"))
@@ -588,7 +614,24 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     )
 
     # Evidence and decision.
-    story.append(_section_title("3. Compact All-Features Evidence"))
+    op = _operational_view(snapshot)
+    story.append(_section_title("3. Simple One-Brain + Background Evidence"))
+    if op["simple"]:
+        simple_rows = []
+        for label, key in (("Trend / Regime", "trend"), ("Options Flow", "options"), ("Participation", "participation"), ("Barrier / Entry", "barrier_entry")):
+            block = op["blocks"].get(key) or {}
+            if key == "barrier_entry":
+                detail = f"{block.get('state', '-')} | score {float(block.get('score') or 0):.1f} | {block.get('note', '-')}"
+            else:
+                detail = f"B/D/N {float(block.get('bullish') or 0):.1f}/{float(block.get('bearish') or 0):.1f}/{float(block.get('neutral') or 0):.1f}"
+            simple_rows.append([label, f"{float(block.get('weight') or 0):.0f}%", detail])
+        story.append(_table(["Core block", "Weight", "Current evidence"], simple_rows, widths=[55*mm, 28*mm, 164*mm], compact=True))
+        story.append(_table(
+            ["Regime", "Direction", "Direction strength", "Entry", "Action", "Trigger / next level"],
+            [[op["regime"], op["direction"], f"{op['direction_strength']:.1f}/100", f"{op['entry_state']} {op['entry_readiness']:.1f}/100", op["action"], f"{op['trigger']} | next {op['next_level'] if op['next_level'] is not None else '-'}"]],
+            widths=[45*mm, 30*mm, 34*mm, 55*mm, 32*mm, 62*mm], compact=True,
+        ))
+    story.append(_sub_title("Background / diagnostic evidence — extra hard vote nahi"))
     matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
     reference_name, impact_by_module = build_module_impact_audit(snapshot, matrix)
     matrix_rows = [
@@ -609,7 +652,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             compact=True,
         )
     )
-    story.append(_sub_title("One-Brain Weight / Gate Audit"))
+    story.append(_sub_title("Legacy module impact audit — diagnostic only"))
     story.append(
         _table(
             ["Module", "Canonical weight / bounded effect"],
@@ -620,7 +663,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     )
     story.append(
         Paragraph(
-            f"One-Brain impact is an audit of the canonical {reference_name} selected/reference architecture, not market-move probability. No row creates a separate action.",
+            f"Legacy/module impact is diagnostic context for protected-plan construction. Simple One-Brain four core blocks above own the operational action; no row below creates a second action. Reference: {reference_name}.",
             styles["Body"],
         )
     )
@@ -682,15 +725,19 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
         story.append(_callout(reversal_text, _GREEN if confirmed else _WARN))
 
     decision = snapshot.decision
-    story.append(_section_title("4. Detailed Final One-Brain Decision"))
-    decision_color = _GREEN if decision.final_action != "WAIT" else _WARN
+    op = _operational_view(snapshot)
+    story.append(_section_title("4. Detailed Simple One-Brain Decision"))
+    decision_color = _GREEN if op["action"] != "WAIT" else _WARN
     story.append(
         _callout(
-            f"FINAL ACTION: {decision.final_action} | EXECUTION: {decision.execution_status} | "
-            f"SIGNAL: {decision.signal_state} | CONFIDENCE: {decision.decision_confidence:.1f}%",
+            f"FINAL ACTION: {op['action']} | REGIME: {op['regime']} | DIRECTION: {op['direction']} {op['direction_strength']:.1f}% | "
+            f"ENTRY: {op['entry_state']} {op['entry_readiness']:.1f}% | TRIGGER: {op['trigger']}",
             decision_color,
         )
     )
+    if op["risk_notes"]:
+        story.append(_callout("Risk: " + " | ".join(map(str, op["risk_notes"])), _WARN))
+    story.append(_sub_title("Protected-strategy legacy diagnostics — final authority nahi"))
     decision_rows = []
     for item in (
         decision.ce_buy,
@@ -2018,8 +2065,8 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
             [[
                 direction,
                 f"{direction_evidence_score(snapshot):.1f}/100",
-                snapshot.decision.final_action,
-                f"{snapshot.decision.decision_confidence:.1f}/100",
+                _operational_view(snapshot)["action"],
+                f"{_operational_view(snapshot)['entry_readiness']:.1f}/100",
             ]],
             widths=[62 * mm, 62 * mm, 62 * mm, 64 * mm],
             compact=True,
@@ -2034,9 +2081,9 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
     )
     future = snapshot.metadata.get("future_brain") or {}
     if future:
-        story.append(_sub_title("Future Brain - Next Move"))
+        story.append(_sub_title("Future Brain - Advisory Only"))
         story.append(_table(
-            ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Action gate"],
+            ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Advisory"],
             [[
                 future.get("transition"),
                 f"{future.get('up_5m')} / {future.get('down_5m')} / {future.get('range_5m')}",
@@ -2065,13 +2112,13 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
             _table(
                 ["Action", "Candidate", "Suitability", "Sell", "Hedge", "Quality", "Status"],
                 [[
-                    snapshot.decision.final_action,
+                    _operational_view(snapshot)["action"],
                     candidate_name,
                     f"{candidate_score:.1f}/100",
                     plan_leg_text(candidate_plan.short_legs),
                     plan_leg_text(candidate_plan.hedge_legs),
                     f"{candidate_plan.quality_score:.1f}/100",
-                    "ENTRY" if candidate_selected else "WAIT",
+                    "ENTRY" if _operational_view(snapshot)["action"] != "WAIT" and candidate_selected else "REFERENCE / WAIT",
                 ]],
                 widths=[36 * mm, 40 * mm, 36 * mm, 44 * mm, 44 * mm, 36 * mm, 43 * mm],
                 compact=True,
@@ -2137,6 +2184,16 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
 
     story.append(PageBreak())
     story.append(_section_title("2. Main Evidence"))
+    op = _operational_view(snapshot)
+    if op["simple"]:
+        rows = []
+        for label, key in (("Trend / Regime", "trend"), ("Options Flow", "options"), ("Participation", "participation"), ("Barrier / Entry", "barrier_entry")):
+            block = op["blocks"].get(key) or {}
+            detail = (f"{block.get('state', '-')} | {float(block.get('score') or 0):.1f}/100" if key == "barrier_entry" else f"B/D/N {float(block.get('bullish') or 0):.1f}/{float(block.get('bearish') or 0):.1f}/{float(block.get('neutral') or 0):.1f}")
+            rows.append([label, f"{float(block.get('weight') or 0):.0f}%", detail])
+        story.append(_table(["Simple core block", "Weight", "Evidence"], rows, widths=[70*mm, 35*mm, 142*mm], compact=True))
+        story.append(_table(["Regime", "Direction", "Entry", "Action", "Trigger"], [[op["regime"], f"{op['direction']} {op['direction_strength']:.1f}", f"{op['entry_state']} {op['entry_readiness']:.1f}", op["action"], op["trigger"]]], widths=[55*mm, 42*mm, 60*mm, 35*mm, 65*mm], compact=True))
+    story.append(_sub_title("Background / diagnostic evidence"))
     matrix = build_compact_evidence_matrix(snapshot, previous_snapshot)
     reference_name, impact_by_module = build_module_impact_audit(snapshot, matrix)
     matrix_rows = []
@@ -2156,7 +2213,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
             compact=True,
         )
     )
-    story.append(_sub_title("One-Brain Weight / Gate Audit"))
+    story.append(_sub_title("Legacy module impact audit — diagnostic only"))
     story.append(
         _table(
             ["Module", "Canonical weight / bounded effect"],
@@ -2176,7 +2233,7 @@ def build_quick_market_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSn
                 f"{outlook.range_path_pct:.1f}%",
                 f"{outlook.bearish_path_pct:.1f}%",
                 f"{outlook.fake_move_risk:.1f}%",
-                snapshot.decision.final_action,
+                _operational_view(snapshot)["action"],
                 outlook.invalidation_text,
             ]],
             widths=[38 * mm, 38 * mm, 38 * mm, 44 * mm, 42 * mm, 60 * mm],

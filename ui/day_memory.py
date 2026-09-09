@@ -39,10 +39,18 @@ def app_observation(snapshot):
                              "security_id": row.get("security_id"), "top_bid_price": row.get("top_bid_price"),
                              "top_ask_price": row.get("top_ask_price")})
     future = snapshot.metadata.get("future_brain") or {}
-    return clean({"at": snapshot.created_at.isoformat(), "action": common.get("final_action", "WAIT"),
-                  "reason": (common.get("blockers") or [common.get("status", "WAIT")])[0], "version": snapshot.metadata.get("version", ""),
-                  "candidate": candidate, "score": common.get("trade_confidence", getattr(evaluation,"score",0)), "expiry": snapshot.expiry,
+    simple = snapshot.metadata.get("simple_brain") or {}
+    simple_reason = str(simple.get("instruction") or "")
+    reason = simple_reason or str((common.get("blockers") or [common.get("status", "WAIT")])[0])
+    return clean({"at": snapshot.created_at.isoformat(), "action": common.get("final_action", simple.get("final_action", "WAIT")),
+                  "reason": reason, "version": snapshot.metadata.get("version", ""),
+                  "candidate": simple.get("candidate_action", candidate),
+                  "score": simple.get("entry_readiness", common.get("trade_confidence", getattr(evaluation,"score",0))), "expiry": snapshot.expiry,
                   "spot": snapshot.nifty_quote.get("last_price"), "legs": legs if valid else [],
+                  "simple_brain": {k: simple.get(k) for k in (
+                      "engine", "regime", "direction", "direction_strength", "entry_readiness",
+                      "entry_state", "candidate_action", "final_action", "trigger", "next_level",
+                      "risk_notes", "reasons")},
                   "future_brain": {k: future.get(k) for k in (
                       "feature_key", "current_direction", "next_direction", "transition",
                       "up_5m", "down_5m", "range_5m", "up_15m", "down_15m", "range_15m",
@@ -96,9 +104,8 @@ def sync_day_memory(snapshot, url, key, *, record_event: bool = True):
 def record_final_day_memory(snapshot, url, key):
     """Record exactly one fully-finalized app observation per snapshot.
 
-    History can be fetched before Future Brain is calculated, but evidence must
-    never be posted until the Future-aware plan, exact Execution Guard and Common
-    final decision all exist.
+    History can be fetched before finalization, but evidence must never be posted
+    until Simple One-Brain, protected plan, Execution Guard and final decision exist.
     """
     if not url or not key or not snapshot.market_session.is_live:
         return
@@ -106,7 +113,7 @@ def record_final_day_memory(snapshot, url, key):
     if st.session_state.get("day_memory_final_snapshot") == snapshot_key:
         return
     common = snapshot.metadata.get("common_decision") or {}
-    if not snapshot.metadata.get("future_brain") or not common or not getattr(snapshot, "execution_guard", None):
+    if not snapshot.metadata.get("simple_brain") or not common or not getattr(snapshot, "execution_guard", None):
         snapshot.metadata["recording_skip_reason"] = "FINAL_CALCULATION_INCOMPLETE"
         return
     try:

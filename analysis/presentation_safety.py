@@ -105,11 +105,15 @@ def _option_bias(snapshot: Any) -> str:
 
 
 def market_rukh_display(snapshot: Any) -> tuple[str, float, str]:
-    """Return a truthful headline label, evidence score and short note.
+    """Return the Simple One-Brain headline when available."""
 
-    A mixed core tape must not be presented as an unconditional UP/DOWN call merely
-    because the option-flow module has a directional lean.
-    """
+    simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
+    if simple:
+        direction = str(simple.get("direction") or "MIXED").upper()
+        score = float(simple.get("direction_strength") or 0.0)
+        regime = str(simple.get("regime") or "TRANSITION")
+        note = f"Simple One-Brain · {regime} · entry {simple.get('entry_state', 'WAIT')}"
+        return direction if direction in {"UP", "DOWN", "RANGE"} else "MIXED", score, note
 
     core = getattr(snapshot, "core_evidence", None)
     core_state = _core_state(snapshot)
@@ -177,7 +181,9 @@ def safe_brain_hinglish_line(snapshot: Any, previous_snapshot: Any | None = None
     """Build one consistent explanation from canonical snapshot fields."""
 
     decision = getattr(snapshot, "decision", None)
-    final_action = _upper(getattr(decision, "final_action", "WAIT")) or "WAIT"
+    simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
+    common = getattr(snapshot, "metadata", {}).get("common_decision") or {}
+    final_action = _upper(common.get("final_action") or simple.get("final_action") or getattr(decision, "final_action", "WAIT")) or "WAIT"
     rukh, _score, rukh_note = market_rukh_display(snapshot)
     option_bias = _option_bias(snapshot)
     heavyweights = getattr(snapshot, "heavyweights", None)

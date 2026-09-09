@@ -168,10 +168,22 @@ def calculate_timeframe_price_action(
     close = float(source.iloc[-1]["close"])
     stage = _move_stage(structure, event, close, last_low.price, last_high.price, atr)
 
-    if "BREAKOUT CONFIRMED" in event or "SUPPORT HOLD" in event or "SUPPORT REJECTION" in event:
+    if "BREAKOUT CONFIRMED" in event:
+        # A completed breakout is stronger evidence than the pre-break swing label.
+        # Do not keep an old RANGE score at 82 after price has already escaped it.
+        bullish = clamp(max(bullish + 28, 62), 0, 100)
+        bearish = clamp(bearish - 10, 0, 100)
+        range_score = min(range_score, 34.0)
+    elif "SUPPORT HOLD" in event or "SUPPORT REJECTION" in event:
         bullish = clamp(bullish + 10, 0, 100)
         bearish = clamp(bearish - 5, 0, 100)
-    if "BREAKDOWN CONFIRMED" in event or "RESISTANCE REJECTION" in event:
+    if "BREAKDOWN CONFIRMED" in event:
+        # Symmetric rule for a completed downside break.  This fixes the old
+        # RANGE(82) > BEARISH(32) contradiction seen after a confirmed breakdown.
+        bearish = clamp(max(bearish + 28, 62), 0, 100)
+        bullish = clamp(bullish - 10, 0, 100)
+        range_score = min(range_score, 34.0)
+    elif "RESISTANCE REJECTION" in event:
         bearish = clamp(bearish + 10, 0, 100)
         bullish = clamp(bullish - 5, 0, 100)
     # Extension/failed break is not independent proof of a range.
@@ -230,6 +242,18 @@ def calculate_price_action_bundle(
         relationship = "15M BEARISH / 3M RECOVERY"
         combined = "BEARISH RECOVERY"
         confidence = (fifteen.confidence * 0.65) + (three.confidence * 0.35)
+    elif "BREAKDOWN CONFIRMED" in str(fifteen.event).upper() and (
+        three.structure == "BEARISH LH/LL" or "BEARISH" in str(three.event).upper()
+    ):
+        relationship = "15M BREAKDOWN / 3M BEARISH CONFIRMATION"
+        combined = "BEARISH BREAKDOWN"
+        confidence = (fifteen.confidence * 0.60) + (three.confidence * 0.40)
+    elif "BREAKOUT CONFIRMED" in str(fifteen.event).upper() and (
+        three.structure == "BULLISH HH/HL" or "BULLISH" in str(three.event).upper()
+    ):
+        relationship = "15M BREAKOUT / 3M BULLISH CONFIRMATION"
+        combined = "BULLISH BREAKOUT"
+        confidence = (fifteen.confidence * 0.60) + (three.confidence * 0.40)
     elif fifteen.structure == three.structure:
         relationship = "TIMEFRAMES ALIGNED"
         combined = fifteen.structure

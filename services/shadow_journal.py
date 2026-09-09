@@ -97,6 +97,21 @@ class ShadowJournalStore:
             data = self._read_local()
             return [dict(item) for item in data["entries"] if isinstance(item, dict)]
 
+    def load_decisions(self) -> list[dict[str, Any]]:
+        path = self.path.with_suffix(".decisions.json")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        except (OSError, json.JSONDecodeError):
+            return []
+        return [dict(item) for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+    def _save_decisions(self, rows: list[dict[str, Any]]) -> None:
+        path = self.path.with_suffix(".decisions.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(rows[-2500:], sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, path)
+
     def save(self, entries: list[dict[str, Any]], *, sync_cloud: bool = True) -> None:
         data = {"schema_version": self.SCHEMA_VERSION, "entries": entries[-500:]}
         with self._locked():
@@ -111,28 +126,114 @@ class ShadowJournalStore:
                     self.last_error = f"Cloud save failed: {type(exc).__name__}; saved locally"
 
     def record_check(self, snapshot, reason):
+        """Record every meaningful One-Brain observation, including WAIT outcomes.
+
+        Trade P&L remains in ``shadow_journal.json``.  This decision journal is the
+        missing learning lane: it records WAIT/READY/TTAKE observations and backfills
+        5m/15m/30m spot outcomes as later snapshots arrive.
+        """
         self.last_checked = snapshot.created_at.isoformat()
         self.last_blocker = reason
-        path = self.path.with_suffix(".signals.json")
+        simple = snapshot.metadata.get("simple_brain") or {}
+        common = snapshot.metadata.get("common_decision") or {}
+        spot = snapshot.levels.current_price
+        if spot is None:
+            spot = snapshot.nifty_quote.get("last_price")
         try:
-            history = json.loads(path.read_text()) if path.exists() else []
+            spot = float(spot) if spot is not None else None
+        except (TypeError, ValueError):
+            spot = None
+
+        # Keep the compact legacy signal history for existing UI/tests.
+        signal_path = self.path.with_suffix(".signals.json")
+        try:
+            history = json.loads(signal_path.read_text()) if signal_path.exists() else []
             if not isinstance(history, list):
                 history = []
-            record = {"at": self.last_checked, "action": snapshot.decision.final_action,
-                      "candidate": snapshot.trade_plan.selected_setup, "reason": reason,
-                      "score": _strategy_score(snapshot, snapshot.trade_plan.selected_setup),
-                      "confidence": snapshot.decision.decision_confidence}
+            record = {
+                "at": self.last_checked,
+                "action": str(simple.get("final_action") or snapshot.decision.final_action),
+                "candidate": str(simple.get("candidate_action") or snapshot.trade_plan.selected_setup),
+                "reason": reason,
+                "score": float(simple.get("direction_strength") or _strategy_score(snapshot, snapshot.trade_plan.selected_setup)),
+                "confidence": float(simple.get("entry_readiness") or snapshot.decision.decision_confidence),
+            }
             signature = (record["action"], record["candidate"], record["reason"], int(record["score"] // 5))
             previous = history[-1] if history else {}
             old = (previous.get("action"), previous.get("candidate"), previous.get("reason"), int(previous.get("score", 0) // 5))
             if signature != old:
                 history.append(record)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = path.with_suffix(".tmp")
+                signal_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = signal_path.with_suffix(".tmp")
                 temporary.write_text(json.dumps(history[-2000:]))
-                os.replace(temporary, path)
+                os.replace(temporary, signal_path)
         except (OSError, ValueError, TypeError) as exc:
             self.last_error = f"Signal log failed: {type(exc).__name__}"
+
+        # Full decision journal: bounded, one row/minute or immediately on a state
+        # change.  Later snapshots backfill missed-move outcomes.
+        try:
+            decisions = self.load_decisions()
+            now = snapshot.created_at
+            if spot is not None:
+                for row in decisions:
+                    try:
+                        opened = datetime.fromisoformat(str(row.get("at")))
+                        if opened.tzinfo is None and now.tzinfo is not None:
+                            opened = opened.replace(tzinfo=now.tzinfo)
+                        age_min = (now - opened).total_seconds() / 60.0
+                        base = float(row.get("spot"))
+                    except (TypeError, ValueError):
+                        continue
+                    for horizon in (5, 15, 30):
+                        key = f"outcome_{horizon}m_points"
+                        if row.get(key) is None and age_min >= horizon:
+                            row[key] = round(spot - base, 2)
+                            row[f"outcome_{horizon}m_label"] = (
+                                "UP" if spot - base >= 5 else "DOWN" if spot - base <= -5 else "RANGE"
+                            )
+
+            current = {
+                "at": now.isoformat(),
+                "session_date": now.date().isoformat(),
+                "spot": spot,
+                "regime": str(simple.get("regime") or ""),
+                "direction": str(simple.get("direction") or snapshot.decision.market_direction),
+                "direction_strength": round(float(simple.get("direction_strength") or 0.0), 1),
+                "entry_readiness": round(float(simple.get("entry_readiness") or 0.0), 1),
+                "entry_state": str(simple.get("entry_state") or ""),
+                "candidate_action": str(simple.get("candidate_action") or snapshot.trade_plan.selected_setup),
+                "final_action": str(common.get("final_action") or simple.get("final_action") or "WAIT"),
+                "trigger": str(simple.get("trigger") or ""),
+                "reason": reason,
+                "option_bias": snapshot.option_intelligence.market_bias,
+                "option_confidence": snapshot.option_intelligence.confidence,
+                "big_player": f"{snapshot.big_player_activity.direction} {snapshot.big_player_activity.score:.0f}",
+                "barrier_state": str(((simple.get("blocks") or {}).get("barrier_entry") or {}).get("state") or ""),
+                "outcome_5m_points": None,
+                "outcome_15m_points": None,
+                "outcome_30m_points": None,
+            }
+            last = decisions[-1] if decisions else None
+            append = last is None
+            if last is not None:
+                try:
+                    previous_at = datetime.fromisoformat(str(last.get("at")))
+                    if previous_at.tzinfo is None and now.tzinfo is not None:
+                        previous_at = previous_at.replace(tzinfo=now.tzinfo)
+                    elapsed = (now - previous_at).total_seconds()
+                except (TypeError, ValueError):
+                    elapsed = CONFIG.simple_decision_journal_interval_seconds
+                changed = any(
+                    str(last.get(key) or "") != str(current.get(key) or "")
+                    for key in ("regime", "direction", "entry_state", "candidate_action", "final_action", "barrier_state")
+                )
+                append = changed or elapsed >= CONFIG.simple_decision_journal_interval_seconds
+            if append:
+                decisions.append(current)
+            self._save_decisions(decisions)
+        except (OSError, ValueError, TypeError) as exc:
+            self.last_error = f"Decision journal failed: {type(exc).__name__}"
 
 
 def _strategy_score(snapshot: MarketSnapshot, action: str) -> float:
@@ -227,10 +328,17 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
         return False, "Market is not live"
     if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
         return False, "No concrete One-Brain strategy"
-    if float(common.get("trade_confidence") or 0) < CONFIG.shadow_journal_min_confidence:
-        return False, "Common trade confidence below threshold"
-    if _strategy_score(snapshot, action) < CONFIG.shadow_journal_min_strategy_score:
-        return False, "Strategy score below threshold"
+    simple = snapshot.metadata.get("simple_brain") or {}
+    if simple:
+        if float(simple.get("direction_strength") or 0) < CONFIG.simple_direction_min_strength:
+            return False, "Simple Brain direction below minimum strength"
+        if float(simple.get("entry_readiness") or 0) < CONFIG.simple_entry_ready_score:
+            return False, "Simple Brain entry trigger not ready"
+    else:
+        if float(common.get("trade_confidence") or 0) < CONFIG.shadow_journal_min_confidence:
+            return False, "Common trade confidence below threshold"
+        if _strategy_score(snapshot, action) < CONFIG.shadow_journal_min_strategy_score:
+            return False, "Strategy score below threshold"
     selected_plan = {
         "CE BUY": snapshot.trade_plan.ce_buy,
         "PE BUY": snapshot.trade_plan.pe_buy,
@@ -240,29 +348,16 @@ def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[
     }.get(action)
     if selected_plan is None or not selected_plan.available:
         return False, "Protected paper plan is unavailable"
-    future = snapshot.metadata.get("future_brain") or {}
-    future_gate = str(future.get("final_gate") or "")
-    alignment_blocker = _entry_alignment_blocker(
-        setup=action,
-        price_action=snapshot.price_action,
-        levels=snapshot.levels,
-        volume=snapshot.volume,
-        patterns=snapshot.patterns,
-        allow_countertrend_15m="REVERSAL PAPER TEST" in future_gate,
-    )
-    # Rejected observations remain in the signal log, but cannot contaminate
-    # paper-trade P&L.
-    if alignment_blocker:
-        return False, alignment_blocker
-    preferred = str(future.get("preferred_direction") or "")
-    setup_direction = {
-        "PE SELL": "UP", "CE BUY": "UP", "CE SELL": "DOWN",
-        "PE BUY": "DOWN", "IRON CONDOR": "RANGE",
-    }.get(action)
-    if future_gate.startswith("WAIT"):
-        return False, "Future Brain: " + future_gate
-    if preferred in {"UP", "DOWN", "RANGE"} and setup_direction != preferred:
-        return False, f"Future Brain prefers {preferred}; {action} rejected"
+    if simple:
+        if str(simple.get("final_action") or "WAIT") != action:
+            return False, str(simple.get("instruction") or "Simple Brain trigger pending")
+    else:
+        alignment_blocker = _entry_alignment_blocker(
+            setup=action, price_action=snapshot.price_action, levels=snapshot.levels,
+            volume=snapshot.volume, patterns=snapshot.patterns,
+        )
+        if alignment_blocker:
+            return False, alignment_blocker
     if (
         action in {"CE SELL", "PE SELL", "IRON CONDOR"}
         and float(selected_plan.estimated_credit_points or 0.0)
@@ -320,6 +415,7 @@ def _paper_snapshot(snapshot):
         big_player=snapshot.big_player_activity,
         selected_setup_override=action,
         final_action_override=action,
+        simple_brain=snapshot.metadata.get("simple_brain") or None,
     )
     return replace(snapshot, trade_plan=plan, execution_guard=guard)
 
@@ -351,24 +447,25 @@ def process_auto_shadow_journal(
             ),
         )
         action = snapshot.trade_plan.selected_setup
-        alignment_warning = _entry_alignment_blocker(
+        simple = snapshot.metadata.get("simple_brain") or {}
+        alignment_warning = None if simple else _entry_alignment_blocker(
             setup=action, price_action=snapshot.price_action, levels=snapshot.levels,
             volume=snapshot.volume, patterns=snapshot.patterns,
         )
         qualified = bool(
-            snapshot.decision.decision_confidence >= 60
-            and _strategy_score(snapshot, action) >= 60
+            (float(simple.get("direction_strength") or snapshot.decision.decision_confidence) >= 60)
+            and (float(simple.get("entry_readiness") or _strategy_score(snapshot, action)) >= 60)
             and not alignment_warning
-            and snapshot.option_intelligence.confidence >= CONFIG.shadow_journal_min_option_confidence
+            and snapshot.option_intelligence.status != "UNAVAILABLE"
         )
         record.update(
             {
                 "journal_type": "AUTO SHADOW",
                 "real_ai_action": snapshot.decision.final_action,
                 "qualification": (
-                    "QUALIFIED 60+ PAPER"
+                    "QUALIFIED SIMPLE-BRAIN PAPER"
                     if qualified
-                    else f"EXPERIMENTAL {CONFIG.shadow_journal_min_strategy_score:.0f}+"
+                    else "EXPERIMENTAL SIMPLE-BRAIN"
                 ),
                 "counts_for_ai_accuracy": qualified,
                 "candidate_warning": alignment_warning or "None",

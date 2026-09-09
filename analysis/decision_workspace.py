@@ -44,55 +44,63 @@ def _evaluation_map(snapshot: Any) -> dict[str, Any]:
 def build_common_decision(
     snapshot: Any, *, execution_guard: Any | None = None
 ) -> dict[str, Any]:
-    """Produce one auditable strategy gate without mutating either brain."""
-    future = snapshot.metadata.get("future_brain") or {}
-    current = str(future.get("current_direction") or "RANGE").upper()
-    preferred = str(future.get("preferred_direction") or "WAIT").upper()
-    future_gate = str(future.get("final_gate") or "WAIT — FUTURE BRAIN UNAVAILABLE")
-    forecast_score = max(
-        float(future.get("up_15m") or 0),
-        float(future.get("down_15m") or 0),
-        float(future.get("range_15m") or 0),
-    )
+    """Produce one simple final gate.
+
+    v2.48 uses ``simple_brain`` as the strategy authority. Future Brain remains an
+    advisory risk/next-move view and can no longer convert an ordinary MIXED forecast
+    into a second hard WAIT gate. Legacy behaviour is retained only when an older
+    snapshot does not contain ``simple_brain``.
+    """
+    simple = snapshot.metadata.get("simple_brain") or {}
+    if not simple:
+        # Backward-compatible fallback for stored/legacy snapshots.
+        future = snapshot.metadata.get("future_brain") or {}
+        current = str(future.get("current_direction") or "RANGE").upper()
+        preferred = str(future.get("preferred_direction") or current or "WAIT").upper()
+        candidate = next(iter(STRATEGIES.get(preferred, ())), "WAIT")
+        simple = {
+            "direction": preferred if preferred in STRATEGIES else current,
+            "direction_strength": float(future.get("current_strength") or 0.0),
+            "entry_readiness": 0.0,
+            "entry_state": "LEGACY / WAIT",
+            "candidate_action": candidate,
+            "final_action": "WAIT",
+            "instruction": str(future.get("final_gate") or "Legacy snapshot"),
+            "hard_blockers": (),
+            "preferred_strategies": STRATEGIES.get(preferred, ()),
+            "future_advisory": {},
+        }
+
+    direction = str(simple.get("direction") or "MIXED").upper()
+    preferred = tuple(simple.get("preferred_strategies") or STRATEGIES.get(direction, ()))
     evaluations, plans = _evaluation_map(snapshot), _plan_map(snapshot)
-    allowed = STRATEGIES.get(preferred, ())
+
+    # Seller-first order supplied by Simple Brain, then existing fit/plan quality as
+    # tie-breakers.  No independent Future-Brain direction filter is applied.
     ranked = sorted(
         evaluations,
         key=lambda name: (
-            name in allowed,
+            1 if name in preferred else 0,
+            -preferred.index(name) if name in preferred else -99,
             float(evaluations[name].score or 0),
             float(getattr(plans[name], "quality_score", 0) or 0),
         ),
         reverse=True,
     )
-    candidate = next((name for name in ranked if name in allowed), "WAIT")
+    wanted = str(simple.get("candidate_action") or "WAIT").upper()
+    candidate = wanted if wanted in evaluations else next((x for x in ranked if x in preferred), "WAIT")
     plan = plans.get(candidate)
     evaluation = evaluations.get(candidate)
-    blockers: list[str] = []
-    if not snapshot.market_session.is_live:
-        blockers.append("Market is not live")
-    for feed_name in ("quotes", "candles", "option_chain"):
-        feed = snapshot.feed_status.get(feed_name)
-        if feed is None or getattr(feed, "use_state", "") != "LIVE":
-            blockers.append(f"{feed_name} is not confirmed live")
-    if preferred not in STRATEGIES or future_gate.startswith("WAIT"):
-        blockers.append(future_gate)
-    reversal = preferred in {"UP", "DOWN"} and current in {"UP", "DOWN"} and preferred != current
-    if reversal and "REVERSAL PAPER TEST" not in future_gate:
-        blockers.append("Current/Future disagreement — reversal confirmation pending")
+
+    blockers: list[str] = list(simple.get("hard_blockers") or ())
+    simple_final = str(simple.get("final_action") or "WAIT").upper()
+    if simple_final == "WAIT":
+        blockers.append(str(simple.get("instruction") or simple.get("entry_state") or "Entry trigger pending"))
     if candidate == "WAIT" or plan is None or not plan.available:
-        blockers.append("Future-compatible protected strike pair unavailable")
-    if candidate != "WAIT":
-        alignment = _entry_alignment_blocker(
-            setup=candidate,
-            price_action=snapshot.price_action,
-            levels=snapshot.levels,
-            volume=snapshot.volume,
-            patterns=snapshot.patterns,
-            allow_countertrend_15m="REVERSAL PAPER TEST" in future_gate,
-        )
-        if alignment:
-            blockers.append(alignment)
+        blockers.append("Protected strike/hedge pair unavailable")
+    elif str(getattr(plan, "status", "")).upper() != "READY":
+        blockers.append(str(getattr(plan, "blocker", "Protected plan not ready")))
+
     risk_per_lot = (
         float(getattr(plan, "max_risk_points", 0) or 0)
         * int(snapshot.risk_profile.lot_size or 0)
@@ -100,56 +108,54 @@ def build_common_decision(
     )
     if plan and (risk_per_lot <= 0 or risk_per_lot > float(snapshot.risk_profile.risk_budget_rupees or 0)):
         blockers.append("Risk budget does not allow one protected lot")
-    # The Common Gate is presentation/coordination only.  It may announce entry
-    # only after the canonical Execution Guard has approved this exact candidate.
+
     if execution_guard is not None:
         guard_setup = str(getattr(execution_guard, "selected_setup", "WAIT") or "WAIT")
         guard_ready = str(getattr(execution_guard, "readiness", "BLOCKED") or "BLOCKED")
         if guard_setup != candidate:
-            blockers.append(
-                f"Execution Guard candidate mismatch: {guard_setup} != {candidate}"
-            )
+            blockers.append(f"Execution candidate mismatch: {guard_setup} != {candidate}")
         if guard_ready != "ENTRY READY":
             guard_blockers = tuple(getattr(execution_guard, "blockers", ()) or ())
-            blockers.append(
-                str(guard_blockers[0])
-                if guard_blockers
-                else f"Execution Guard is {guard_ready}"
-            )
-    # Preserve order while removing duplicate explanations.
-    blockers = list(dict.fromkeys(item for item in blockers if item))
-    entry_allowed = not blockers and candidate != "WAIT"
+            blockers.append(str(guard_blockers[0]) if guard_blockers else f"Execution Guard is {guard_ready}")
+
+    blockers = list(dict.fromkeys(x for x in blockers if x))
+    entry_allowed = bool(
+        execution_guard is not None
+        and not blockers
+        and candidate != "WAIT"
+        and simple_final == candidate
+    )
     guidance = build_entry_guidance(plan, entry_ready=entry_allowed, live=snapshot.market_session.is_live)
-    current_strength = float(future.get("current_strength") or 0)
+
+    direction_strength = float(simple.get("direction_strength") or 0.0)
+    entry_readiness = float(simple.get("entry_readiness") or 0.0)
     plan_quality = float(getattr(plan, "quality_score", 0) or 0) if plan else 0.0
+    confidence = round(direction_strength * .50 + entry_readiness * .35 + plan_quality * .15, 1)
+    if not entry_allowed:
+        confidence = min(confidence, 69.9)
+
+    future = snapshot.metadata.get("future_brain") or {}
     history_accuracy = future.get("historical_accuracy_15m")
     history_matches = int(future.get("historical_matches") or 0)
-    # A transparent confidence blend, not a profit probability.  Sparse history
-    # contributes nothing and a blocked gate is capped below entry territory.
-    parts = [(current_strength, .30), (forecast_score, .40), (plan_quality, .15)]
-    if history_accuracy is not None and history_matches >= 10:
-        parts.append((float(history_accuracy), .15))
-    weight = sum(item[1] for item in parts) or 1.0
-    confidence = round(sum(value * share for value, share in parts) / weight, 1)
-    if not entry_allowed:
-        confidence = min(confidence, 54.9)
     return {
         "status": "ENTRY ALLOWED" if entry_allowed else "REFERENCE ONLY" if not snapshot.market_session.is_live else "WAIT",
         "final_action": candidate if entry_allowed else "WAIT",
         "best_strategy": candidate,
         "entry_allowed": entry_allowed,
-        "execution_readiness": (
-            str(getattr(execution_guard, "readiness", "NOT CHECKED"))
-            if execution_guard is not None else "NOT CHECKED"
-        ),
-        "direction": preferred if preferred in STRATEGIES else "MIXED",
-        "current_direction": current,
-        "future_gate": future_gate,
-        "agreement": current == preferred and current in STRATEGIES,
-        "reversal": reversal,
+        "execution_readiness": str(getattr(execution_guard, "readiness", "NOT CHECKED")) if execution_guard is not None else "PROPOSAL",
+        "direction": direction,
+        "current_direction": direction,
+        "regime": str(simple.get("regime") or "TRANSITION"),
+        "entry_state": str(simple.get("entry_state") or "WAIT"),
+        "trigger": str(simple.get("trigger") or ""),
+        "instruction": str(simple.get("instruction") or ""),
+        "future_gate": str((simple.get("future_advisory") or {}).get("note") or "Future Brain advisory only"),
+        "agreement": True,
+        "reversal": False,
         "trade_confidence": confidence,
-        "current_evidence_score": round(current_strength, 1),
-        "future_forecast_score": round(forecast_score, 1),
+        "current_evidence_score": round(direction_strength, 1),
+        "entry_readiness": round(entry_readiness, 1),
+        "future_forecast_score": round(max(float(future.get("up_15m") or 0), float(future.get("down_15m") or 0), float(future.get("range_15m") or 0)), 1),
         "historical_hit_rate": history_accuracy,
         "historical_matches": history_matches,
         "strategy_fit": round(float(getattr(evaluation, "score", 0) or 0), 1),
@@ -161,8 +167,8 @@ def build_common_decision(
             "preferred_zone": guidance.preferred_zone,
             "minimum": guidance.minimum,
             "status": guidance.status,
-            "instruction": guidance.instruction,
+            "instruction": str(simple.get("instruction") or guidance.instruction),
         },
         "ranked_strategies": ranked,
-        "note": "Trade confidence is an evidence blend, not guaranteed win/profit probability.",
+        "note": "Simple One-Brain: regime → direction → entry → risk → action.",
     }

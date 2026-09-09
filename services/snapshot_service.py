@@ -564,12 +564,17 @@ class SnapshotService:
         )
 
         vix_age = self._quote_age_seconds(vix_quote, current)
-        fresh_heavyweight_quotes = [
-            quote
-            for quote in heavyweight_quotes
-            if (age := self._quote_age_seconds(quote, current)) is not None
-            and age <= CONFIG.context_quote_max_age_seconds
-        ]
+        # Dhan grouped quotes do not always include an exchange timestamp for every
+        # constituent. The HTTP grouped response itself was fetched in this snapshot,
+        # so a valid positive LTP is usable even when per-symbol quote age is absent.
+        # v2.47 discarded those rows and could turn a real 9/9 Top-9 move into 0/9.
+        fresh_heavyweight_quotes = []
+        for quote in heavyweight_quotes:
+            if self._positive_number((quote or {}).get("last_price")) is None:
+                continue
+            age = self._quote_age_seconds(quote, current)
+            if age is None or age <= CONFIG.context_quote_max_age_seconds:
+                fresh_heavyweight_quotes.append(quote)
         analysis_heavyweight_quotes = (
             fresh_heavyweight_quotes if market_session.is_live else heavyweight_quotes
         )
@@ -603,7 +608,7 @@ class SnapshotService:
             ok=len(analysis_heavyweight_quotes) == len(CONFIG.top9),
             fetched_at=current,
             message=(
-                f"Usable Top-9 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top9)}"
+                f"Usable Top-9 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top9)}; grouped response fresh, per-symbol timestamp optional"
             ),
             source="Grouped Dhan market quote",
             use_state=(

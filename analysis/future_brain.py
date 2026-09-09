@@ -103,7 +103,31 @@ class FutureBrainResult:
 
 
 def _historical_rates(outcomes: list[dict[str, Any]], key: str, horizon: int) -> tuple[int, tuple[float, float, float] | None]:
-    rows = [row for row in outcomes if row.get("feature_key") == key and int(row.get("horizon_minutes") or 0) == horizon and row.get("status") == "OBSERVED"]
+    """Use exact history first, then conservative similar-regime matches.
+
+    v2.47 required the full 6-part feature key to be identical, which commonly
+    returned zero history despite hundreds of observations.  Future Brain is now
+    advisory, so we can safely broaden only when exact samples are scarce: current
+    direction must match and at least 4/6 regime features must agree.
+    """
+    target = str(key or "").split("|")
+
+    def eligible(row: dict[str, Any], *, exact_only: bool) -> bool:
+        if int(row.get("horizon_minutes") or 0) != horizon or row.get("status") != "OBSERVED":
+            return False
+        candidate_key = str(row.get("feature_key") or "")
+        if candidate_key == key:
+            return True
+        if exact_only or len(target) != 6:
+            return False
+        candidate = candidate_key.split("|")
+        if len(candidate) != 6 or candidate[0] != target[0]:
+            return False
+        matches = sum(a == b for a, b in zip(candidate, target))
+        return matches >= 4
+
+    exact = [row for row in outcomes if eligible(row, exact_only=True)]
+    rows = exact if len(exact) >= 10 else [row for row in outcomes if eligible(row, exact_only=False)]
     up = down = sideways = 0
     for row in rows:
         move = _num(row.get("spot_change"))
@@ -135,10 +159,12 @@ def calculate_future_brain(snapshot: Any, previous_snapshot: Any | None = None, 
     hist = _num(three.macd_histogram)
     previous_hist = _num(three.previous_macd_histogram)
     if rsi is not None:
+        # Extreme RSI is a chase-risk flag, not an automatic opposite-direction vote.
+        # A reversal needs slope/price-action confirmation below.
         if rsi >= 68:
-            down += 13; reasons.append("3m RSI upper zone: downside reversal risk")
+            sideways += 5; reasons.append("3m RSI upper zone: chase/reversal risk")
         elif rsi <= 32:
-            up += 13; reasons.append("3m RSI lower zone: upside reversal risk")
+            sideways += 5; reasons.append("3m RSI lower zone: chase/bounce risk")
         else:
             sideways += 3
     if rsi is not None and previous_rsi is not None:
@@ -170,9 +196,11 @@ def calculate_future_brain(snapshot: Any, previous_snapshot: Any | None = None, 
     atr = max(8.0, _num(snapshot.price_action.three_minute.atr14) or 18.0)
     up_room, down_room = _num(snapshot.levels.upside_room), _num(snapshot.levels.downside_room)
     if up_room is not None and up_room < atr:
-        down += 12; sideways += 5; reasons.append("Resistance/upper room is tight")
+        sideways += 7; reasons.append("Resistance/upper room is tight — entry risk")
+        if current == "UP": down += 3
     if down_room is not None and down_room < atr:
-        up += 12; sideways += 5; reasons.append("Support/lower room is tight")
+        sideways += 7; reasons.append("Support/lower room is tight — entry risk")
+        if current == "DOWN": up += 3
 
     option_bias = _direction(snapshot.option_intelligence.market_bias)
     option_weight = min(10.0, max(3.0, float(snapshot.option_intelligence.confidence or 0.0)/10))
@@ -224,9 +252,14 @@ def calculate_future_brain(snapshot: Any, previous_snapshot: Any | None = None, 
         else "RANGE"
     )
     if weak:
-        transition, gate, preferred = "MIXED / TRANSITION", "WAIT — NO CLEAR FUTURE EDGE", "WAIT"
+        # Advisory only: keep the current structural direction instead of creating
+        # a second hard WAIT gate.
+        transition = "MIXED / TRANSITION"
+        gate = "ADVISORY — NO CLEAR FUTURE EDGE"
+        preferred = current if current in {"UP", "DOWN", "RANGE"} else "WAIT"
     elif next_direction == "RANGE":
-        transition, gate, preferred = "RANGE / COMPRESSION", "WAIT FOR RANGE CONFIRMATION", "RANGE"
+        transition, gate = "RANGE / COMPRESSION", "ADVISORY — RANGE RISK"
+        preferred = current if current in {"UP", "DOWN"} else "RANGE"
     elif next_direction == current:
         transition, gate, preferred = f"{current} CONTINUATION", f"{current} CONTINUATION WATCH", current
     elif fast_direction == next_direction and paths[next_direction] >= 50:
@@ -234,7 +267,9 @@ def calculate_future_brain(snapshot: Any, previous_snapshot: Any | None = None, 
         gate, preferred = f"{next_direction} REVERSAL PAPER TEST", next_direction
         reasons.append("3m price action confirms the forecast reversal")
     else:
-        transition, gate, preferred = f"{current} → {next_direction} REVERSAL WATCH", "WAIT FOR REVERSAL CONFIRMATION", next_direction
+        transition = f"{current} → {next_direction} REVERSAL WATCH"
+        gate = "ADVISORY — REVERSAL NOT CONFIRMED"
+        preferred = current if current in {"UP", "DOWN"} else next_direction
 
     if next_direction == "UP":
         confirmation = "3m bullish close + rising RSI/MACD + resistance room"

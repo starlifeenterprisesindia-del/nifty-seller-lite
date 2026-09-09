@@ -596,6 +596,30 @@ def _bias_from_scores(bullish: float, bearish: float, range_score: float) -> str
     return "MIXED"
 
 
+def _compress_short_window_reversal(
+    bullish: float, bearish: float, range_score: float, windows: tuple[FlowWindow, ...]
+) -> tuple[float, float, float]:
+    """Prevent a stale 5m vote from printing an extreme score during a fresh turn.
+
+    If ready 1m and 3m windows agree against the 5m window, the market is in a
+    transition.  The 5m evidence is retained, but the display/brain score is
+    compressed toward the faster agreement instead of showing a misleading 90%+.
+    """
+    ready = [item for item in windows if item.status == "READY"]
+    by_seconds = {item.target_seconds: item.bias for item in ready}
+    fast1, fast3, slow5 = by_seconds.get(60), by_seconds.get(180), by_seconds.get(300)
+    if fast1 not in {"BULLISH", "BEARISH"} or fast1 != fast3 or slow5 not in {"BULLISH", "BEARISH"} or slow5 == fast1:
+        return bullish, bearish, range_score
+    target = (55.0, 20.0, 25.0) if fast1 == "BULLISH" else (20.0, 55.0, 25.0)
+    mixed = [
+        bullish * 0.55 + target[0] * 0.45,
+        bearish * 0.55 + target[1] * 0.45,
+        range_score * 0.55 + target[2] * 0.45,
+    ]
+    total = sum(mixed) or 1.0
+    result = [round(v / total * 100.0, 1) for v in mixed]
+    result[2] = round(100.0 - result[0] - result[1], 1)
+    return result[0], result[1], result[2]
 
 
 def _calibrate_scores_for_confidence(
@@ -702,8 +726,9 @@ def calculate_option_intelligence(
         )
         for label, seconds in (("1 minute", 60), ("3 minute", 180), ("5 minute", 300))
     )
-    # Five-minute matched contracts are the main vote. 1m/3m remain early
-    # observations and are never averaged back into the same direction vote.
+    # Five-minute matched contracts provide the stable base, but ready 1m/3m/5m
+    # windows are blended below.  Faster windows therefore warn about a turn without
+    # creating a second independent OI vote.
     main_sample, main_age = _choose_history_sample(history, captured_at, 300)
     main_ready = False
     if main_sample is not None:
@@ -732,6 +757,19 @@ def calculate_option_intelligence(
     confidence = round(min(90.0, confidence), 1)
     if not main_ready:
         confidence = min(confidence, 20.0)
+
+    # Use the multi-window blend only after a genuine matched-flow base exists.
+    # A first/warming snapshot must stay zero-vote rather than inventing 20/20/60.
+    if main_ready:
+        bullish, bearish, range_score = _blend_movement_windows(
+            bullish, bearish, range_score, windows
+        )
+        bullish, bearish, range_score = _compress_short_window_reversal(
+            bullish, bearish, range_score, windows
+        )
+        bullish, bearish, range_score = _calibrate_scores_for_confidence(
+            bullish, bearish, range_score, confidence
+        )
     market_bias = _bias_from_scores(bullish, bearish, range_score)
 
     reasons: list[str] = []

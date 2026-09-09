@@ -209,7 +209,7 @@ def _risk_math(
     )
 
 
-def calculate_execution_guard(
+def _calculate_execution_guard_legacy(
     *,
     decision: FinalDecision,
     trade_plan: TradePlanBundle,
@@ -393,6 +393,176 @@ def calculate_execution_guard(
         signal_state=signal_state,
         confirmations=confirmations,
         required_confirmations=CONFIG.execution_required_confirmations,
+        entry_window=entry_window,
+        risk_budget_rupees=risk_profile.risk_budget_rupees,
+        risk_per_lot_rupees=risk_per_lot,
+        allowed_lots=allowed_lots,
+        max_lots_by_budget=max_lots_by_budget,
+        max_lots_cap=risk_profile.max_lots_cap,
+        target_capture_points=target_capture_points,
+        target_exit_debit_points=target_exit_debit_points,
+        target_profit_rupees=target_profit_rupees,
+        stop_loss_points=stop_loss_points,
+        stop_exit_debit_points=stop_exit_debit_points,
+        stop_loss_rupees=stop_loss_rupees,
+        forced_exit_time=risk_profile.forced_exit.strftime("%H:%M"),
+        spot_invalidation_low=invalidation_low,
+        spot_invalidation_high=invalidation_high,
+        trade_taken_today=discipline_state.trades_taken >= 1,
+        day_locked=discipline_state.day_locked,
+        reasons=unique_reasons,
+        blockers=unique_blockers,
+        status=readiness,
+    )
+
+
+
+def calculate_execution_guard(
+    *,
+    decision: FinalDecision,
+    trade_plan: TradePlanBundle,
+    market_session: MarketSession,
+    option_intelligence: OptionIntelligence,
+    price_action: PriceActionBundle,
+    risk_profile: RiskProfile,
+    discipline_state: DisciplineState,
+    feed_status: dict[str, FeedStatus],
+    as_of: datetime,
+    big_player: BigPlayerActivity | None = None,
+    selected_setup_override: str | None = None,
+    final_action_override: str | None = None,
+    simple_brain: dict | None = None,
+) -> ExecutionGuard:
+    """Execution/risk guard for the Simple One-Brain.
+
+    When ``simple_brain`` is absent the exact v2.47 legacy guard is used, keeping old
+    tests/replays compatible.  In Simple mode only true safety conditions are hard
+    blockers: live data, protected plan, risk budget, session progression, one-trade
+    discipline and entry window.  Direction/15m/3m/Future/flow are already combined
+    upstream and are not repeated as independent vetoes.
+    """
+    if not simple_brain:
+        return _calculate_execution_guard_legacy(
+            decision=decision,
+            trade_plan=trade_plan,
+            market_session=market_session,
+            option_intelligence=option_intelligence,
+            price_action=price_action,
+            risk_profile=risk_profile,
+            discipline_state=discipline_state,
+            feed_status=feed_status,
+            as_of=as_of,
+            big_player=big_player,
+            selected_setup_override=selected_setup_override,
+            final_action_override=final_action_override,
+        )
+
+    setup = str(selected_setup_override or simple_brain.get("candidate_action") or trade_plan.selected_setup or "WAIT").upper()
+    plan = {
+        "CE BUY": trade_plan.ce_buy,
+        "PE BUY": trade_plan.pe_buy,
+        "CE SELL": trade_plan.ce_sell,
+        "PE SELL": trade_plan.pe_sell,
+        "IRON CONDOR": trade_plan.iron_condor,
+    }.get(setup)
+    simple_final = str(simple_brain.get("final_action") or "WAIT").upper()
+    effective_action = str(final_action_override or simple_final or "WAIT").upper()
+    # A completed price-action/barrier trigger is already the confirmation. Avoid a
+    # second 30/60-second persistence gate after that same event.
+    required_confirmations = int(CONFIG.simple_execution_required_confirmations)
+    confirmations = required_confirmations if simple_final == setup and setup != "WAIT" else 0
+    signal_state = (
+        f"CONFIRMED ×{confirmations}" if confirmations >= required_confirmations and confirmations > 0
+        else "TRIGGER PENDING"
+    )
+
+    entry_window, within_window, after_window = _entry_window(risk_profile, as_of)
+    (
+        risk_per_lot,
+        max_lots_by_budget,
+        allowed_lots,
+        target_capture_points,
+        target_exit_debit_points,
+        target_profit_rupees,
+        stop_loss_points,
+        stop_exit_debit_points,
+        stop_loss_rupees,
+    ) = _risk_math(plan, risk_profile)
+    invalidation_low, invalidation_high = _spot_invalidations(setup, plan, price_action)
+
+    blockers: list[str] = []
+    reasons: list[str] = []
+    if not market_session.is_live:
+        readiness = "REFERENCE ONLY"
+        blockers.append("Market session is reference-only")
+    else:
+        if simple_final != setup:
+            blockers.append(str(simple_brain.get("instruction") or simple_brain.get("entry_state") or "Entry trigger pending"))
+        if setup == "WAIT" or plan is None:
+            blockers.append("No protected setup is selected")
+        elif str(plan.status).upper() != "READY":
+            blockers.append(f"Protected setup is not READY: {plan.blocker}")
+        elif (
+            setup in {"CE SELL", "PE SELL", "IRON CONDOR"}
+            and float(plan.estimated_credit_points or 0.0) < CONFIG.shadow_journal_min_sell_credit_points
+        ):
+            blockers.append(
+                f"Seller spread credit {float(plan.estimated_credit_points or 0.0):.2f} pts is below minimum value "
+                f"{CONFIG.shadow_journal_min_sell_credit_points:.1f} pts"
+            )
+
+        for feed_name in ("quotes", "candles", "option_chain"):
+            if not _fresh_live(feed_status, feed_name):
+                blockers.append(f"{feed_name} is not confirmed live")
+        progression = feed_status.get("price_progression")
+        if progression is not None and not progression.ok:
+            blockers.append("NIFTY price series is flatlined / not progressing")
+        expiry_quality = feed_status.get("expiry_close_quality")
+        if expiry_quality is not None and not expiry_quality.ok:
+            blockers.append("Expiry-close broker data is limited after 15:15")
+        if option_intelligence.status == "UNAVAILABLE":
+            blockers.append("Options intelligence unavailable")
+        elif option_intelligence.confidence < 50:
+            reasons.append(f"Options confidence only {option_intelligence.confidence:.0f}% — reduced weight, not hard veto")
+
+        if discipline_state.trades_taken >= 1 or discipline_state.day_locked:
+            outcome = discipline_state.last_outcome or "ONE TRADE USED"
+            blockers.append(f"One-trade day is locked: {outcome}")
+        if after_window:
+            blockers.append("New-entry window has closed")
+        elif not within_window:
+            reasons.append("Wait for the configured entry window")
+
+        if setup != "WAIT" and plan is not None and plan.available:
+            if risk_per_lot is None:
+                blockers.append("Selected protected-plan risk could not be calculated")
+            elif allowed_lots < 1:
+                blockers.append(
+                    f"0 LOTS — one-lot risk Rs. {risk_per_lot:,.2f} exceeds budget Rs. {risk_profile.risk_budget_rupees:,.2f}"
+                )
+
+        if blockers:
+            readiness = "BLOCKED"
+        elif not within_window:
+            readiness = "WATCH"
+        else:
+            readiness = "ENTRY READY"
+
+    if plan is not None and plan.available:
+        reasons.extend([
+            f"Simple Brain entry readiness {float(simple_brain.get('entry_readiness') or 0):.1f}/100",
+            f"Protected {setup} plan quality {plan.quality_score:.1f}/100",
+            f"Risk budget ₹{risk_profile.risk_budget_rupees:,.0f}",
+        ])
+    unique_reasons = tuple(dict.fromkeys(x for x in reasons if x))[:4]
+    unique_blockers = tuple(dict.fromkeys(x for x in blockers if x))[:6]
+    return ExecutionGuard(
+        as_of=as_of,
+        selected_setup=setup,
+        readiness=readiness,
+        signal_state=signal_state,
+        confirmations=confirmations,
+        required_confirmations=required_confirmations,
         entry_window=entry_window,
         risk_budget_rupees=risk_profile.risk_budget_rupees,
         risk_per_lot_rupees=risk_per_lot,

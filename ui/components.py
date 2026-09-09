@@ -889,7 +889,7 @@ def _render_pair_comparison(plan_map):
 
 
 def render_protected_candidates(snapshot: MarketSnapshot) -> None:
-    """Rank strategies under the Future Brain/Common Gate contract."""
+    """Show protected strategy alternatives under the Simple One-Brain direction."""
 
     evaluations = _decision_evaluations(snapshot)
     bundle = snapshot.trade_plan
@@ -903,16 +903,17 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     common = getattr(snapshot, "metadata", {}).get("common_decision") or {}
     selected = str(common.get("final_action") or "WAIT")
     leader = str(common.get("best_strategy") or "WAIT")
-    future_direction = str(common.get("direction") or "MIXED")
-    allowed = compatible_strategies(future_direction)
+    simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
+    simple_direction = str(simple.get("direction") or common.get("direction") or "MIXED")
+    allowed = compatible_strategies(simple_direction)
     if leader not in evaluations:
         eligible = [name for name in evaluations if name in allowed]
         leader = max(eligible or list(evaluations), key=lambda name: evaluations[name].score)
 
     st.subheader("🛡️ Best Strategy + Strike Value Table")
     st.caption(
-        "Future Brain direction ke compatible CE/PE/Condor setups. Current Brain context aur "
-        "Common Gate pass hone par hi ENTRY; har directional setup protected/hedged hai."
+        "Simple One-Brain direction ke compatible protected CE/PE/Condor setups. "
+        "Main decision Regime → Direction → Entry → Risk se aata hai; Future Brain advisory only hai."
     )
 
     def _premium_value(plan: Any | None) -> tuple[str, str]:
@@ -1002,7 +1003,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
     elif not common.get("entry_allowed"):
         st.info(
-            "Common Final Gate WAIT hai—table Future Brain reference ranking hai, koi entry confirmed nahi."
+            "Simple One-Brain entry abhi WAIT/CONFIRM hai—table protected alternatives sirf reference hain."
         )
     st.caption(
         "Decay Edge me SELL ka absolute theta hedge se zyada hona better hai. "
@@ -1051,9 +1052,13 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
                 reference = "Reference ranking; entry confirmed nahi. " + reference
             else:
                 reference = "Koi usable strike setup nahi. "
+            simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
+            simple_reason = str(simple.get("instruction") or "")
+            common_blockers = common.get("blockers") or ()
+            blocker_text = simple_reason or (str(common_blockers[0]) if common_blockers else "Entry trigger pending")
             structure = (
                 f"Karan: {direction_note}. {reference}"
-                + str(decision.blocker or "Evidence conflict / confirmation pending")
+                + blocker_text
             )
         else:
             candidate = common_action
@@ -1065,7 +1070,7 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     else:
         css_class = "ready"
         title = common_action
-        subtitle = f"COMMON GATE PASS · Trade confidence {float(common.get('trade_confidence') or 0):.1f}/100"
+        subtitle = f"SIMPLE ONE-BRAIN READY · Entry readiness {float((getattr(snapshot, 'metadata', {}).get('simple_brain') or {}).get('entry_readiness') or common.get('trade_confidence') or 0):.1f}/100"
         structure = _plan_structure_text(plan_map.get(common_action))
     live_text = "LIVE" if feed_ok else "LAST DATA"
     hero = (
@@ -1142,7 +1147,7 @@ def render_detailed_evidence(snapshot: MarketSnapshot) -> None:
     agreement = round(100.0 * sum(item == final_direction for item in sources) / len(sources))
     with st.expander("Detailed evidence, agreement, Greeks and history", expanded=False):
         st.caption("🎯 " + unified_direction_line(snapshot))
-        st.caption(f"Feed coverage {data_quality:.0f}% · Direction agreement {agreement:.0f}%")
+        st.caption(f"Feed coverage {data_quality:.0f}% · Legacy module agreement {agreement:.0f}% (diagnostic only)")
         for line in snapshot.metadata.get("history_context", {}).get("lines", []):
             st.caption("History context: " + line)
         render_greeks_health(snapshot.option_chain)
@@ -1160,60 +1165,63 @@ def render_main_ai_market_view(
     direction, direction_score, direction_note = market_rukh_display(snapshot)
     spot = snapshot.nifty_quote.get("last_price")
 
-    st.subheader("🧠 Two-Brain Trading Workspace")
+    st.subheader("🧠 Simple One-Brain Trading Workspace")
 
     with st.container(border=True):
         _render_final_action_hero(snapshot, feed_ok)
+        simple = snapshot.metadata.get("simple_brain") or {}
         future = snapshot.metadata.get("future_brain") or {}
-        if future:
-            st.markdown("### 🧠 Current Brain — Market Now")
-            st.markdown(
-                f"**Abhi: {future.get('current_direction', 'RANGE')} · "
-                f"Current strength {float(future.get('current_strength') or 0):.1f}/100**"
-            )
-            st.markdown("### 🔮 Future Brain — Next Move")
-            st.markdown(
-                f"**{future.get('transition', 'MIXED / TRANSITION')}** · "
-                f"{future.get('model_label', 'FORECAST SCORE')}"
-            )
-            p1, p2, p3 = st.columns(3)
-            p1.metric("5m UP", f"{float(future.get('up_5m') or 0):.1f}%")
-            p2.metric("5m DOWN", f"{float(future.get('down_5m') or 0):.1f}%")
-            p3.metric("5m RANGE", f"{float(future.get('range_5m') or 0):.1f}%")
-            q1, q2, q3 = st.columns(3)
-            q1.metric("15m UP", f"{float(future.get('up_15m') or 0):.1f}%")
-            q2.metric("15m DOWN", f"{float(future.get('down_15m') or 0):.1f}%")
-            q3.metric("15m RANGE", f"{float(future.get('range_15m') or 0):.1f}%")
-            gate = str(future.get("final_gate") or "WAIT")
-            if gate.startswith("WAIT"):
-                st.warning(f"⚖️ **Action Gate: {gate}**")
+        common = snapshot.metadata.get("common_decision") or {}
+        if simple:
+            st.markdown("### 🎯 One Simple Decision")
+            a, b, c, d = st.columns(4)
+            a.metric("MARKET", f"{simple.get('direction', 'MIXED')} {float(simple.get('direction_strength') or 0):.0f}%")
+            b.metric("REGIME", str(simple.get("regime") or "TRANSITION"))
+            c.metric("ENTRY", f"{float(simple.get('entry_readiness') or 0):.0f}/100")
+            d.metric("ACTION", str(common.get("final_action") or simple.get("final_action") or "WAIT"))
+            entry_state = str(simple.get("entry_state") or "WAIT")
+            trigger = str(simple.get("trigger") or simple.get("instruction") or "")
+            if common.get("entry_allowed"):
+                st.success(f"🚨 **TAKE NOW — {common.get('final_action')}** · {trigger}")
+            elif "WAIT" in entry_state or "NO CLEAR" in entry_state or "DATA" in entry_state:
+                st.warning(f"⏳ **{entry_state}** · {trigger}")
             else:
-                st.info(f"⚖️ **Action Gate: {gate}**")
-            st.caption(
-                f"Confirm: {future.get('confirmation', '3m completed close')} · "
-                f"Invalidation: {future.get('invalidation', 'Latest swing')} · "
-                f"Similar outcomes: {int(future.get('historical_matches') or 0)} "
-                f"({future.get('historical_status', 'INSUFFICIENT DATA')}). "
-                "Forecast score/probability profit guarantee nahi hai."
-            )
-            common = snapshot.metadata.get("common_decision") or {}
-            if common:
-                st.markdown("### ⚖️ Common Final Gate")
-                a, b, c = st.columns(3)
-                a.metric("Best strategy", common.get("best_strategy", "WAIT"))
-                b.metric("Trade confidence", f"{float(common.get('trade_confidence') or 0):.1f}/100")
-                history = common.get("historical_hit_rate")
-                c.metric("Historical hit rate", f"{float(history):.1f}%" if history is not None else "Learning")
-                blockers = common.get("blockers") or []
-                if common.get("entry_allowed"):
-                    st.success("ENTRY ALLOWED — Current context + Future direction + safety gates pass")
-                else:
-                    st.warning("WAIT — " + str(blockers[0] if blockers else "confirmation pending"))
+                st.info(f"🎯 **{entry_state}** · {trigger}")
+            if simple.get("risk_notes"):
+                st.caption("Risk: " + " | ".join(str(x) for x in simple.get("risk_notes") or ()))
+            next_level = simple.get("next_level")
+            if next_level is not None:
+                st.caption(f"Next level: {float(next_level):,.0f}")
+            with st.expander("4 core blocks — calculation", expanded=False):
+                blocks = simple.get("blocks") or {}
+                rows = []
+                for key, value in blocks.items():
+                    if not isinstance(value, dict):
+                        continue
+                    rows.append({
+                        "Block": key.replace("_", " ").title(),
+                        "Weight": value.get("weight"),
+                        "Bull": value.get("bullish", "—"),
+                        "Bear": value.get("bearish", "—"),
+                        "Neutral/State": value.get("neutral", value.get("state", "—")),
+                    })
+                if rows:
+                    st.dataframe(rows, width="stretch", hide_index=True)
+                for reason in simple.get("reasons") or ():
+                    st.caption("• " + str(reason))
+            if future:
+                with st.expander("🔮 Future Brain — advisory only", expanded=False):
+                    st.caption("Future Brain ab ordinary MIXED forecast par current trade direction ko hard block nahi karta.")
+                    p1, p2, p3 = st.columns(3)
+                    p1.metric("15m UP", f"{float(future.get('up_15m') or 0):.1f}%")
+                    p2.metric("15m DOWN", f"{float(future.get('down_15m') or 0):.1f}%")
+                    p3.metric("15m RANGE", f"{float(future.get('range_15m') or 0):.1f}%")
+                    st.caption(f"{future.get('transition', 'MIXED')} · {future.get('final_gate', 'ADVISORY')}")
             if decision_reason_renderer is not None:
                 decision_reason_renderer()
-            with st.expander("Future Brain ke reasons", expanded=False):
-                for reason in future.get("reasons") or ("Leading evidence warming up",):
-                    st.write("• " + str(reason))
+        elif future:
+            st.markdown("### 🔮 Future Brain — legacy snapshot")
+            st.caption(str(future.get("transition") or "MIXED / TRANSITION"))
         else:
             forecast = build_canonical_forecast(snapshot)
             st.markdown(f"**Next 5–15 min path — {forecast.direction} · {forecast.state}**")
@@ -1222,9 +1230,9 @@ def render_main_ai_market_view(
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
                 ("Main Trend (Core)", direction, f"Core evidence {direction_score:.0f}/100 · {direction_note}"),
                 (
-                    "Entry Confidence" if snapshot.market_session.is_live else "Reference Confidence",
-                    f"{snapshot.decision.decision_confidence:.0f}%",
-                    snapshot.execution_guard.readiness,
+                    "Entry Readiness" if snapshot.market_session.is_live else "Reference Readiness",
+                    f"{float((snapshot.metadata.get('simple_brain') or {}).get('entry_readiness') or snapshot.decision.decision_confidence):.0f}%",
+                    str((snapshot.metadata.get('simple_brain') or {}).get('entry_state') or snapshot.execution_guard.readiness),
                 ),
             ]
         )
