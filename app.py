@@ -312,7 +312,7 @@ with st.sidebar:
             disabled=not auto_enabled,
         )
         st.caption(
-            "Fast Monitor sirf NIFTY + ATM CE/PE quote leta hai; One-Brain selected interval par hi rebuild hota hai."
+            "Fast Monitor NIFTY + ATM CE/PE quote leta hai; MAJOR MOVE par priority full snapshot trigger karta hai."
         )
         if auto_enabled and "auto_snapshot_started_at" not in st.session_state:
             st.session_state.auto_snapshot_started_at = time.time()
@@ -648,8 +648,9 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
 
     finalize_started = time.perf_counter()
     from analysis.future_brain import calculate_future_brain
+    from analysis.simple_brain import calculate_simple_brain
     from analysis.decision_workspace import build_common_decision
-    from analysis.trade_plan import calculate_trade_plan, activate_plan_candidate
+    from analysis.trade_plan import activate_plan_candidate
     from analysis.execution_guard import calculate_execution_guard
 
     # First pass is sent with the observation; the second pass adds any matching
@@ -667,32 +668,14 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
         snapshot.metadata.get("learning_outcomes") or [],
     ).to_dict()
 
-    # Future Brain only re-ranks already protected candidates. Current Brain,
-    # Common Gate, bid/ask, barriers and risk budget remain authoritative.
+    # v2.48: one simple authority. Future Brain remains advisory and cannot create
+    # a second hard WAIT gate.
     future_view = snapshot.metadata["future_brain"]
-    future_direction = (
-        future_view.get("preferred_direction")
-        or future_view.get("next_direction")
-        or "WAIT"
-    )
-    future_strength = max(
-        float(future_view.get("up_15m") or 0.0),
-        float(future_view.get("down_15m") or 0.0),
-        float(future_view.get("range_15m") or 0.0),
-    )
-    snapshot.trade_plan = calculate_trade_plan(
-        frame=snapshot.option_chain,
-        spot=float(snapshot.nifty_quote.get("last_price") or 0.0),
-        expiry=snapshot.expiry,
-        levels=snapshot.levels,
-        options=snapshot.option_intelligence,
-        decision=snapshot.decision,
-        market_session=snapshot.market_session,
-        indicators=snapshot.indicators,
-        risk_profile=snapshot.risk_profile,
-        future_direction=future_direction,
-        future_strength=future_strength,
-    )
+    snapshot.metadata["simple_brain"] = calculate_simple_brain(snapshot, future_view)
+    simple_view = snapshot.metadata["simple_brain"]
+    # SnapshotService already built every protected CE/PE/Condor plan. Reuse that
+    # bundle and only activate the Simple-Brain candidate; avoid an expensive second
+    # strike-engine calculation on every Streamlit finalize pass.
     common_proposal = build_common_decision(snapshot)
     common_candidate = str(common_proposal.get("best_strategy") or "WAIT")
     snapshot.trade_plan = activate_plan_candidate(
@@ -711,6 +694,7 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
         as_of=snapshot.created_at,
         selected_setup_override=common_candidate,
         final_action_override=common_candidate,
+        simple_brain=snapshot.metadata.get("simple_brain") or {},
     )
     snapshot.metadata["common_decision"] = build_common_decision(
         snapshot, execution_guard=snapshot.execution_guard
@@ -877,6 +861,19 @@ def render_fast_live_monitor() -> None:
             st.caption("⚡ Fast Monitor — quote unavailable; full snapshot safe hai")
             return
         st.session_state.fast_live_impulse = impulse
+        # Priority lane: a confirmed fast move should not wait for the next 15/30/60s
+        # scheduled rebuild. It only requests a fresh full snapshot; the 5s monitor
+        # never creates a trade action by itself.
+        if impulse.state == "MAJOR MOVE CONFIRMED":
+            now_fast = time.time()
+            last_priority = float(st.session_state.get("last_priority_snapshot_ts", 0.0))
+            last_full = float(st.session_state.get("last_snapshot_fetch_ts", 0.0))
+            cooldown = max(CONFIG.snapshot_min_refresh_seconds, CONFIG.simple_priority_snapshot_cooldown_seconds)
+            if now_fast - last_priority >= cooldown and now_fast - last_full >= CONFIG.snapshot_min_refresh_seconds:
+                st.session_state.last_priority_snapshot_ts = now_fast
+                st.session_state.auto_snapshot_reserved_at = now_fast
+                st.session_state.auto_snapshot_due = True
+                st.rerun(scope="app")
         with st.container(border=True):
             icon = (
                 "🟢" if impulse.direction == "BULLISH"
@@ -1106,7 +1103,7 @@ with st.expander("🧰 Checks & Downloads Centre", expanded=False):
         render_evidence_download(live_server_url, live_server_api_key)
     with journal_col:
         render_shadow_journal_download(
-            shadow_entries, view_snapshot.created_at.date().isoformat()
+            shadow_entries, view_snapshot.created_at.date().isoformat(), shadow_journal_store
         )
 
     st.download_button(

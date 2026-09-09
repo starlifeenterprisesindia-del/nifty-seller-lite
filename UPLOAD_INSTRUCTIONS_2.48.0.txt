@@ -1,0 +1,16 @@
+Nifty Seller Lite v2.48.0 — SIMPLE ONE-BRAIN
+
+1. Upload/replace the complete contents of this ZIP in the existing GitHub repository root.
+2. Keep Railway / Streamlit secrets unchanged. Do NOT upload access tokens or Telegram secrets.
+3. Keep the Railway persistent volume mounted at /data. Do NOT wipe /data; stored evidence,
+   FII/DII context, journal history and runtime calibration should remain intact.
+4. Let GitHub/Railway redeploy normally.
+5. After deployment confirm the sidebar version is:
+   2.48.0_SIMPLE_ONE_BRAIN
+6. During the first live session verify the main workspace shows the Simple One-Brain fields:
+   MARKET / REGIME / ENTRY / ACTION / TRIGGER / RISK / NEXT LEVEL.
+7. Keep the 5-second Fast Monitor lightweight. A confirmed major move may request a priority
+   full snapshot; it does not independently place or authorize a broker order.
+
+Suggested commit message:
+feat: simplify Nifty seller decision path with v2.48 Simple One-Brain

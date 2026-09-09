@@ -1,0 +1,20 @@
+Nifty Seller Lite v2.48.0 — validation completed in build environment
+
+Compilation:
+- python -m compileall -q app.py live_server.py config.py models.py analysis services ui
+- PASS
+
+Focused cumulative regression suite:
+- 106 tests passed in 8.42s
+- Included Simple One-Brain, journal, price action, option intelligence, decision workspace,
+  execution guard, Future Brain, presentation safety, snapshot service, PDF report, day memory,
+  One-Brain architecture, unified brain, live monitor and performance optimization tests.
+
+Additional targeted speed/decision suite:
+- 73 tests passed in 1.50s
+
+Full pytest collection note:
+- Four UI-oriented test modules could not be collected in this local container because the
+  Streamlit package is not installed in this execution environment. requirements.txt pins
+  streamlit==1.59.1 for the deployed app. This is an environment dependency limitation, not
+  a detected logic failure.

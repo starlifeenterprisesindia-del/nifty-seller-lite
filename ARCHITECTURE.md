@@ -1,53 +1,51 @@
-# Architecture - V2.47
+# Architecture - V2.48 Simple One-Brain
 
 ## One authoritative snapshot
 
-`services/snapshot_service.py` builds one immutable `MarketSnapshot`. Screen and PDFs consume the same snapshot.
+`services/snapshot_service.py` builds one immutable `MarketSnapshot`. Screen, journal and PDFs consume the same snapshot. Market-data services fetch data; analysis modules never fetch broker data themselves.
 
-## Two brains, one canonical final gate
+## Simple operational decision path
 
-`analysis/decision.py::calculate_final_decision` owns Current Brain evidence.
-`analysis/future_brain.py` owns the next-move forecast and never bypasses safety.
-`analysis/decision_workspace.py` proposes one Future-compatible strategy from the
-already protected plans. `analysis/execution_guard.py` validates that exact
-candidate. Only an `ENTRY READY` guard may become Common Final `ENTRY ALLOWED`.
-No UI, report, evidence or journal function may independently select or approve a
-different strategy.
+The rich legacy evidence engine remains available for diagnostics and protected-plan construction, but the **operational entry authority** is `analysis/simple_brain.py`.
 
-The production decision is one normalized 100-point calculation: completed 15m
-permission + completed 3m trigger + indicators/core 40, option OI/flow 15,
-futures volume 10, raw Futures+Top-9 activity 10, ATR-aware barrier room 15,
-and confirmed special candle/W-M evidence 10. ENTRY READY additionally requires
-75+ fit and all feed, persistence, risk and execution gates.
+The live path is deliberately short:
 
-Directional entries require the completed 15m and completed 3m to agree with the
-setup. Insufficient barrier room, explicitly opposite futures volume, or a confirmed
-opposite pattern blocks the entry and keeps the canonical action at WAIT.
+**Regime -> Direction -> Entry -> Risk -> Action**
 
-## Evidence modules
+Only four blocks are used by the Simple One-Brain:
 
-Price action, levels/barriers, futures volume, EMA/MACD/RSI, patterns, option flow/OI/PCR,
-Top-9, VIX and verified events contribute bounded evidence or safety gates. FII/DII is
-background/history context with zero live directional vote. News can add only fresh
-context; unavailable news has zero weight.
+1. **Trend / Regime (40%)** — completed 15m + 3m price action and the existing core EMA/MACD/RSI evidence. A confirmed 15m breakout/breakdown is directional regime evidence and cannot remain an 82% RANGE veto.
+2. **Options Flow (25%)** — bounded 1m/3m/5m blended OI/premium/volume evidence. A fresh 1m+3m reversal compresses a stale opposite 5m extreme into TRANSITION instead of producing false 90%+ conviction.
+3. **Participation (20%)** — NIFTY futures volume + Top-9. Big Player is confirmation inside this block, not a duplicate fifth vote.
+4. **Barrier / Entry (15%)** — nearest support/resistance is classified as HOLDING/NEAR, UNDER ATTACK, BROKEN or OPEN ROOM. A broken barrier is no longer an automatic permanent WAIT.
 
-## Premium calculator
+Scores are normalized over available core evidence. Missing optional evidence does not consume denominator weight and cannot make the entry threshold mathematically unreachable.
 
-`analysis/spot_premium_calculator.py` is a read-only utility. Manual targets and automatic R1/R2/S1/S2 targets use the same option-chain/Greeks/smile estimator. `estimate_target_reach` adds only an ETA range and reach-chance context using the existing speed, expected-move and barrier data; it never emits a strategy decision.
+## Advisory/risk-only modules
+
+`analysis/future_brain.py` remains a next-5/15-minute advisory. It can warn about bounce/reversal risk but ordinary MIXED output does not veto a valid current setup. RSI extremes are chase-risk modifiers, not automatic opposite-direction votes.
+
+VIX, verified fresh news/events and data integrity are risk context. FII/DII is background context. Greeks/IV/theta/delta are used for protected strike/hedge quality. W/M and special candles remain supporting detail and do not create independent hard direction votes.
+
+## Execution safety
+
+`analysis/execution_guard.py` keeps genuine hard safety checks: live session/data, price progression, protected plan availability, defined-risk budget, one-trade lock and entry window. In Simple One-Brain mode it does not repeat the old 75-fit, 15m/3m, barrier, persistence and Future-Brain gates as separate vetoes.
+
+The app remains read-only and never places, modifies or exits broker orders.
+
+## Fast lane
+
+The 5-second monitor stays lightweight. It does not decide trades. A confirmed major move can request a priority full snapshot (with cooldown), reducing the delay between a fast market move and a fresh Simple One-Brain decision.
+
+## Journal and learning
+
+`services/shadow_journal.py` has two lanes:
+
+- **Decision Journal** records meaningful WAIT/READY/ENTRY states and backfills observed +5m/+15m/+30m spot outcomes.
+- **Paper Trade Journal** records only gate-passed protected simulated trades.
+
+This lets the app distinguish a protective WAIT from a missed move instead of learning only from executed paper trades. Railway day-memory also stores Simple One-Brain regime/direction/entry fields. Historical/Future matching is advisory and cannot hard-block entry.
 
 ## Presentation
 
-`ui/components.py` renders compact One-Brain, barrier, evidence and strategy views. `ui/premium_calculator.py` owns the compact premium calculator. Raw developer data is environment-gated. Feed diagnostics, risk budget and Execution Guard are not shown in the normal UI.
-
-## State and reports
-
-FII/DII keeps a bounded 15-session journal with local and optional private-cloud persistence. Option-flow history remains bounded by session. Quick and Full Audit PDFs render the same presentation-safe snapshot and never call market APIs or the decision brain.
-
-Railway history is fetched before Future Brain so completed outcomes are
-available, but the app observation is posted only after Future Brain, protected
-strike re-ranking, the exact Execution Guard and Common Final decision are all
-complete. Credit and debit spreads both freeze executable bid/ask legs.
-
-## Read-only boundary
-
-The app does not place, modify or exit broker orders.
+The main UI presents one operational answer: **MARKET, REGIME, ENTRY, ACTION, TRIGGER, RISK/NEXT LEVEL**. Future Brain and advanced evidence remain expandable diagnostics so they cannot create visible decision conflict.

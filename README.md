@@ -1,67 +1,14 @@
-# Nifty Seller Lite 2.33
+# Nifty Seller Lite 2.48 — Simple One-Brain
 
-The OI engine now compares only the same expiry, strike, side and (when supplied)
-security ID. Negative volume-counter resets and unmatched contracts are invalidated
-instead of being interpreted as market activity. Executable bid/ask midpoint is used
-when the spread is healthy, with broker LTP as the fallback.
+Read-only NIFTY options decision-support app built around one simple operational path:
 
-One-Brain now gives higher weight to option OI/volume and bounded Big Player evidence.
-Adaptive confirmation uses 2 snapshots/30 seconds for strongly aligned moves,
-3 snapshots/60 seconds normally, 3 snapshots/120 seconds for Iron Condor and
-3 snapshots/180 seconds after a direction reversal. Execution Guard proceeds only at
-75% strategy score and entry confidence. The main screen keeps
-Data Quality, Direction Agreement and Entry Confidence separate.
+**Regime → Direction → Entry → Risk → Action**
 
-Iron Condor has a balance guard for CE/PE delta, credit, directional room, persistent
-option flow and aligned 3-minute/15-minute RSI risk. Auto Shadow Journal can record up
-to five confirmed paper trades per session with reasons, legs, MFE/MAE, exit outcome
-and estimated net P&L. It is read-only and never places broker orders.
+The app keeps the existing rich market evidence, protected strike planner, barrier map, Fast Monitor, journal and reports, but removes duplicate hard vetoes from the live decision path. The Simple One-Brain uses only four core blocks: Trend/Regime 40%, blended Options Flow 25%, Participation 20%, and Barrier/Entry 15%. Scores normalize over available evidence.
 
-Testing release 2.33.3 uses a 60% minimum strategy/entry threshold and 60% protected
-strike-plan quality. OI-flow maturity, adaptive timing, Big Player alignment, barrier
-risk and every defined-risk hedge rule remain active.
+Confirmed 15m breakout/breakdown is treated as a directional regime; RSI extremes are chase-risk only; Future Brain is advisory only; Big Player is confirmation inside Participation; VIX/FII-DII/news/Greeks/patterns retain their appropriate risk, context or strike-quality roles without becoming separate direction gates.
 
-Release 2.33.4 keeps one canonical strategy brain and removes evidence-display
-doubling: Barrier/Levels/Volume share one compact row, Barrier adds zero new decision
-weight, and Big Player shows only its existing bounded maximum 10-point effect. The
-mobile table and both PDFs use five evidence columns; the support bundle also includes
-the paper Shadow Journal when available. Direction Agreement treats MIXED and RANGE as
-the same neutral state, and Fast Monitor timestamps are displayed in IST.
-
-Directional CE/PE candidates now appear in three compact protected profiles:
-LOW RISK, BALANCED and HIGH RISK. Every BUY or SELL candidate uses a same-expiry,
-equal-quantity hedge; no naked directional candidate is produced. The One-Brain
-action remains authoritative and BALANCED is the default candidate profile.
-
-The compact evidence view now shows each module's current One-Brain contribution,
-last-snapshot contribution and delta. VIX displays its value/change/regime/movement.
-News is reduced to a compact direction/severity/impact indicator; 3–24 hour headlines
-may remain as context but always carry zero live decision weight.
-
-Nearest Levels includes 3-minute W/M structure and a completed 5-minute Special
-Candle with 3-minute/15-minute confirmation, possible effect and signal confidence.
-Optional Auto Snapshot can run for 5/15/30 minutes at 30-second or 1-minute intervals.
-
-Big Player Activity is a separate responsive evidence screen fed by the same
-authoritative One-Brain snapshot. It combines time-normalized NIFTY-futures volume,
-futures price/OI, ATM option flow, Top-7 participation and barrier reaction. A 2/2 distinct-minute
-same-session persistence gate is required before its bounded decision adjustment;
-the app never claims to identify a particular institution.
-
-Big Player direction now uses two distinct completed-minute observations instead of
-counting repeated 30-second refreshes. A minimum four-point move filter suppresses
-small BUY/SELL flips, and Top-7 is treated as supporting context rather than a required
-market-direction vote. The screen uses simple Hinglish states for starting, confirmed,
-fading and small/noisy moves.
-
-The alert expander provides a two-stage bell/voice notification: an early directional
-heads-up at 65+ with 1/3 persistence and supporting volume/flow evidence, followed by
-a confirmed heavy NIFTY-market alert at 75+ and 2/3. It also provides one manually armed CE/PE strike-premium
-target with a BUY/SELL label. Browser
-audio requires a one-time Enable/Test interaction and is most reliable while the tab
-is open; alerts never place an order or alter the One-Brain decision.
-
-Compact, read-only NIFTY options decision-support app using one canonical strategy brain.
+The Decision Journal records WAIT/READY/ENTRY observations and later observed +5m/+15m/+30m outcomes, while the Paper Trade Journal remains restricted to protected gate-passed simulations. The 5-second Fast Monitor can trigger a priority full snapshot on a major move but never places or decides a trade itself.
 
 ## Main screen
 
@@ -76,9 +23,9 @@ Compact, read-only NIFTY options decision-support app using one canonical strate
 
 ## One-Brain boundary
 
-`analysis/decision.py::calculate_final_decision` is the only strategy selector. UI, PDFs, barrier map, protected strike planner and premium calculator consume the same `MarketSnapshot`; they do not create another BUY/SELL/WAIT decision.
+`analysis/simple_brain.py` is the live operational entry authority after the canonical snapshot evidence is built. `analysis/decision.py` remains the legacy/core evidence and protected-plan source for compatibility and diagnostics. UI/PDF/premium tools never fetch data or independently approve a trade.
 
-The automatic R1/R2/S1/S2 premium table reuses the existing `calculate_spot_premium_range` pricing engine. ETA/chance is contextual evidence from existing speed, VIX expected move and barrier pressure.
+The automatic R1/R2/S1/S2 premium table reuses the existing pricing engine. ETA/chance is contextual evidence only.
 
 ## Run
 

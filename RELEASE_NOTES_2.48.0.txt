@@ -1,0 +1,54 @@
+Nifty Seller Lite v2.48.0 — SIMPLE ONE-BRAIN
+
+Goal
+- Make the app decisive, easier to understand and faster without adding indicators.
+- Replace WAIT paralysis from repeated independent gates with one short live path:
+  Regime -> Direction -> Entry -> Risk -> Action.
+
+Decision changes
+1. New analysis/simple_brain.py operational layer with four core blocks:
+   Trend/Regime 40, blended Options Flow 25, Participation 20, Barrier/Entry 15.
+2. Scores normalize over available evidence; missing optional modules no longer make a
+   high threshold mathematically unreachable.
+3. Confirmed 15m BREAKDOWN/BREAKOUT now reduces RANGE dominance and becomes a true
+   directional regime signal.
+4. Option flow now uses the existing 1m/3m/5m blend. Fresh 1m+3m disagreement with the
+   5m vote compresses stale extreme conviction into transition.
+5. Future Brain is advisory only. RSI oversold/overbought is bounce/chase risk, not an
+   automatic opposite-direction vote.
+6. Barrier states are HOLDING/NEAR -> UNDER ATTACK -> BROKEN/OPEN ROOM. Reason-based
+   WAIT replaces generic WAIT near every support/resistance.
+7. Participation combines futures volume + Top-9. Big Player confirms inside the same
+   block instead of creating another duplicate score. Grouped Top-9 quotes with a valid
+   current LTP remain usable even when Dhan omits a per-symbol exchange timestamp; this
+   fixes the observed 9/9-received -> 0/9-usable loss.
+8. VIX, FII/DII, news/events, Greeks, W/M and special candles retain risk/context/
+   strike-quality roles but do not create extra hard direction vetoes.
+
+Safety
+- Real hard gates remain: live session/data, progressing prices, protected hedge plan,
+  defined risk budget, entry window and one-trade state.
+- The app remains read-only; no broker order placement was added.
+
+Speed
+- Removed the second duplicate protected trade-plan rebuild during app finalization.
+- 5-second Fast Monitor remains lightweight and can request a priority full snapshot on
+  a confirmed major move with cooldown.
+
+Journal / learning
+- Decision Journal records meaningful WAIT/READY/ENTRY observations every minute or on
+  state change and backfills observed +5m/+15m/+30m move outcomes.
+- Paper Journal continues to record only actual gate-passed protected simulations.
+- Journal download returns the Decision Journal even when no paper trade was approved,
+  eliminating the empty/1-byte WAIT-day export problem.
+- Railway day-memory stores Simple One-Brain regime/direction/entry fields.
+
+UI
+- Main workspace shows one operational answer: MARKET, REGIME, ENTRY, ACTION, TRIGGER,
+  risk notes and next level.
+- Future Brain moves to advisory/advanced detail so it cannot visually contradict the
+  operational action.
+
+Validation
+- Core compilation and automated tests are included in the release package. See the
+  delivery message for the exact tests executed in this environment.

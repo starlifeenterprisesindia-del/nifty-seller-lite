@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.47.1_SPEED_STABILITY_HOTFIX"
+    version: str = "2.48.0_SIMPLE_ONE_BRAIN"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -159,6 +159,15 @@ class AppConfig:
     decision_minimum_score: float = 62.0
     decision_minimum_margin: float = 12.0
     execution_minimum_unified_score: float = 75.0
+    # v2.48 Simple One-Brain: normalized available-evidence thresholds.  These do
+    # not lower data/risk safety; they replace the old mathematically unreachable
+    # stack of independent 75%/Future/15m/3m gates.
+    simple_direction_min_strength: float = 54.0
+    simple_entry_ready_score: float = 62.0
+    simple_entry_watch_score: float = 54.0
+    simple_execution_required_confirmations: int = 1
+    simple_decision_journal_interval_seconds: int = 60
+    simple_priority_snapshot_cooldown_seconds: int = 12
     decision_wait_block_threshold: float = 60.0
     decision_min_option_confidence: float = 58.0
     decision_min_core_confidence: float = 55.0
