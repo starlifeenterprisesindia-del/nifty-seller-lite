@@ -40,3 +40,20 @@ def test_feature_signature_contains_only_compact_regime_fields():
     key = feature_signature(snapshot())
     assert len(key.split("|")) == 6
     assert len(key) < 100
+
+
+def test_similar_history_is_used_when_exact_key_is_sparse():
+    item = snapshot()
+    parts = feature_signature(item).split("|")
+    # Same current direction and four of six regime features, but not an exact key.
+    alt = parts.copy()
+    alt[2] = "TOP_NEAR" if parts[2] != "TOP_NEAR" else "ROOM"
+    alt[4] = "LATE" if parts[4] != "LATE" else "MID"
+    similar_key = "|".join(alt)
+    rows = [
+        {"feature_key": similar_key, "horizon_minutes": 15, "status": "OBSERVED", "spot_change": -12}
+        for _ in range(15)
+    ]
+    result = calculate_future_brain(item, outcomes=rows)
+    assert result.historical_matches == 15
+    assert result.historical_status == "INSUFFICIENT DATA"
