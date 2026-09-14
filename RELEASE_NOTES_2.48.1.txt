@@ -1,0 +1,24 @@
+Nifty Seller Lite v2.48.1 — MARKET CLOSED FALLBACK HOTFIX
+
+Purpose
+- Fix blank-screen snapshot failure after market close when DhanHQ grouped quote omits NIFTY IDX_I / security 13.
+
+What changed
+- During market close / pre-open / weekend / no-current-session-candle reference states, a missing NIFTY grouped quote no longer aborts the whole snapshot.
+- The app uses the last completed NIFTY 1-minute candle close strictly as REFERENCE ONLY.
+- Feed status explicitly says the grouped quote was missing and that the completed-candle fallback was used.
+- Live-session safety is unchanged: if the normal session is active and a current-session candle exists but the NIFTY live quote is missing, SnapshotBuildError is still raised and fresh entry remains blocked.
+- Version bumped to 2.48.1_MARKET_CLOSED_FALLBACK.
+
+Safety
+- The fallback can never make a reference session LIVE because quote age is intentionally left unavailable.
+- Market-closed actions remain WAIT / REFERENCE ONLY.
+- One-Brain trading logic, strategy scoring, barriers, option flow, journal and risk rules are unchanged.
+
+Validation
+- Python compileall: PASS
+- Snapshot-service regression tests: 12/12 PASS
+- Core decision/safety regression suite: 82 PASS, 2 Streamlit UI tests deselected because Streamlit is not installed in the local test environment.
+- New regression coverage:
+  1) after-hours missing NIFTY quote => last completed candle reference fallback
+  2) live-session missing NIFTY quote => still fails safely

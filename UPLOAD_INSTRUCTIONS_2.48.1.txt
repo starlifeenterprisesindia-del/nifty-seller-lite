@@ -1,0 +1,13 @@
+v2.48.1 MARKET CLOSED FALLBACK HOTFIX
+
+Recommended: upload/replace the complete cumulative package contents in GitHub.
+For patch-only upload, replace exactly:
+1. config.py
+2. services/snapshot_service.py
+
+Do NOT change Railway variables, Dhan token, Telegram secrets or /data persistent volume.
+After GitHub commit, let Railway redeploy/restart.
+Expected sidebar version:
+2.48.1_MARKET_CLOSED_FALLBACK
+
+After market close, if Dhan omits the NIFTY grouped quote, the app should load last completed market data and show reference-only state instead of a blank error page.

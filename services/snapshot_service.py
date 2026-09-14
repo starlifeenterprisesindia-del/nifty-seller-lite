@@ -452,11 +452,14 @@ class SnapshotService:
             CONFIG.nifty.exchange_segment,
             CONFIG.nifty.security_id,
         )
-        if not nifty_quote:
-            raise SnapshotBuildError("NIFTY quote missing from DhanHQ response")
-        nifty_price = self._positive_number(nifty_quote.get("last_price"))
-        if nifty_price is None:
-            raise SnapshotBuildError("NIFTY quote has an invalid last price")
+        # Dhan's grouped quote endpoint can legitimately omit IDX_I/13 outside the
+        # continuous cash session even while historical candles remain available.
+        # Do not blank the whole app after market close.  We defer the hard failure
+        # until completed candles are available, then use the last completed NIFTY
+        # close strictly as REFERENCE data.  During a normal live session a missing
+        # fresh quote still fails safely and can never authorize an entry.
+        nifty_price = self._positive_number((nifty_quote or {}).get("last_price"))
+        nifty_quote_fallback = False
         vix_quote = self._extract_quote(
             quote_response,
             vix_ref.exchange_segment,
@@ -523,7 +526,11 @@ class SnapshotService:
                 future_candle_error = str(exc)
         perf_mark("future_candles")
 
-        quote_age = self._quote_age_seconds(nifty_quote, current)
+        quote_age = (
+            None
+            if nifty_quote_fallback
+            else self._quote_age_seconds(nifty_quote, current)
+        )
         latest_1m_age = self._latest_candle_age_seconds(
             candles_1m, current, interval_minutes=1
         )
@@ -536,6 +543,35 @@ class SnapshotService:
             if not candles_1m.empty
             else None
         )
+
+        if nifty_price is None:
+            current_clock = current.time().replace(tzinfo=None)
+            outside_continuous_session = (
+                current.weekday() >= 5
+                or current_clock < CONFIG.market_open
+                or current_clock >= CONFIG.cas_start
+            )
+            # A holiday or stale-session feed can also have no current-day candle.
+            # In that case reference-only display is safer and more useful than a
+            # blank screen; classify_market_session below will keep execution blocked.
+            reference_fallback_allowed = outside_continuous_session or not has_current_day_candle
+            if not reference_fallback_allowed:
+                raise SnapshotBuildError("NIFTY quote missing from DhanHQ response")
+            if latest_spot_close is None:
+                raise SnapshotBuildError(
+                    "NIFTY quote missing and no completed candle fallback is available"
+                )
+            last_bar_at = pd.Timestamp(candles_1m.iloc[-1]["timestamp"])
+            nifty_price = float(latest_spot_close)
+            nifty_quote = {
+                "last_price": nifty_price,
+                "last_trade_time": last_bar_at.isoformat(),
+                "reference_only": True,
+                "source": "LAST_COMPLETED_NIFTY_1M_CANDLE",
+            }
+            nifty_quote_fallback = True
+            quote_age = None
+
         quote_candle_divergence = (
             abs(float(nifty_price) - float(latest_spot_close))
             if latest_spot_close is not None
@@ -585,12 +621,25 @@ class SnapshotService:
             ok=True,
             fetched_at=current,
             age_seconds=quote_age,
-            message="One grouped market-quote request",
-            use_state=feed_use_state(
-                available=True,
-                market_session=market_session,
-                age_seconds=quote_age,
-                max_live_age_seconds=CONFIG.quote_max_age_seconds,
+            message=(
+                "NIFTY grouped quote missing; last completed 1m candle used as reference-only fallback"
+                if nifty_quote_fallback
+                else "One grouped market-quote request"
+            ),
+            source=(
+                "DhanHQ completed NIFTY 1m candles"
+                if nifty_quote_fallback
+                else "DhanHQ"
+            ),
+            use_state=(
+                "REFERENCE"
+                if nifty_quote_fallback
+                else feed_use_state(
+                    available=True,
+                    market_session=market_session,
+                    age_seconds=quote_age,
+                    max_live_age_seconds=CONFIG.quote_max_age_seconds,
+                )
             ),
         )
         statuses["instruments"] = FeedStatus(
