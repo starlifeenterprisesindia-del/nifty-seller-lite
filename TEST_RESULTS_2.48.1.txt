@@ -1,7 +1,0 @@
-Nifty Seller Lite v2.48.1 validation
-
-PASS: python -m compileall -q .
-PASS: tests/test_snapshot_service.py => 12 passed
-PASS: core regression selection => 82 passed, 2 deselected
-
-The 2 deselected tests require streamlit.testing, but Streamlit is not installed in this local packaging environment. No logic/test assertion failed in the selected suite.
