@@ -14,6 +14,7 @@ or strike-quality inputs, but they are not separate direction votes here.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from math import isfinite
 from typing import Any
 
@@ -161,7 +162,9 @@ def _participation(snapshot: Any) -> tuple[float, float, float, float, tuple[str
         sources.append((top9, 0.45))
         notes.append(f"Top-9 B/D/N {top9[0]:.0f}/{top9[1]:.0f}/{top9[2]:.0f}")
     if not sources:
-        return 0.0, 0.0, 100.0, 0.0, ("Participation unavailable",)
+        # Missing evidence is not a RANGE vote.  Availability is carried by the
+        # confidence field and the block is removed from the scoring denominator.
+        return 0.0, 0.0, 0.0, 0.0, ("Participation unavailable",)
     total_w = sum(w for _, w in sources)
     bull = sum(v[0] * w for v, w in sources) / total_w
     bear = sum(v[1] * w for v, w in sources) / total_w
@@ -182,12 +185,112 @@ def _participation(snapshot: Any) -> tuple[float, float, float, float, tuple[str
     return bull, bear, neutral, confidence, tuple(notes[:3])
 
 
-def _barrier_state(snapshot: Any, direction: str) -> dict[str, Any]:
+def _barrier_state(
+    snapshot: Any,
+    direction: str,
+    previous_barrier: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     barrier_map = getattr(snapshot, "barrier_map", None)
     pa3 = snapshot.price_action.three_minute
     pa15 = snapshot.price_action.fifteen_minute
     atr = max(6.0, _num(getattr(pa3, "atr14", 0.0), 10.0))
     spot = _num(getattr(barrier_map, "current_price", None), _num(snapshot.nifty_quote.get("last_price")))
+    indicators = getattr(snapshot, "indicators", None)
+    three_minute_indicators = getattr(indicators, "three_minute", None)
+    completed_3m_close = _num(getattr(three_minute_indicators, "close", None), spot)
+    snapshot_at = getattr(snapshot, "created_at", None)
+
+    # Preserve the original break trigger while it is still valid.  This prevents
+    # a moving nearest-support/resistance calculation from moving the goalpost
+    # after the user has already been told which completed 3m close will confirm.
+    prior = previous_barrier if isinstance(previous_barrier, dict) else {}
+    armed_direction = str(prior.get("armed_direction") or "").upper()
+    armed_level = prior.get("armed_level")
+    armed_lower = prior.get("armed_lower")
+    armed_upper = prior.get("armed_upper")
+    armed_at = prior.get("armed_at")
+    armed_valid = False
+    if armed_direction == direction and armed_level is not None and armed_at:
+        try:
+            stamp = datetime.fromisoformat(str(armed_at))
+            now = snapshot_at
+            if now is None:
+                raise ValueError("Snapshot time unavailable")
+            if stamp.tzinfo is None and getattr(now, "tzinfo", None) is not None:
+                stamp = stamp.replace(tzinfo=now.tzinfo)
+            age_minutes = (now - stamp).total_seconds() / 60.0
+            armed_valid = 0 <= age_minutes <= float(CONFIG.simple_armed_trigger_minutes)
+        except (TypeError, ValueError):
+            armed_valid = False
+
+    break_pad = max(0.75, atr * 0.08)
+    invalidate_pad = max(2.0, atr * 0.35)
+
+    if armed_valid and direction == "DOWN":
+        armed_level_f = _num(armed_level)
+        upper_f = _num(armed_upper, armed_level_f)
+        if completed_3m_close < armed_level_f - break_pad:
+            current_support = getattr(barrier_map, "nearest_support", None) if barrier_map is not None else None
+            return {
+                "state": "BROKEN",
+                "score": 94.0,
+                "trigger": f"Armed support {armed_level_f:,.0f} ka completed 3m break confirmed",
+                "next_level": _num(getattr(current_support, "midpoint", None), 0.0) or None,
+                "note": f"Previous armed support {armed_level_f:,.0f} broken; goalpost freeze active",
+                "armed_direction": "DOWN",
+                "armed_level": armed_level_f,
+                "armed_lower": _num(armed_lower, armed_level_f),
+                "armed_upper": upper_f,
+                "armed_at": armed_at,
+                "armed_from_previous": True,
+            }
+        if completed_3m_close <= upper_f + invalidate_pad:
+            return {
+                "state": "UNDER ATTACK",
+                "score": max(72.0, _num(prior.get("score"), 72.0)),
+                "trigger": f"3m close < {armed_level_f:,.0f} par continuation ready",
+                "next_level": prior.get("next_level"),
+                "note": f"Armed support {armed_level_f:,.0f} retained until break/invalidation",
+                "armed_direction": "DOWN",
+                "armed_level": armed_level_f,
+                "armed_lower": _num(armed_lower, armed_level_f),
+                "armed_upper": upper_f,
+                "armed_at": armed_at,
+                "armed_from_previous": True,
+            }
+
+    if armed_valid and direction == "UP":
+        armed_level_f = _num(armed_level)
+        lower_f = _num(armed_lower, armed_level_f)
+        if completed_3m_close > armed_level_f + break_pad:
+            current_resistance = getattr(barrier_map, "nearest_resistance", None) if barrier_map is not None else None
+            return {
+                "state": "BROKEN",
+                "score": 94.0,
+                "trigger": f"Armed resistance {armed_level_f:,.0f} ka completed 3m break confirmed",
+                "next_level": _num(getattr(current_resistance, "midpoint", None), 0.0) or None,
+                "note": f"Previous armed resistance {armed_level_f:,.0f} broken; goalpost freeze active",
+                "armed_direction": "UP",
+                "armed_level": armed_level_f,
+                "armed_lower": lower_f,
+                "armed_upper": _num(armed_upper, armed_level_f),
+                "armed_at": armed_at,
+                "armed_from_previous": True,
+            }
+        if completed_3m_close >= lower_f - invalidate_pad:
+            return {
+                "state": "UNDER ATTACK",
+                "score": max(72.0, _num(prior.get("score"), 72.0)),
+                "trigger": f"3m close > {armed_level_f:,.0f} par continuation ready",
+                "next_level": prior.get("next_level"),
+                "note": f"Armed resistance {armed_level_f:,.0f} retained until break/invalidation",
+                "armed_direction": "UP",
+                "armed_level": armed_level_f,
+                "armed_lower": lower_f,
+                "armed_upper": _num(armed_upper, armed_level_f),
+                "armed_at": armed_at,
+                "armed_from_previous": True,
+            }
 
     if barrier_map is None or str(getattr(barrier_map, "status", "")).upper() not in {"READY", "REFERENCE ONLY"}:
         return {"state": "UNKNOWN", "score": 45.0, "trigger": "Barrier data ka wait", "next_level": None, "note": "Barrier unavailable"}
@@ -203,7 +306,7 @@ def _barrier_state(snapshot: Any, direction: str) -> dict[str, Any]:
         strength = _num(getattr(level, "strength", 50.0))
         pressure = _num(getattr(level, "break_pressure", 50.0))
         state = str(getattr(level, "state", "")).upper()
-        broken = "BROKEN" in state or (spot < _num(getattr(level, "lower", spot)) - max(0.75, atr * 0.08))
+        broken = "BROKEN" in state or (completed_3m_close < _num(getattr(level, "lower", spot)) - break_pad)
         attack = pressure >= strength - 6 and (event_confirmed or fast_bear)
         if broken:
             score, label = 92.0, "BROKEN"
@@ -217,12 +320,21 @@ def _barrier_state(snapshot: Any, direction: str) -> dict[str, Any]:
         else:
             score, label = 82.0, "OPEN ROOM"
             trigger = "Bearish continuation; nearest support tak room"
-        return {
+        result = {
             "state": label, "score": score, "trigger": trigger,
             "next_level": (_num(next_level.midpoint) if next_level is not None else None),
             "distance": distance, "strength": strength, "break_pressure": pressure,
             "note": f"Support {level.lower:,.0f}-{level.upper:,.0f} · strength {strength:.0f} · break {pressure:.0f}",
         }
+        if label == "UNDER ATTACK":
+            result.update(
+                armed_direction="DOWN",
+                armed_level=_num(level.lower),
+                armed_lower=_num(level.lower),
+                armed_upper=_num(level.upper),
+                armed_at=snapshot_at.isoformat() if snapshot_at is not None else None,
+            )
+        return result
 
     if direction == "UP":
         level = getattr(barrier_map, "nearest_resistance", None)
@@ -235,7 +347,7 @@ def _barrier_state(snapshot: Any, direction: str) -> dict[str, Any]:
         strength = _num(getattr(level, "strength", 50.0))
         pressure = _num(getattr(level, "break_pressure", 50.0))
         state = str(getattr(level, "state", "")).upper()
-        broken = "BROKEN" in state or (spot > _num(getattr(level, "upper", spot)) + max(0.75, atr * 0.08))
+        broken = "BROKEN" in state or (completed_3m_close > _num(getattr(level, "upper", spot)) + break_pad)
         attack = pressure >= strength - 6 and (event_confirmed or fast_bull)
         if broken:
             score, label = 92.0, "BROKEN"
@@ -249,12 +361,21 @@ def _barrier_state(snapshot: Any, direction: str) -> dict[str, Any]:
         else:
             score, label = 82.0, "OPEN ROOM"
             trigger = "Bullish continuation; nearest resistance tak room"
-        return {
+        result = {
             "state": label, "score": score, "trigger": trigger,
             "next_level": (_num(next_level.midpoint) if next_level is not None else None),
             "distance": distance, "strength": strength, "break_pressure": pressure,
             "note": f"Resistance {level.lower:,.0f}-{level.upper:,.0f} · strength {strength:.0f} · break {pressure:.0f}",
         }
+        if label == "UNDER ATTACK":
+            result.update(
+                armed_direction="UP",
+                armed_level=_num(level.upper),
+                armed_lower=_num(level.lower),
+                armed_upper=_num(level.upper),
+                armed_at=snapshot_at.isoformat() if snapshot_at is not None else None,
+            )
+        return result
 
     return {"state": "RANGE", "score": 60.0, "trigger": "Range dono taraf confirm ho", "next_level": None, "note": "Range entry needs two-sided room"}
 
@@ -267,13 +388,37 @@ def _direction_alignment(score_triplet: tuple[float, float, float], direction: s
     return score_triplet[2]
 
 
-def calculate_simple_brain(snapshot: Any, future: dict[str, Any] | None = None) -> dict[str, Any]:
+def calculate_simple_brain(
+    snapshot: Any,
+    future: dict[str, Any] | None = None,
+    previous_simple: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return one simple direction + entry decision from existing canonical evidence."""
     regime, regime_hint = _regime(snapshot)
     core = snapshot.core_evidence
     trend = _normalise_triplet(_num(core.bullish_score), _num(core.bearish_score), _num(core.range_score))
     options_obj = snapshot.option_intelligence
-    options = _normalise_triplet(_num(options_obj.bullish_score), _num(options_obj.bearish_score), _num(options_obj.range_score))
+    options_ready = (
+        str(getattr(options_obj, "status", "")).upper() == "READY"
+        and _num(getattr(options_obj, "confidence", 0.0)) > 0
+        and sum(
+            max(0.0, _num(value))
+            for value in (
+                getattr(options_obj, "bullish_score", 0.0),
+                getattr(options_obj, "bearish_score", 0.0),
+                getattr(options_obj, "range_score", 0.0),
+            )
+        ) > 0
+    )
+    options = (
+        _normalise_triplet(
+            _num(options_obj.bullish_score),
+            _num(options_obj.bearish_score),
+            _num(options_obj.range_score),
+        )
+        if options_ready
+        else (0.0, 0.0, 0.0)
+    )
     part_bull, part_bear, part_neutral, part_conf, part_notes = _participation(snapshot)
     participation = (part_bull, part_bear, part_neutral)
 
@@ -282,7 +427,7 @@ def calculate_simple_brain(snapshot: Any, future: dict[str, Any] | None = None) 
     # incapable of reaching an entry threshold.
     blocks: list[tuple[str, tuple[float, float, float], float, bool]] = [
         ("Trend", trend, 40.0, _num(getattr(core, "confidence", 0.0)) > 0),
-        ("Options", options, 25.0, str(getattr(options_obj, "status", "")).upper() not in {"UNAVAILABLE"}),
+        ("Options", options, 25.0, options_ready),
         ("Participation", participation, 20.0, part_conf > 0),
     ]
     available = sum(weight for _, _, weight, ready in blocks if ready) or 1.0
@@ -325,16 +470,27 @@ def calculate_simple_brain(snapshot: Any, future: dict[str, Any] | None = None) 
         elif regime == "TRANSITION":
             regime = f"{direction} TRANSITION"
 
-    barrier = _barrier_state(snapshot, direction)
+    previous_barrier = (
+        ((previous_simple or {}).get("blocks") or {}).get("barrier_entry")
+        if isinstance(previous_simple, dict)
+        else None
+    )
+    barrier = _barrier_state(snapshot, direction, previous_barrier)
     option_align = _direction_alignment(options, direction)
     participation_align = _direction_alignment(participation, direction)
     barrier_score = _num(barrier.get("score"), 45.0)
-    entry_readiness = round(_clamp(
-        direction_strength * 0.45
-        + option_align * 0.25
-        + participation_align * 0.15
-        + barrier_score * 0.15
-    ), 1)
+    entry_parts: list[tuple[float, float]] = [(direction_strength, 45.0), (barrier_score, 15.0)]
+    if options_ready:
+        entry_parts.append((option_align, 25.0))
+    if part_conf > 0:
+        entry_parts.append((participation_align, 15.0))
+    entry_weight = sum(weight for _, weight in entry_parts) or 1.0
+    entry_readiness = round(
+        _clamp(sum(value * weight for value, weight in entry_parts) / entry_weight),
+        1,
+    )
+    evidence_coverage = round(entry_weight, 1)
+    confirmation_blocks = int(options_ready) + int(part_conf > 0)
 
     # RSI is a chase-risk modifier only.  It never flips direction by itself.
     rsi = _num(getattr(snapshot.indicators.three_minute, "rsi14", None), -1.0)
@@ -381,7 +537,11 @@ def calculate_simple_brain(snapshot: Any, future: dict[str, Any] | None = None) 
         final_action = "WAIT"
         instruction = "Direction clear nahi — no trade"
     elif direction == "RANGE":
-        if entry_readiness >= 68 and barrier_state == "RANGE":
+        if not options_ready or part_conf <= 0:
+            entry_state = "DATA WAIT"
+            final_action = "WAIT"
+            instruction = "Range trade ke liye Options + Participation confirmation pending"
+        elif entry_readiness >= 68 and barrier_state == "RANGE":
             entry_state = "READY"
             final_action = action
             instruction = "Range balanced ho to protected Iron Condor"
@@ -399,6 +559,13 @@ def calculate_simple_brain(snapshot: Any, future: dict[str, Any] | None = None) 
         entry_state = "READY / BREAK TRIGGER"
         final_action = "WAIT"
         instruction = str(barrier.get("trigger") or "Break trigger armed")
+    elif (
+        confirmation_blocks < int(CONFIG.simple_min_confirmation_blocks)
+        and barrier_state != "BROKEN"
+    ):
+        entry_state = "DATA WAIT"
+        final_action = "WAIT"
+        instruction = "Trend clear hai; Options/Participation me se ek live confirmation pending"
     elif entry_readiness >= CONFIG.simple_entry_ready_score:
         entry_state = "TAKE NOW" if barrier_state in {"BROKEN", "OPEN ROOM"} else "READY"
         final_action = action
@@ -425,14 +592,16 @@ def calculate_simple_brain(snapshot: Any, future: dict[str, Any] | None = None) 
         "direction_strength": round(direction_strength, 1),
         "scores": {"up": bull, "down": bear, "range": neutral},
         "blocks": {
-            "trend": {"weight": 40, "bullish": trend[0], "bearish": trend[1], "neutral": trend[2]},
-            "options": {"weight": 25, "bullish": options[0], "bearish": options[1], "neutral": options[2], "confidence": _num(options_obj.confidence)},
-            "participation": {"weight": 20, "bullish": participation[0], "bearish": participation[1], "neutral": participation[2], "confidence": part_conf},
+            "trend": {"weight": 40, "bullish": trend[0], "bearish": trend[1], "neutral": trend[2], "available": True},
+            "options": {"weight": 25, "bullish": options[0], "bearish": options[1], "neutral": options[2], "confidence": _num(options_obj.confidence), "available": options_ready},
+            "participation": {"weight": 20, "bullish": participation[0], "bearish": participation[1], "neutral": participation[2], "confidence": part_conf, "available": part_conf > 0},
             "barrier_entry": {"weight": 15, **barrier},
         },
         "preferred_strategies": preferred,
         "candidate_action": action,
         "entry_readiness": round(entry_readiness, 1),
+        "evidence_coverage": evidence_coverage,
+        "confirmation_blocks": confirmation_blocks,
         "entry_state": entry_state,
         "final_action": final_action,
         "trigger": str(barrier.get("trigger") or instruction),

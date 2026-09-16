@@ -8,8 +8,35 @@ import streamlit as st
 from config import CONFIG
 
 
+def _decision_rows(store=None) -> list[dict[str, Any]]:
+    """Merge local decisions with Railway-persistent app decisions.
+
+    Railway is authoritative for live-session persistence.  Local rows are still
+    useful for the current Streamlit process and for reference-only snapshots.
+    """
+
+    local = store.load_decisions() if store is not None else []
+    report = st.session_state.get("day_memory_report") or {}
+    remote = report.get("app_decisions") or []
+    merged: dict[str, dict[str, Any]] = {}
+    for row in [*local, *remote]:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("at") or "")
+        if not key:
+            continue
+        merged[key] = dict(row)
+    return sorted(merged.values(), key=lambda row: str(row.get("at") or ""))
+
+
 def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> None:
-    today = str(getattr(store, "last_checked", ""))[:10]
+    decisions = _decision_rows(store)
+    report = st.session_state.get("day_memory_report") or {}
+    today = (
+        str(getattr(store, "last_checked", ""))[:10]
+        or str(report.get("day") or "")[:10]
+        or (str(decisions[-1].get("session_date") or "") if decisions else "")
+    )
     current = [item for item in entries if str(item.get("session_date")) == today]
     open_items = [item for item in current if str(item.get("status")).upper() == "OPEN"]
     with st.container(border=True):
@@ -20,14 +47,22 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> N
         except (OSError, ValueError):
             checks = []
         rejected = [row for row in checks if str(row.get("at", ""))[:10] == today and row.get("reason") != "READY"]
-        decisions = store.load_decisions() if store is not None else []
-        today_decisions = [row for row in decisions if str(row.get("session_date")) == today]
+        today_decisions = [
+            row for row in decisions
+            if str(row.get("session_date")) == today and bool(row.get("session_live", True))
+        ]
         cols = st.columns(5)
-        cols[0].metric("Decisions", len(today_decisions))
+        cols[0].metric("Live decisions", len(today_decisions))
         cols[1].metric("Paper trades", len(current))
         cols[2].metric("Open paper", len(open_items))
         cols[3].metric("Direction floor", f"{CONFIG.simple_direction_min_strength:.0f}%")
         cols[4].metric("Entry ready", f"{CONFIG.simple_entry_ready_score:.0f}%")
+        coverage = ((report.get("recording_coverage") or {}) if isinstance(report, dict) else {})
+        if coverage.get("app_session_status"):
+            st.caption(
+                f"Railway journal: {coverage.get('app_session_status')} · "
+                f"persistent rows {coverage.get('app_decision_rows', 0)}"
+            )
         if store is not None:
             st.caption(f"Last check: {store.last_checked or '—'} · Exact blocker: {store.last_blocker or '—'}")
 
@@ -52,13 +87,16 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
             history = []
         with st.expander("Signal / WAIT reasons history"):
             st.dataframe(history[-100:], width="stretch", hide_index=True)
-        decisions = store.load_decisions()
+        decisions = _decision_rows(store)
         with st.expander("Decision Journal — WAIT bhi record hota hai", expanded=True):
             today_decisions = [row for row in decisions if str(row.get("session_date")) == session_date]
             if today_decisions:
                 st.dataframe(pd.DataFrame(today_decisions[-120:]), width="stretch", hide_index=True)
             else:
-                st.info("Decision journal abhi warming up hai; next fresh snapshot par row banegi.")
+                st.info(
+                    "Is date par live app-decision record nahi mila. Agar app/token market hours me active "
+                    "nahi tha to yeh expected hai; missing session ko trading bug nahi maana jayega."
+                )
     dates = sorted({session_date, *(str(x.get("session_date")) for x in entries)}, reverse=True)
     selected_date = st.selectbox("Journal date", dates, key="shadow_history_date")
     today = [item for item in entries if str(item.get("session_date")) == selected_date]
@@ -135,7 +173,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
 
 def render_shadow_journal_download(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
     """Download one useful journal even when no paper trade was approved."""
-    decisions = store.load_decisions() if store is not None else []
+    decisions = _decision_rows(store)
     decision_rows = [row for row in decisions if str(row.get("session_date")) == session_date]
     if decision_rows:
         csv = pd.DataFrame(decision_rows).to_csv(index=False).encode("utf-8")

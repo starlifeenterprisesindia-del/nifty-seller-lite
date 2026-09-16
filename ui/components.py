@@ -1137,7 +1137,8 @@ def render_detailed_evidence(snapshot: MarketSnapshot) -> None:
             return "BEARISH"
         return "RANGE"
 
-    final_direction = evidence_direction(snapshot.decision.market_direction)
+    simple_direction = str((snapshot.metadata.get("simple_brain") or {}).get("direction") or "")
+    final_direction = evidence_direction(simple_direction or snapshot.decision.market_direction)
     sources = (
         evidence_direction(snapshot.core_evidence.market_state),
         evidence_direction(snapshot.option_intelligence.market_bias),
@@ -1192,6 +1193,12 @@ def render_main_ai_market_view(
             next_level = simple.get("next_level")
             if next_level is not None:
                 st.caption(f"Next level: {float(next_level):,.0f}")
+            coverage = simple.get("evidence_coverage")
+            if coverage is not None:
+                st.caption(
+                    f"Evidence coverage: {float(coverage):.0f}% · "
+                    "missing block ko RANGE/neutral vote nahi maana jata."
+                )
             with st.expander("4 core blocks — calculation", expanded=False):
                 blocks = simple.get("blocks") or {}
                 rows = []
@@ -1201,6 +1208,7 @@ def render_main_ai_market_view(
                     rows.append({
                         "Block": key.replace("_", " ").title(),
                         "Weight": value.get("weight"),
+                        "Available": value.get("available", "—"),
                         "Bull": value.get("bullish", "—"),
                         "Bear": value.get("bearish", "—"),
                         "Neutral/State": value.get("neutral", value.get("state", "—")),

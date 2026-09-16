@@ -175,7 +175,9 @@ class ShadowJournalStore:
         try:
             decisions = self.load_decisions()
             now = snapshot.created_at
-            if spot is not None:
+            market_session = getattr(snapshot, "market_session", None)
+            session_live = bool(getattr(market_session, "is_live", True))
+            if spot is not None and session_live:
                 for row in decisions:
                     try:
                         opened = datetime.fromisoformat(str(row.get("at")))
@@ -196,6 +198,7 @@ class ShadowJournalStore:
             current = {
                 "at": now.isoformat(),
                 "session_date": now.date().isoformat(),
+                "session_live": session_live,
                 "spot": spot,
                 "regime": str(simple.get("regime") or ""),
                 "direction": str(simple.get("direction") or snapshot.decision.market_direction),

@@ -49,6 +49,7 @@ def app_observation(snapshot):
                   "spot": snapshot.nifty_quote.get("last_price"), "legs": legs if valid else [],
                   "simple_brain": {k: simple.get(k) for k in (
                       "engine", "regime", "direction", "direction_strength", "entry_readiness",
+                      "evidence_coverage", "confirmation_blocks",
                       "entry_state", "candidate_action", "final_action", "trigger", "next_level",
                       "risk_notes", "reasons")},
                   "future_brain": {k: future.get(k) for k in (

@@ -40,6 +40,12 @@ def direction_evidence_score(snapshot: MarketSnapshot) -> float:
     bullish/bearish/range component already present in CoreMarketEvidence.
     """
 
+    simple = (getattr(snapshot, "metadata", {}) or {}).get("simple_brain") or {}
+    if simple:
+        try:
+            return float(simple.get("direction_strength") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
     direction = snapshot.decision.market_direction
     if direction == "BULLISH":
         return float(snapshot.core_evidence.bullish_score)
@@ -50,6 +56,22 @@ def direction_evidence_score(snapshot: MarketSnapshot) -> float:
 
 def unified_direction_line(snapshot: MarketSnapshot) -> str:
     """Explain canonical direction, fit and strongest weighted inputs only."""
+    simple = (getattr(snapshot, "metadata", {}) or {}).get("simple_brain") or {}
+    if simple:
+        direction = str(simple.get("direction") or "MIXED").upper()
+        strength = float(simple.get("direction_strength") or 0.0)
+        regime = str(simple.get("regime") or "TRANSITION")
+        entry = str(simple.get("entry_state") or "WAIT")
+        coverage = simple.get("evidence_coverage")
+        coverage_text = (
+            f" · evidence coverage {float(coverage):.0f}%"
+            if coverage is not None
+            else ""
+        )
+        return (
+            f"Simple One-Brain {direction} {strength:.1f}/100 · {regime} · entry {entry}"
+            f"{coverage_text}. Missing block ko neutral/range vote nahi maana jata."
+        )
     decision = snapshot.decision
     direction = str(decision.market_direction or "MIXED").upper()
     core_state = str(snapshot.core_evidence.market_state or "").upper()

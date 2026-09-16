@@ -147,7 +147,10 @@ def compact(snapshot, tracked_strikes=()):
 
 
 class DayMemory:
-    EXPORT_TABLES = ("meta", "samples", "candles", "events", "zones", "cycle_summaries", "signals", "outcomes")
+    EXPORT_TABLES = (
+        "meta", "samples", "candles", "events", "zones", "cycle_summaries",
+        "signals", "outcomes", "app_decisions",
+    )
 
     def _write_export(self, db, destination):
         """Allowlisted market evidence, transaction-consistent, no runtime secrets."""
@@ -214,6 +217,11 @@ class DayMemory:
                 CREATE TABLE IF NOT EXISTS signals (id INTEGER PRIMARY KEY, at TEXT, body TEXT);
                 CREATE TABLE IF NOT EXISTS outcomes (signal_id INTEGER, horizon INTEGER, body TEXT,
                     PRIMARY KEY(signal_id,horizon));
+                CREATE TABLE IF NOT EXISTS app_decisions (
+                    minute TEXT PRIMARY KEY,
+                    at TEXT NOT NULL,
+                    body TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS events_time ON events(at);
             """)
         self.prune_archives()
@@ -283,7 +291,7 @@ class DayMemory:
             self._archive_cycle(db, cycle[0])
             # Archive + purge are one transaction. Failure rolls both back.
             db.execute("DELETE FROM cycle_summaries WHERE expiry NOT IN (SELECT expiry FROM cycle_summaries ORDER BY expiry DESC LIMIT 8)")
-            for table in ("samples", "candles", "events", "state", "zones", "signals", "outcomes"):
+            for table in ("samples", "candles", "events", "state", "zones", "signals", "outcomes", "app_decisions"):
                 db.execute(f"DELETE FROM {table}")
             db.execute("INSERT OR REPLACE INTO meta VALUES ('cycle',?)", (expiry,))
             db.execute("DELETE FROM meta WHERE key='cycle_price_strikes'")
@@ -420,11 +428,50 @@ class DayMemory:
         if at.tzinfo is None or not 0 <= (now - at).total_seconds() <= 120 or not recording_time(now):
             return False
         with self.connect() as db:
+            # App decisions must not depend on the background observer winning the
+            # first market-minute request race.  Initialise/roll the current session
+            # from the app's validated expiry before checking the day marker.
             row = db.execute("SELECT value FROM meta WHERE key='day'").fetchone()
+            target_day = at.astimezone(IST).date().isoformat()
+            if not row or row[0] != target_day:
+                expiry = str(body.get("expiry") or "")
+                try:
+                    date.fromisoformat(expiry)
+                    self._roll(db, target_day, expiry)
+                except (TypeError, ValueError):
+                    return False
+                row = db.execute("SELECT value FROM meta WHERE key='day'").fetchone()
             if not row or row[0] != at.astimezone(IST).date().isoformat():
                 return False
             self._event(db, at.isoformat(), "APP AI", "actual", {"action": str(body.get("action", ""))[:80],
                 "reason": str(body.get("reason", ""))[:400], "version": str(body.get("version", ""))[:80]})
+            # Durable one-row-per-minute app journal.  The Streamlit container can
+            # restart independently of Railway, so operational decisions must live
+            # beside the persistent expiry recorder rather than only in local files.
+            simple = body.get("simple_brain") if isinstance(body.get("simple_brain"), dict) else {}
+            decision = clean({
+                "at": at.isoformat(),
+                "session_date": at.astimezone(IST).date().isoformat(),
+                "session_live": True,
+                "spot": body.get("spot"),
+                "regime": simple.get("regime"),
+                "direction": simple.get("direction"),
+                "direction_strength": simple.get("direction_strength"),
+                "entry_readiness": simple.get("entry_readiness"),
+                "evidence_coverage": simple.get("evidence_coverage"),
+                "entry_state": simple.get("entry_state"),
+                "candidate_action": body.get("candidate") or simple.get("candidate_action"),
+                "final_action": body.get("action") or simple.get("final_action"),
+                "trigger": simple.get("trigger"),
+                "next_level": simple.get("next_level"),
+                "reason": body.get("reason"),
+                "version": body.get("version"),
+            })
+            minute = at.astimezone(IST).replace(second=0, microsecond=0).isoformat()
+            db.execute(
+                "INSERT OR REPLACE INTO app_decisions(minute,at,body) VALUES (?,?,?)",
+                (minute, at.isoformat(), encode(decision)),
+            )
             db.execute("INSERT OR REPLACE INTO meta VALUES ('app_heartbeat',?)", (at.isoformat(),))
             from services.cycle_outcomes import record_signal
             record_signal(db, body)
@@ -440,6 +487,9 @@ class DayMemory:
             summaries = [json.loads(r[0]) for r in db.execute("SELECT body FROM cycle_summaries ORDER BY expiry DESC")]
             outcomes = [{"at": a, "horizon_minutes": h, **json.loads(b)} for a,h,b in db.execute(
                 "SELECT signals.at,outcomes.horizon,outcomes.body FROM outcomes JOIN signals ON signals.id=outcomes.signal_id ORDER BY signals.id DESC,horizon LIMIT 200")]
+            app_decisions = [json.loads(r[0]) for r in db.execute(
+                "SELECT body FROM app_decisions ORDER BY at DESC LIMIT 500"
+            )]
             recent = [json.loads(r[0]) for r in db.execute("SELECT body FROM samples ORDER BY at DESC LIMIT 20")]
             from analysis.cycle_prices import cycle_prices
             # Read only price fields, not full evidence payloads; no new feed calls.
@@ -476,6 +526,12 @@ class DayMemory:
             last_app = db.execute("SELECT MAX(at) FROM events WHERE kind='APP AI'").fetchone()[0]
             coverage["last_app_ai_at"] = last_app
             coverage["last_app_heartbeat_at"] = meta.get("app_heartbeat")
+            coverage["app_decision_rows"] = db.execute("SELECT COUNT(*) FROM app_decisions").fetchone()[0]
+            coverage["app_session_status"] = (
+                "LIVE APP DECISIONS RECORDED"
+                if coverage["app_decision_rows"]
+                else "NO LIVE APP DECISIONS RECORDED"
+            )
             archive_files = list((self.pathpath.parent / "archives").glob("*-evidence.jsonl.gz"))
             coverage["archive_files"] = len(archive_files)
             coverage["archive_bytes"] = sum(item.stat().st_size for item in archive_files if item.is_file())
@@ -505,6 +561,7 @@ class DayMemory:
         return {"day": meta.get("day"), "counts": counts, "first": span[0], "last": span[1],
                 "last_error": json.loads(meta.get("last_error", "null")), "events": events,
                 "cycle_expiry": meta.get("cycle"), "cycle_summaries": summaries, "outcomes": outcomes,
+                "app_decisions": app_decisions,
                 "zone_history": zone_history,
                 "cycle_prices": cycle_view,
                 "recording_coverage": coverage,
