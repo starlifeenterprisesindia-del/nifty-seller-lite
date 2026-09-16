@@ -1,0 +1,47 @@
+Nifty Seller Lite v2.49.0 — SIGNAL / JOURNAL STABILITY
+
+Purpose
+- Fix the remaining WAIT-loop / moving-trigger behaviour without adding more indicators or a second brain.
+- Make missing evidence truly unavailable instead of silently turning it into a RANGE/neutral vote.
+- Make the live Decision Journal durable on Railway persistent storage.
+
+Important audit correction
+- 16-Sep-2026 is NOT used as a live-session performance failure: the app/token was not active during market hours that day.
+- A post-close/reference snapshot on that date is valid only for reference diagnostics, not for judging live signals or journal coverage.
+
+What changed
+1) Missing evidence != RANGE
+- Options Flow contributes only when status is READY and has usable directional scores.
+- Participation contributes only when a usable Futures/Top-9 source exists.
+- Unavailable blocks now show 0/0/0 + UNAVAILABLE/NO VOTE and are removed from scoring denominators.
+- Entry readiness is normalized over evidence that actually exists; Evidence Coverage is shown separately.
+
+2) Barrier trigger goalpost freeze
+- UNDER ATTACK stores the exact support/resistance trigger and timestamp.
+- The original trigger stays armed for a bounded window instead of moving to the next newly calculated barrier.
+- A completed 3-minute close through the armed level marks the barrier BROKEN and can release TAKE NOW if the remaining One-Brain conditions are satisfied.
+- The trigger can invalidate if price clearly retreats away from it; it is not armed forever.
+
+3) One Simple Brain presentation consistency
+- Main PDF / Quick PDF headline direction and strength now read the Simple One-Brain operational view.
+- The detailed on-screen direction caption also uses Simple One-Brain when available.
+- Legacy/core modules remain diagnostic/background only.
+
+4) Durable Decision Journal
+- Railway DayMemory now stores one live app decision per minute in persistent volume storage.
+- The journal can initialize from the app event even if the background recorder has not yet won the first-minute request race.
+- Streamlit local decisions and Railway-persistent decisions are merged for display/download.
+- Journal status explicitly shows LIVE decisions and Railway persistent row count.
+- If app/token was not active during market hours, zero live decisions is labelled as expected missing-session coverage, not a strategy bug.
+
+5) Safety retained
+- Future Brain remains advisory only.
+- Market-closed/reference data cannot release a live trade.
+- Quotes/candles/option-chain live checks and price progression safety remain hard blockers.
+- No broker order placement was added.
+
+Historical evidence used for the regression
+- 15-Sep-2026 APP AI events show WAIT with an armed 23,345 support trigger at 10:43 and later a 23,296/23,297 trigger around 12:56-13:02, followed by a newly moved 23,247 trigger at 13:11. The new armed-trigger regression prevents that moving-goalpost pattern inside a continuous live session.
+
+Version
+- 2.49.0_SIGNAL_JOURNAL_STABILITY

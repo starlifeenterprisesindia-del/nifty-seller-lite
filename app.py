@@ -671,7 +671,16 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
     # v2.48: one simple authority. Future Brain remains advisory and cannot create
     # a second hard WAIT gate.
     future_view = snapshot.metadata["future_brain"]
-    snapshot.metadata["simple_brain"] = calculate_simple_brain(snapshot, future_view)
+    previous_simple = (
+        (getattr(previous_snapshot, "metadata", {}) or {}).get("simple_brain")
+        if previous_snapshot is not None
+        else None
+    )
+    snapshot.metadata["simple_brain"] = calculate_simple_brain(
+        snapshot,
+        future_view,
+        previous_simple=previous_simple,
+    )
     simple_view = snapshot.metadata["simple_brain"]
     # SnapshotService already built every protected CE/PE/Condor plan. Reuse that
     # bundle and only activate the Simple-Brain candidate; avoid an expensive second

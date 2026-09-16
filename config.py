@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.48.1_MARKET_CLOSED_FALLBACK"
+    version: str = "2.49.0_SIGNAL_JOURNAL_STABILITY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -168,6 +168,14 @@ class AppConfig:
     simple_execution_required_confirmations: int = 1
     simple_decision_journal_interval_seconds: int = 60
     simple_priority_snapshot_cooldown_seconds: int = 12
+    # Keep a support/resistance break trigger armed long enough for the market to
+    # actually cross it.  Without this memory the nearest barrier can move with
+    # price and the app can keep saying WAIT after the original trigger broke.
+    simple_armed_trigger_minutes: int = 20
+    # A directional entry normally needs Trend plus at least one live confirmation
+    # block (Options or Participation).  A completed 3m break of an already armed
+    # barrier can release the setup even while one confirmation lane is warming.
+    simple_min_confirmation_blocks: int = 1
     decision_wait_block_threshold: float = 60.0
     decision_min_option_confidence: float = 58.0
     decision_min_core_confidence: float = 55.0

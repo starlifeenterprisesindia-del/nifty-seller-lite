@@ -1,4 +1,4 @@
-# Nifty Seller Lite 2.48 — Simple One-Brain
+# Nifty Seller Lite 2.49 — Simple One-Brain Stability
 
 Read-only NIFTY options decision-support app built around one simple operational path:
 
@@ -8,7 +8,7 @@ The app keeps the existing rich market evidence, protected strike planner, barri
 
 Confirmed 15m breakout/breakdown is treated as a directional regime; RSI extremes are chase-risk only; Future Brain is advisory only; Big Player is confirmation inside Participation; VIX/FII-DII/news/Greeks/patterns retain their appropriate risk, context or strike-quality roles without becoming separate direction gates.
 
-The Decision Journal records WAIT/READY/ENTRY observations and later observed +5m/+15m/+30m outcomes, while the Paper Trade Journal remains restricted to protected gate-passed simulations. The 5-second Fast Monitor can trigger a priority full snapshot on a major move but never places or decides a trade itself.
+The Decision Journal records WAIT/READY/ENTRY observations and later observed +5m/+15m/+30m outcomes. Live app decisions are also mirrored into Railway persistent expiry storage, while the Paper Trade Journal remains restricted to protected gate-passed simulations. The 5-second Fast Monitor can trigger a priority full snapshot on a major move but never places or decides a trade itself.
 
 ## Main screen
 
