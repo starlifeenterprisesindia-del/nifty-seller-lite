@@ -201,3 +201,34 @@ def test_one_day_size(tmp_path):
     assert report["counts"]["candles"] == 750
     assert report["bytes"] < 15 * 1048576
     print("Synthetic day SQLite bytes:", report["bytes"])
+
+
+def test_app_event_can_initialize_persistent_decision_journal_before_background_sample(tmp_path):
+    store = DayMemory(tmp_path / "day.sqlite3")
+    at = datetime(2026, 9, 15, 10, 0, tzinfo=IST)
+    event = {
+        "at": at.isoformat(),
+        "expiry": "2026-09-22",
+        "spot": 23450.0,
+        "action": "WAIT",
+        "candidate": "CE SELL",
+        "reason": "WAIT FOR BREAK",
+        "version": "2.49.0_SIGNAL_JOURNAL_STABILITY",
+        "fresh": True,
+        "simple_brain": {
+            "regime": "BREAKDOWN STARTING",
+            "direction": "DOWN",
+            "direction_strength": 71.0,
+            "entry_readiness": 60.0,
+            "evidence_coverage": 85.0,
+            "entry_state": "READY / BREAK TRIGGER",
+            "candidate_action": "CE SELL",
+            "final_action": "WAIT",
+            "trigger": "3m close < 23440",
+        },
+    }
+    assert store.app_event(at, event)
+    report = store.report()
+    assert report["recording_coverage"]["app_decision_rows"] == 1
+    assert report["app_decisions"][0]["direction"] == "DOWN"
+    assert report["app_decisions"][0]["session_live"] is True

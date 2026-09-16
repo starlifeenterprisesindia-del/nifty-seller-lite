@@ -307,3 +307,36 @@ def test_repeated_timestamped_spot_bars_are_detected_as_flatline():
     assert SnapshotService._spot_flatline_run(frame, now) == 10
     frame.loc[len(frame) - 1, "close"] = 23981.0
     assert SnapshotService._spot_flatline_run(frame, now) == 1
+
+class MissingNiftyQuoteClient(StubClient):
+    def market_quote(self, grouped):
+        response = super().market_quote(grouped)
+        response["data"]["IDX_I"].pop(CONFIG.nifty.security_id, None)
+        return response
+
+
+def test_market_closed_missing_nifty_quote_uses_last_completed_candle_reference():
+    service = SnapshotService(MissingNiftyQuoteClient(), StubMaster())
+    snapshot = service.build(datetime(2026, 7, 17, 17, 45, tzinfo=IST))
+    assert snapshot.market_session.code == "CLOSED_AFTER_HOURS"
+    assert snapshot.market_session.is_live is False
+    assert snapshot.nifty_quote["reference_only"] is True
+    assert snapshot.nifty_quote["source"] == "LAST_COMPLETED_NIFTY_1M_CANDLE"
+    assert snapshot.feed_status["quotes"].use_state == "REFERENCE"
+    assert "fallback" in snapshot.feed_status["quotes"].message.lower()
+
+
+class LiveMissingNiftyQuoteClient(LiveStaleVixClient):
+    def market_quote(self, grouped):
+        response = super().market_quote(grouped)
+        response["data"]["IDX_I"].pop(CONFIG.nifty.security_id, None)
+        return response
+
+
+def test_live_session_missing_nifty_quote_still_fails_safely():
+    from services.errors import SnapshotBuildError
+    import pytest
+
+    service = SnapshotService(LiveMissingNiftyQuoteClient(), StubMaster())
+    with pytest.raises(SnapshotBuildError, match="NIFTY quote missing"):
+        service.build(datetime(2026, 7, 20, 10, 0, tzinfo=IST))

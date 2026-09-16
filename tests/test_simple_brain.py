@@ -103,3 +103,65 @@ def test_broken_support_can_release_take_now():
     assert result["blocks"]["barrier_entry"]["state"] == "BROKEN"
     assert result["entry_state"] == "TAKE NOW"
     assert result["final_action"] == "CE SELL"
+
+
+def test_missing_option_and_participation_are_not_fake_range_votes():
+    snapshot, future = _snapshot()
+    snapshot.option_intelligence = NS(
+        bullish_score=0.0,
+        bearish_score=0.0,
+        range_score=0.0,
+        confidence=20.0,
+        status="WARMING UP",
+    )
+    snapshot.volume = NS(
+        three_minute=NS(status="UNAVAILABLE", confidence=0.0, move_support="", price_direction=""),
+        fifteen_minute=NS(status="UNAVAILABLE", confidence=0.0, move_support="", price_direction=""),
+    )
+    snapshot.heavyweights = NS(rows=())
+    result = calculate_simple_brain(snapshot, future)
+    assert result["direction"] == "DOWN"
+    assert result["blocks"]["options"]["available"] is False
+    assert result["blocks"]["participation"]["available"] is False
+    assert result["blocks"]["options"]["neutral"] == 0.0
+    assert result["blocks"]["participation"]["neutral"] == 0.0
+    assert result["evidence_coverage"] < 100.0
+
+
+def test_armed_support_trigger_does_not_move_goalpost_after_break():
+    from datetime import datetime, timedelta, timezone
+
+    first, future = _snapshot()
+    first.created_at = datetime(2026, 9, 15, 12, 56, tzinfo=timezone.utc)
+    first.indicators.three_minute.close = 23462.0
+    armed = calculate_simple_brain(first, future)
+    assert armed["blocks"]["barrier_entry"]["state"] == "UNDER ATTACK"
+    assert armed["blocks"]["barrier_entry"]["armed_level"] == 23447.0
+
+    second, future = _snapshot(
+        support_state="APPROACHING",
+        support_strength=60.0,
+        support_break=61.0,
+        support_distance=4.0,
+    )
+    second.created_at = first.created_at + timedelta(minutes=3)
+    second.barrier_map.current_price = 23440.0
+    second.nifty_quote["last_price"] = 23440.0
+    second.indicators.three_minute.close = 23440.0
+    # The newly calculated nearest support has moved lower, but the earlier
+    # 23,447 trigger must remain authoritative until it breaks or invalidates.
+    second.barrier_map.nearest_support = NS(
+        lower=23417.0,
+        upper=23424.0,
+        midpoint=23420.5,
+        distance_points=16.0,
+        strength=60.0,
+        break_pressure=61.0,
+        state="APPROACHING",
+    )
+    result = calculate_simple_brain(second, future, previous_simple=armed)
+    assert result["blocks"]["barrier_entry"]["state"] == "BROKEN"
+    assert result["blocks"]["barrier_entry"]["armed_from_previous"] is True
+    assert "23,447" in result["trigger"]
+    assert result["entry_state"] == "TAKE NOW"
+    assert result["final_action"] == "CE SELL"
