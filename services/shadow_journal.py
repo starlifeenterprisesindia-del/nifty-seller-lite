@@ -143,32 +143,39 @@ class ShadowJournalStore:
             spot = float(spot) if spot is not None else None
         except (TypeError, ValueError):
             spot = None
+        local_clock = snapshot.created_at.timetz().replace(tzinfo=None)
+        journal_open = bool(
+            snapshot.created_at.weekday() < 5
+            and CONFIG.simple_decision_journal_start <= local_clock <= CONFIG.simple_decision_journal_end
+        )
 
-        # Keep the compact legacy signal history for existing UI/tests.
+        # Keep the compact signal history only inside the clean user-facing
+        # 09:30-15:00 learning window.  Late snapshots may still backfill outcomes.
         signal_path = self.path.with_suffix(".signals.json")
-        try:
-            history = json.loads(signal_path.read_text()) if signal_path.exists() else []
-            if not isinstance(history, list):
-                history = []
-            record = {
-                "at": self.last_checked,
-                "action": str(simple.get("final_action") or snapshot.decision.final_action),
-                "candidate": str(simple.get("candidate_action") or snapshot.trade_plan.selected_setup),
-                "reason": reason,
-                "score": float(simple.get("direction_strength") or _strategy_score(snapshot, snapshot.trade_plan.selected_setup)),
-                "confidence": float(simple.get("entry_readiness") or snapshot.decision.decision_confidence),
-            }
-            signature = (record["action"], record["candidate"], record["reason"], int(record["score"] // 5))
-            previous = history[-1] if history else {}
-            old = (previous.get("action"), previous.get("candidate"), previous.get("reason"), int(previous.get("score", 0) // 5))
-            if signature != old:
-                history.append(record)
-                signal_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = signal_path.with_suffix(".tmp")
-                temporary.write_text(json.dumps(history[-2000:]))
-                os.replace(temporary, signal_path)
-        except (OSError, ValueError, TypeError) as exc:
-            self.last_error = f"Signal log failed: {type(exc).__name__}"
+        if journal_open:
+            try:
+                history = json.loads(signal_path.read_text()) if signal_path.exists() else []
+                if not isinstance(history, list):
+                    history = []
+                record = {
+                    "at": self.last_checked,
+                    "action": str(simple.get("final_action") or snapshot.decision.final_action),
+                    "candidate": str(simple.get("candidate_action") or snapshot.trade_plan.selected_setup),
+                    "reason": reason,
+                    "score": float(simple.get("direction_strength") or _strategy_score(snapshot, snapshot.trade_plan.selected_setup)),
+                    "confidence": float(simple.get("entry_readiness") or snapshot.decision.decision_confidence),
+                }
+                signature = (record["action"], record["candidate"], record["reason"], int(record["score"] // 5))
+                previous = history[-1] if history else {}
+                old = (previous.get("action"), previous.get("candidate"), previous.get("reason"), int(previous.get("score", 0) // 5))
+                if signature != old:
+                    history.append(record)
+                    signal_path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = signal_path.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(history[-2000:]))
+                    os.replace(temporary, signal_path)
+            except (OSError, ValueError, TypeError) as exc:
+                self.last_error = f"Signal log failed: {type(exc).__name__}"
 
         # Full decision journal: bounded, one row/minute or immediately on a state
         # change.  Later snapshots backfill missed-move outcomes.
@@ -232,7 +239,7 @@ class ShadowJournalStore:
                     for key in ("regime", "direction", "entry_state", "candidate_action", "final_action", "barrier_state")
                 )
                 append = changed or elapsed >= CONFIG.simple_decision_journal_interval_seconds
-            if append:
+            if journal_open and append:
                 decisions.append(current)
             self._save_decisions(decisions)
         except (OSError, ValueError, TypeError) as exc:

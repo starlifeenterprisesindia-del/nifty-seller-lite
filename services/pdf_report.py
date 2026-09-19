@@ -1171,7 +1171,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
         _table(
             [
                 "Side",
-                "Wall",
+                "Near-ATM Wall",
                 "OI",
                 "Previous",
                 "Migration",
@@ -1193,6 +1193,19 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             compact=True,
         )
     )
+    global_walls = (snapshot.metadata or {}).get("global_oi_walls") or {}
+    if global_walls:
+        story.append(
+            _table(
+                ["Side", "Global Max OI Strike", "Global Max OI"],
+                [
+                    [side, (global_walls.get(side) or {}).get("strike"), (global_walls.get(side) or {}).get("oi")]
+                    for side in ("CE", "PE")
+                ],
+                widths=[35 * mm, 70 * mm, 70 * mm],
+                compact=True,
+            )
+        )
     pcr = option.pcr
     story.append(
         _table(

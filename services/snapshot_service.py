@@ -53,6 +53,30 @@ from services.shared_history import bounded
 IST = ZoneInfo(IST_TIMEZONE)
 
 
+def _global_oi_walls(frame: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Return true full-chain max-OI CE/PE walls without another broker call.
+
+    The operational Options Intelligence intentionally works on the near-ATM window.
+    This helper is presentation-only context so users can distinguish a local wall
+    from the broker's global max OI strike.
+    """
+    required = {"side", "strike", "oi"}
+    if frame is None or frame.empty or not required.issubset(frame.columns):
+        return {}
+    source = frame.copy()
+    source["strike"] = pd.to_numeric(source["strike"], errors="coerce")
+    source["oi"] = pd.to_numeric(source["oi"], errors="coerce")
+    source["side"] = source["side"].astype(str).str.upper()
+    result: dict[str, dict[str, float]] = {}
+    for side in ("CE", "PE"):
+        rows = source[source["side"].eq(side)].dropna(subset=["strike", "oi"])
+        if rows.empty:
+            continue
+        row = rows.loc[rows["oi"].idxmax()]
+        result[side] = {"strike": float(row["strike"]), "oi": float(row["oi"])}
+    return result
+
+
 class SnapshotService:
     @classmethod
     def background_observer(cls, client, root):
@@ -755,6 +779,7 @@ class SnapshotService:
         option_frame = pd.DataFrame()
         validated_option_frame = pd.DataFrame()
         full_option_frame = pd.DataFrame()
+        global_oi_walls: dict[str, dict[str, float]] = {}
         option_spot: float | None = None
         option_integrity_ok = False
         option_integrity_message = "Option chain unavailable"
@@ -784,6 +809,7 @@ class SnapshotService:
                 )
                 option_spot, full_chain = option_chain_to_frame(response)
                 full_option_frame = full_chain.copy()
+                global_oi_walls = _global_oi_walls(full_option_frame)
                 spot = option_spot or nifty_price
                 option_frame = select_atm_window(
                     full_chain, spot, CONFIG.option_strikes_each_side
@@ -1415,6 +1441,7 @@ class SnapshotService:
                 "future_security_id": future_ref.security_id if future_ref else None,
                 "future_expiry": future_ref.expiry if future_ref else None,
                 "future_volume_resolved": future_candle_available,
+                "global_oi_walls": global_oi_walls,
                 "option_state_prior_snapshots": len(option_history),
                 "option_state_current_stored": state_appended,
                 "top9_weight_date": CONFIG.top9_weight_date,

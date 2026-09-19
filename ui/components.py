@@ -574,10 +574,9 @@ def render_evidence_matrix(
 ) -> None:
     st.subheader("All Features — Compact Evidence")
     st.caption(
-        "11 compact rows same One-Brain ki Bull/Bear/Neutral evidence dikhati hain. "
-        "Canonical calculation: Core 40%, OI 15%, futures volume 10%, "
-        "Futures+Top-9 activity 10%, barrier room 15%, special candle/W-M 10%. "
-        "Shared rows ko do baar add nahi kiya jata; koi second brain nahi."
+        "Diagnostic evidence view — final Simple One-Brain ka operational weight sirf: "
+        "Trend 40% · Options 25% · Participation 20% · Barrier/Entry 15%. "
+        "Neeche ke 11 rows raw/background evidence samjhane ke liye hain; inko dobara add karke second brain nahi banta."
     )
     rows = build_compact_evidence_matrix(snapshot, previous_snapshot)
     previous_rows = (
@@ -964,7 +963,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
             {
                 "Rank": rank,
                 "Strategy": name,
-                "Fit / Confidence": f"{strategy.score:.0f}%",
+                "Brain Fit": f"{strategy.score:.0f}%",
                 "Strike + Hedge": _plan_structure_text(plan),
                 "Premium": premium,
                 "Status": status,
@@ -996,7 +995,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         for name in ranked:
             plan = plan_map[name]
             premium, value_grade = _premium_value(plan)
-            details.append({"Strategy": name, "Premium": premium, "Decay": " | ".join([r for r in plan.reasons if r.startswith('Theta edge')]) or "—", "Value": f"{value_grade} · {plan.quality_score:.0f}/100"})
+            details.append({"Strategy": name, "Premium": premium, "Decay": " | ".join([r for r in plan.reasons if r.startswith('Theta edge')]) or "—", "Strike/Pair Quality": f"{value_grade} · {plan.quality_score:.0f}/100"})
         st.dataframe(details, width="stretch", hide_index=True)
         _render_pair_comparison(plan_map)
     if not snapshot.market_session.is_live:
@@ -1175,12 +1174,17 @@ def render_main_ai_market_view(
         common = snapshot.metadata.get("common_decision") or {}
         if simple:
             st.markdown("### 🎯 One Simple Decision")
+            entry_state = str(simple.get("entry_state") or "WAIT")
             a, b, c, d = st.columns(4)
             a.metric("MARKET", f"{simple.get('direction', 'MIXED')} {float(simple.get('direction_strength') or 0):.0f}%")
             b.metric("REGIME", str(simple.get("regime") or "TRANSITION"))
-            c.metric("ENTRY", f"{float(simple.get('entry_readiness') or 0):.0f}/100")
+            c.metric(
+                "ENTRY",
+                "DATA INCOMPLETE" if "DATA" in entry_state else f"{float(simple.get('entry_readiness') or 0):.0f}/100",
+            )
+            if "DATA" in entry_state:
+                c.caption(f"Structural readiness {float(simple.get('entry_readiness') or 0):.0f}/100")
             d.metric("ACTION", str(common.get("final_action") or simple.get("final_action") or "WAIT"))
-            entry_state = str(simple.get("entry_state") or "WAIT")
             trigger = str(simple.get("trigger") or simple.get("instruction") or "")
             if common.get("entry_allowed"):
                 st.success(f"🚨 **TAKE NOW — {common.get('final_action')}** · {trigger}")
@@ -1233,22 +1237,37 @@ def render_main_ai_market_view(
         else:
             forecast = build_canonical_forecast(snapshot)
             st.markdown(f"**Next 5–15 min path — {forecast.direction} · {forecast.state}**")
+        compact_simple = snapshot.metadata.get("simple_brain") or {}
+        compact_entry_state = str(compact_simple.get("entry_state") or snapshot.execution_guard.readiness)
+        compact_entry_value = (
+            "DATA INCOMPLETE"
+            if "DATA" in compact_entry_state
+            else f"{float(compact_simple.get('entry_readiness') or snapshot.decision.decision_confidence):.0f}%"
+        )
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
-                ("Main Trend (Core)", direction, f"Core evidence {direction_score:.0f}/100 · {direction_note}"),
+                ("Final Market Bias", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
                 (
-                    "Entry Readiness" if snapshot.market_session.is_live else "Reference Readiness",
-                    f"{float((snapshot.metadata.get('simple_brain') or {}).get('entry_readiness') or snapshot.decision.decision_confidence):.0f}%",
-                    str((snapshot.metadata.get('simple_brain') or {}).get('entry_state') or snapshot.execution_guard.readiness),
+                    "Entry State" if snapshot.market_session.is_live else "Reference State",
+                    compact_entry_value,
+                    compact_entry_state,
                 ),
             ]
         )
 
-        st.info(
-            "🧠 **AI samajh:** "
-            + safe_brain_hinglish_line(snapshot, previous_snapshot)
+        pa15_text = str(getattr(snapshot.price_action.fifteen_minute, "structure", "") or "15m mixed")
+        pa3_text = str(getattr(snapshot.price_action.three_minute, "structure", "") or "3m mixed")
+        option_ready = str(getattr(snapshot.option_intelligence, "status", "")).upper() == "READY"
+        barrier_state = str(((compact_simple.get("blocks") or {}).get("barrier_entry") or {}).get("state") or "UNKNOWN")
+        short_reason = (
+            f"15m {pa15_text}; 3m {pa3_text}. "
+            f"Options flow {'ready' if option_ready else 'warming/unavailable'}. "
+            f"Barrier {barrier_state}. {compact_entry_state}."
         )
+        st.info("🧠 **AI samajh:** " + short_reason)
+        with st.expander("Full AI reasoning", expanded=False):
+            st.caption(safe_brain_hinglish_line(snapshot, previous_snapshot))
         patterns = getattr(snapshot, "patterns", None)
         wm_text, _wm_note = _pattern_compact_text(
             patterns.wm_3m if patterns is not None else None,
@@ -1336,131 +1355,6 @@ def render_main_ai_market_view(
             st.caption(snapshot_change_hinglish(snapshot, previous_snapshot))
 
 
-def render_big_player_activity(snapshot: MarketSnapshot) -> None:
-    item = getattr(snapshot, "big_player_activity", None)
-    if item is None:
-        return
-
-    if item.price_shock_state != "NONE":
-        shock_note = (
-            "Badi price move mili, lekin heavy participation alag se confirm hona zaroori hai."
-            if item.confirmation_count < 2
-            else "Badi price move aur activity evidence dono mile."
-        )
-        st.warning(
-            f"⚡ **{item.price_shock_state} — {item.price_shock_points or 0:.1f} points** · {shock_note}"
-        )
-    if item.frozen_after_close:
-        st.info("🔒 **LAST LIVE ACTIVITY — REFERENCE ONLY** · Market close/CAS ke baad score freeze hai.")
-
-    activity_type = str(getattr(item, "activity_type", "DIRECTIONAL ACTIVITY"))
-    closing_flow = activity_type in {"SHORT COVERING", "LONG UNWINDING"}
-    if closing_flow:
-        direction_class, icon = "closing", "🟡"
-        display_direction = activity_type
-    elif item.direction == "BUYING":
-        direction_class, icon = "buy", "🟢"
-        display_direction = item.direction
-    elif item.direction == "SELLING":
-        direction_class, icon = "sell", "🔴"
-        display_direction = item.direction
-    else:
-        direction_class, icon = "mixed", "🟣"
-        display_direction = item.direction
-    simple_state = {
-        "NORMAL": "NORMAL ACTIVITY",
-        "WATCH": "WATCH — MODERATE",
-        "STRONG": "STRONG ACTIVITY",
-        "VERY STRONG": "VERY STRONG ACTIVITY",
-        "EXTREME ACTIVITY": "BAHUT TEZ HALCHAL",
-        "ABSORPTION": "VOLUME BADA, PRICE RUKI",
-        "FADING": "ZOR KAM HO RAHA",
-    }.get(item.state, item.state)
-    if item.confirmation_count < 2 and item.state not in {"NORMAL", "FADING"}:
-        simple_state = "ACTIVITY WATCH — UNCONFIRMED"
-    simple_direction = {
-        "BUYING": "BUYING",
-        "SELLING": "SELLING",
-        "MIXED": "ABHI SAAF NAHI",
-        "SHORT COVERING": "PURANE SELLER POSITION BAND KAR RAHE",
-        "LONG UNWINDING": "PURANE BUYER POSITION BAND KAR RAHE",
-    }.get(display_direction, display_direction)
-    severity = (
-        "extreme" if item.state == "EXTREME ACTIVITY" else
-        "danger" if item.state == "VERY STRONG" else
-        "strong" if item.state == "STRONG" else
-        "watch" if item.state in {"WATCH", "ABSORPTION"} else
-        "normal"
-    )
-    if item.confirmation_count < 2:
-        severity = "watch"
-    st.caption(f"Price response: {item.price_response} · Persistence is not activity magnitude")
-    volume_text = f"{item.futures_volume_ratio:.2f}x" if item.futures_volume_ratio is not None else "—"
-    oi_text = f"{item.futures_oi_change_pct:+.2f}%" if item.futures_oi_change_pct is not None else "—"
-    confirmation_text = (
-        "No large-activity confirmation"
-        if item.state == "NORMAL"
-        else f"{item.persistence} {item.confirmation_count}/{item.confirmation_total}"
-    )
-    if item.frozen_after_close:
-        confirmation_text = "LAST LIVE · REFERENCE ONLY · " + confirmation_text
-    html = (
-        '<style>'
-        '.bpa-hero{border:2px solid rgba(127,127,127,.28);border-radius:16px;padding:14px;margin:5px 0 12px;background:rgba(127,127,127,.05)}'
-        '.bpa-hero.buy{border-color:#86efac;background:rgba(34,197,94,.07)}'
-        '.bpa-hero.buy.strong{border-color:#22c55e;background:rgba(34,197,94,.13)}'
-        '.bpa-hero.buy.danger,.bpa-hero.buy.extreme{border-color:#15803d;background:rgba(21,128,61,.18)}'
-        '.bpa-hero.sell{border-color:#facc15;background:rgba(250,204,21,.07)}'
-        '.bpa-hero.sell.strong{border-color:#f97316;background:rgba(249,115,22,.13)}'
-        '.bpa-hero.sell.danger,.bpa-hero.sell.extreme{border-color:#ef4444;background:rgba(239,68,68,.17)}'
-        '.bpa-hero.closing{border-color:#f59e0b;background:rgba(245,158,11,.13)}'
-        '.bpa-hero.closing.danger,.bpa-hero.closing.extreme{box-shadow:0 0 0 3px rgba(245,158,11,.15),0 0 20px rgba(245,158,11,.20)}'
-        '.bpa-hero.mixed{border-color:#a855f7;background:rgba(168,85,247,.09)}'
-        '.bpa-hero.buy.extreme{box-shadow:0 0 0 3px rgba(21,128,61,.18),0 0 22px rgba(21,128,61,.24)}'
-        '.bpa-hero.sell.extreme{box-shadow:0 0 0 3px rgba(239,68,68,.18),0 0 22px rgba(239,68,68,.25)}'
-        '.bpa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}'
-        '.bpa-title{font-size:1.35rem;font-weight:900}.bpa-score{font-size:1.65rem;font-weight:950;white-space:nowrap}'
-        '.bpa-sub{font-size:.85rem;font-weight:750;margin-top:5px;opacity:.85}'
-        '.bpa-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}'
-        '.bpa-cell{border-radius:10px;padding:9px;background:rgba(127,127,127,.09);min-width:0}'
-        '.bpa-label{font-size:.69rem;font-weight:800;opacity:.68;text-transform:uppercase}'
-        '.bpa-value{font-size:.88rem;font-weight:850;margin-top:3px;overflow-wrap:anywhere}'
-        '@media(max-width:760px){.bpa-head{display:block}.bpa-score{font-size:1.35rem;margin-top:6px}.bpa-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bpa-title{font-size:1.12rem}}'
-        '</style>'
-        f'<div class="bpa-hero {direction_class} {severity}">'
-        f'<div class="bpa-head"><div><div class="bpa-title">{icon} {escape(simple_state)} · {escape(simple_direction)}</div>'
-        f'<div class="bpa-sub">{escape(confirmation_text)} · Reversal risk {escape(item.reversal_risk)} · {escape(item.time_window)}</div></div>'
-        f'<div class="bpa-score">{item.score:.0f}/100</div></div>'
-        '<div class="bpa-grid">'
-        f'<div class="bpa-cell"><div class="bpa-label">Buying</div><div class="bpa-value">{item.buy_score:.0f}/100</div></div>'
-        f'<div class="bpa-cell"><div class="bpa-label">Selling</div><div class="bpa-value">{item.sell_score:.0f}/100</div></div>'
-        f'<div class="bpa-cell"><div class="bpa-label">Futures Volume</div><div class="bpa-value">{volume_text}</div></div>'
-        f'<div class="bpa-cell"><div class="bpa-label">Futures OI</div><div class="bpa-value">{oi_text} · {escape(item.futures_setup)}</div></div>'
-        '</div></div>'
-    )
-    if hasattr(st, "html"):
-        st.html(html)
-    else:
-        st.markdown(html, unsafe_allow_html=True)
-
-    cards = [
-        ("Seedha matlab", item.move_state, f"Pichhle candles ka move {item.move_points or 0:.1f} points; kam-se-kam {item.required_move_points:.0f} chahiye", "green" if "PAKKI" in item.move_state else "amber"),
-        ("Players kya kar rahe", item.participant_explanation, "Price + futures OI ka seedha matlab", "amber" if closing_flow else "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
-        ("Ab kya dekhna hai", item.next_confirmation, "Iske baad badi halchal ko pakka maanenge", "amber"),
-        ("Options ka saath", item.option_confirmation, "Options kis taraf zor dikha rahe", "green" if item.direction == "BUYING" else "red" if item.direction == "SELLING" else "amber"),
-        ("Top-9 ka saath", item.top7_confirmation, "Sirf madadgar hai; final direction akela nahi banata", "green" if "BULL" in item.top7_confirmation else "red" if "BEAR" in item.top7_confirmation else "amber"),
-        ("Level par kya hua", item.level_reaction, "Support/resistance ke paas reaction", "amber"),
-        ("Din ka samay", item.time_window, "Samay sirf sensitivity badalta hai", "amber"),
-    ]
-    st.html(_responsive_cards_html(cards)) if hasattr(st, "html") else st.markdown(_responsive_cards_html(cards), unsafe_allow_html=True)
-    if item.reasons:
-        st.caption("Kyun: " + " | ".join(item.reasons))
-    if item.cautions:
-        st.caption("Caution: " + " | ".join(item.cautions))
-    st.caption(
-        "Exact institution ki pehchan nahi hoti. Yeh same One-Brain snapshot ka bounded activity evidence hai; "
-        "2 alag observations ke bina badi halchal pakki nahi."
-    )
 
 
 def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
@@ -1748,38 +1642,6 @@ def render_decision(
             {"Fit / Need %": "{:.1f}%"}, na_rep="—"
         )
         st.dataframe(styled, width="stretch", hide_index=True, row_height=44)
-
-def render_market_outlook(snapshot: MarketSnapshot) -> None:
-    item = snapshot.decision.outlook
-    st.subheader("Next 5–15 Min Market Outlook")
-    outlook_note = (
-        " Session live confirm nahi hai, isliye fake-move score sirf reference hai; data/session block alag se entry rokta hai."
-        if item.status == "REFERENCE ONLY"
-        else ""
-    )
-    st.caption(
-        "Conditional scenario weights from the same Final One-Brain Decision. "
-        "They are not guaranteed price predictions. Koi path absolute 0%/100% nahi maana jata. "
-        "Signal memory and fake-move risk single opposite snapshot se action flip hone se rokte hain."
-        + outlook_note
-    )
-    trade_status = (
-        "ENTRY READY"
-        if snapshot.execution_guard.readiness == "ENTRY READY"
-        else "DATA READY — TRADE WAIT"
-    )
-    cards = [
-        ("Upar ka rasta", f"{item.bullish_path_pct:.1f}%", "Conditional, guarantee nahi", "green" if item.bullish_path_pct >= 55 else ""),
-        ("Range ka rasta", f"{item.range_path_pct:.1f}%", f"Signal memory {item.signal_memory}", "amber" if item.range_path_pct >= 55 else ""),
-        ("Neeche ka rasta", f"{item.bearish_path_pct:.1f}%", "Conditional, guarantee nahi", "red" if item.bearish_path_pct >= 55 else ""),
-        ("Fake-move risk", f"{item.fake_move_risk:.1f}% · {item.fake_move_state}", trade_status, "red" if item.fake_move_risk >= 60 else ""),
-    ]
-    html = _responsive_cards_html(cards)
-    st.html(html) if hasattr(st, "html") else st.markdown(html, unsafe_allow_html=True)
-    st.caption(f"Break confirm/invalid: {item.invalidation_text} · Status: {trade_status}")
-    if item.reasons:
-        st.caption("Fake-move checks: " + " | ".join(item.reasons))
-
 
 def _leg_label(legs: tuple[Any, ...], *, prefix: str = "") -> str:
     if not legs:
@@ -2492,13 +2354,17 @@ def render_option_windows(snapshot: MarketSnapshot) -> None:
 
 def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
     item = snapshot.option_intelligence
+    global_walls = (snapshot.metadata or {}).get("global_oi_walls") or {}
     walls = []
     for wall in (item.ce_wall, item.pe_wall):
+        global_wall = global_walls.get(str(wall.side).upper()) or {}
         walls.append(
             {
                 "Side": wall.side,
-                "Main Wall Strike": wall.strike,
-                "Wall OI": wall.oi,
+                "Near-ATM Wall Strike": wall.strike,
+                "Near-ATM Wall OI": wall.oi,
+                "Global Max OI Strike": global_wall.get("strike"),
+                "Global Max OI": global_wall.get("oi"),
                 "Strongest 3-Strike Cluster": wall.cluster_center,
             }
         )

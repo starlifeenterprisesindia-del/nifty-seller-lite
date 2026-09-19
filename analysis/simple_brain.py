@@ -125,14 +125,19 @@ def _top9_triplet(snapshot: Any) -> tuple[float, float, float] | None:
     heavy = getattr(snapshot, "heavyweights", None)
     if heavy is None:
         return None
+    # Participation must come from recent intraday movement, not a stale/session
+    # change fallback.  On weekends/after-hours the broker can return perfectly
+    # valid last prices with 0.0% session change; treating those nine flats as
+    # 100% neutral was diluting the live Trend block.  Missing recent Top-9 is
+    # therefore NO VOTE, exactly like missing option-flow continuity.
+    status = str(getattr(heavy, "status", "") or "").upper()
+    if status not in {"READY", "CAUTION"}:
+        return None
     up_weight = down_weight = flat_weight = 0.0
     used = 0.0
+    covered = max(0.0, _num(getattr(heavy, "covered_weight_pct", 0.0)))
     for row in getattr(heavy, "rows", ()) or ():
-        # Prefer the live/recent 3m move.  Fall back to current-session change when
-        # the broker omitted an intraday timestamp for a constituent quote.
         move = getattr(row, "change_3m_pct", None)
-        if move is None:
-            move = getattr(row, "change_pct", None)
         if move is None:
             continue
         w = max(0.0, _num(getattr(row, "official_weight_pct", 0.0)))
@@ -145,7 +150,9 @@ def _top9_triplet(snapshot: Any) -> tuple[float, float, float] | None:
             down_weight += w
         else:
             flat_weight += w
-    if used <= 0:
+    # Require broad enough recent coverage. A couple of fresh constituents are
+    # useful diagnostics but not a 20%-weight participation vote.
+    if used <= 0 or (covered > 0 and used / covered < 0.80):
         return None
     return _normalise_triplet(up_weight, down_weight, flat_weight)
 

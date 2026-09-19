@@ -70,7 +70,7 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
     hourly = _pick(core.bullish_score, core.bearish_score, core.range_score)
     hourly_reason = _short_reason("Core structure", core.market_state, core.move_stage, *(core.reasons[:1]))
 
-    rows = [{"Time": label, "Direction": pick[0], "Evidence /100": pick[1], "Kyun": reason}
+    rows = [{"Time": label, "Direction": pick[0], "Context strength /100": pick[1], "Kyun": reason}
             for label, pick, reason in (("5 min", five, five_reason), ("15 min", fifteen, fifteen_reason),
                                         ("30 min", thirty, thirty_reason), ("1 hour", hourly, hourly_reason))]
     # Explicit next-session context, not a new weighted model or calibrated forecast.
@@ -78,7 +78,7 @@ def build_timeframe_rows(snapshot: MarketSnapshot, live_impulse: Any | None = No
     direction = str(snapshot.decision.market_direction)
     agrees = direction in {"BULLISH", "BEARISH"} and hourly[0] == direction
     rows.append({"Time": "1 day", "Direction": direction if days >= 2 and agrees else "PENDING / MIXED",
-                 "Evidence /100": None,
+                 "Context strength /100": None,
                  "Kyun": f"Agle trading session ka provisional context · {days} recorded days · "
                          + ("Current One-Brain + core agree; gap/news se badal sakta hai" if days >= 2 and agrees
                             else "History kam ya core/direction conflict; daily prediction verified nahi")})
@@ -104,8 +104,8 @@ def render_timeframe_outlook(snapshot: MarketSnapshot, live_impulse: Any | None 
         return (direction if score else "MIXED", score)
     pick5, pick15 = future_pick("5m"), future_pick("15m")
     future_rows = [
-        {"Time":"5 min", "Direction":pick5[0], "Evidence /100":pick5[1], "Kyun":future.get("confirmation", "Leading evidence warming up")},
-        {"Time":"15 min", "Direction":pick15[0], "Evidence /100":pick15[1], "Kyun":future.get("transition", "MIXED / TRANSITION")},
+        {"Time":"5 min", "Direction":pick5[0], "Future confidence /100":pick5[1], "Kyun":future.get("confirmation", "Leading evidence warming up")},
+        {"Time":"15 min", "Direction":pick15[0], "Future confidence /100":pick15[1], "Kyun":future.get("transition", "MIXED / TRANSITION")},
     ]
     st.dataframe(
         future_rows,

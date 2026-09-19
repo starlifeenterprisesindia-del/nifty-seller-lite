@@ -40,6 +40,21 @@ def recording_time(now):
     return now.weekday() < 5 and time(9, 15) <= now.time().replace(tzinfo=None) <= time(15, 31)
 
 
+def decision_journal_time(now):
+    """User-facing AI decision journal window: 09:30 through 15:00 IST.
+
+    Raw expiry-cycle evidence may continue through the close so late outcomes can
+    still be backfilled, but no *new* AI decision row is created outside this
+    cleaner learning window.
+    """
+    local = now.astimezone(IST)
+    clock = local.time().replace(tzinfo=None)
+    return (
+        local.weekday() < 5
+        and CONFIG.simple_decision_journal_start <= clock <= CONFIG.simple_decision_journal_end
+    )
+
+
 def candle_reaction(level, candle):
     """A retest requires a previously observed break, never a first-touch inference."""
     lo, hi = level["lower"], level["upper"]
@@ -468,6 +483,9 @@ class DayMemory:
 
     def app_event(self, now, body):
         at = datetime.fromisoformat(str(body["at"]))
+        # Keep accepting fresh app heartbeats during the broader recorder window so
+        # decisions opened before 15:00 can still receive their +5m/+15m/+30m
+        # outcomes.  New decision rows themselves are restricted to 09:30–15:00.
         if at.tzinfo is None or not 0 <= (now - at).total_seconds() <= 120 or not recording_time(now):
             return False
         with self.connect() as db:
@@ -492,8 +510,13 @@ class DayMemory:
             # restart independently of Railway, so operational decisions must live
             # beside the persistent expiry recorder rather than only in local files.
             # Before replacing the current minute, use this fresh spot to close
-            # pending outcome horizons on earlier app decisions.
+            # pending outcome horizons on earlier app decisions. This remains
+            # active until the broader recorder closes so a 14:55 decision can
+            # finish its later outcome labels without creating post-15:00 rows.
             self._backfill_app_decision_outcomes(db, at, body.get("spot"))
+            if not decision_journal_time(now):
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('app_heartbeat',?)", (at.isoformat(),))
+                return True
             simple = body.get("simple_brain") if isinstance(body.get("simple_brain"), dict) else {}
             decision = clean({
                 "at": at.isoformat(),
@@ -521,6 +544,40 @@ class DayMemory:
             db.execute("INSERT OR REPLACE INTO meta VALUES ('app_heartbeat',?)", (at.isoformat(),))
             from services.cycle_outcomes import record_signal
             record_signal(db, body)
+        return True
+
+    def ai_tracker_event(self, now, body):
+        """Persist one lightweight AI Move Check observation for later audit.
+
+        This never creates an app decision or strategy vote. It stores only the
+        already-computed tracker state and therefore adds no market calculation.
+        """
+        try:
+            at = datetime.fromisoformat(str(body.get("last_checked_at") or body.get("at") or ""))
+        except (TypeError, ValueError):
+            return False
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=IST)
+        if not 0 <= (now - at).total_seconds() <= 180 or not recording_time(now):
+            return False
+        identity = str(body.get("prediction_id") or "")[:220]
+        if not identity:
+            return False
+        allowed = {
+            key: clean(body.get(key))
+            for key in (
+                "prediction_id", "started_at", "last_checked_at", "direction",
+                "confidence", "start_price", "current_price", "move_points",
+                "mfe_points", "mae_points", "elapsed_minutes", "status", "closed",
+                "barrier", "barrier_status", "barrier_confirmed", "barrier_confirmed_at",
+                "target_price", "invalidation_price", "checkpoints",
+            )
+        }
+        with self.connect() as db:
+            day = db.execute("SELECT value FROM meta WHERE key='day'").fetchone()
+            if not day or day[0] != at.astimezone(IST).date().isoformat():
+                return False
+            self._event(db, at.isoformat(), "AI TRACKER", identity, allowed)
         return True
 
     def report(self):

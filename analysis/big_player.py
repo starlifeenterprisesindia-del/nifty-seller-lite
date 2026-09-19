@@ -20,14 +20,14 @@ from models import (
 def _time_window(as_of: datetime) -> str:
     current = as_of.time().replace(tzinfo=None)
     if current < time(10, 0):
-        return "OPENING HIGH ACTIVITY"
+        return "OPENING PHASE"
     if current < time(13, 15):
-        return "MIDDAY / NORMAL"
+        return "MIDDAY"
     if current < time(14, 15):
-        return "AFTERNOON BUILD-UP"
+        return "AFTERNOON"
     if current < time(15, 0):
-        return "CLOSING PRESSURE"
-    return "FINAL HOUR / HIGH ACTIVITY"
+        return "CLOSING PHASE"
+    return "FINAL HOUR"
 
 
 def _classify_future_window(

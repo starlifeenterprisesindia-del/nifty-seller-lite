@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from datetime import datetime, time as clock_time
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -31,6 +32,7 @@ class TelegramNotifier:
             "off",
             "no",
         }
+
 
     @property
     def configured(self) -> bool:
@@ -83,8 +85,40 @@ class LiveAlertEngine:
         self.last_alert = ""
         self.last_error = ""
         self.alert_count = 0
-        self._big_player_candidate = ""
-        self._big_player_count = 0
+        self._dedupe_path: Path | None = None
+        mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+        if mount:
+            self._dedupe_path = Path(mount) / "nifty_day_memory" / "telegram_dedupe.json"
+            self._load_dedupe_state()
+
+    def _load_dedupe_state(self) -> None:
+        """Restore only recent alert fingerprints; tiny file, no market work."""
+        if self._dedupe_path is None:
+            return
+        try:
+            payload = json.loads(self._dedupe_path.read_text(encoding="utf-8"))
+            now = time.time()
+            raw = payload.get("last_sent") if isinstance(payload, dict) else {}
+            if isinstance(raw, dict):
+                self._last_sent.update({
+                    str(k): float(v) for k, v in raw.items()
+                    if now - float(v) <= 6 * 3600
+                })
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+
+    def _persist_dedupe_state(self) -> None:
+        if self._dedupe_path is None:
+            return
+        try:
+            self._dedupe_path.parent.mkdir(parents=True, exist_ok=True)
+            now = time.time()
+            recent = {k: v for k, v in self._last_sent.items() if now - float(v) <= 6 * 3600}
+            tmp = self._dedupe_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"last_sent": recent}, separators=(",", ":")), encoding="utf-8")
+            tmp.replace(self._dedupe_path)
+        except OSError:
+            pass
 
     @property
     def configured(self) -> bool:
@@ -190,68 +224,48 @@ class LiveAlertEngine:
         except (KeyError, ValueError, TypeError):
             return False
         ids = payload.get("pattern_ids")
-        if payload.get("direction") not in {"BULLISH", "BEARISH"} or not isinstance(ids, list) or not 1 <= len(ids) <= 2:
+        if payload.get("direction") not in {"BULLISH", "BEARISH"} or not isinstance(ids, list) or not 1 <= len(ids) <= 4:
             return False
         signatures = ["pattern:" + stamp.date().isoformat() + ":" + str(x)[:180] for x in ids]
+        message = str(payload.get("message", "Strong aligned pattern confirmation"))[:1800]
         with self._lock:
             if all(x in self._last_sent for x in signatures):
                 return False
-            # Delivery is synchronous under this lock to prevent duplicate requests.
-            self._sender(str(payload.get("message", "Strong aligned pattern confirmation"))[:1800])
+            # Reserve fingerprints *before* network delivery. This prevents two
+            # Streamlit reruns from ringing twice while keeping Telegram I/O off
+            # the app's critical path. Failed sends remove the reservation so a
+            # later rerun can retry.
             for signature in signatures:
                 self._last_sent[signature] = timestamp
-            self.alert_count += 1
-            self.last_alert = signatures[0]
-            self.last_alert_at = timestamp
-        return True
+            self._persist_dedupe_state()
 
-    def observe_big_player(self, payload: dict[str, Any], *, now_ts: float | None = None) -> bool:
-        """Send bounded Big Player evidence; it never converts conflict into advice."""
-        timestamp = float(now_ts if now_ts is not None else time.time())
-        score = float(payload.get("score", 0.0) or 0.0)
-        confirmations = int(payload.get("confirmation_count", 0) or 0)
-        direction = str(payload.get("direction", "MIXED")).upper()
-        activity_type = str(payload.get("activity_type", "ACTIVITY")).upper()
-        conflict = bool(payload.get("conflict", False))
-        stage = "CONFIRMED" if score >= 70 and confirmations >= 2 else "EARLY" if score >= 65 and confirmations >= 1 else ""
-        if not stage or direction not in {"BUYING", "SELLING"}:
-            return False
-        signature = f"BIG:{stage}:{direction}:{activity_type}"
-        with self._lock:
-            if signature == self._big_player_candidate:
-                self._big_player_count += 1
-            else:
-                self._big_player_candidate = signature
-                self._big_player_count = 1
-            required = 1 if stage == "CONFIRMED" else 2
-            if self._big_player_count < required:
-                return False
-            if timestamp - self._last_sent.get(signature, 0.0) < self.cooldown_seconds:
-                return False
-            self._last_sent[signature] = timestamp
-            self._big_player_count = 0
-        icon = "🟢" if direction == "BUYING" else "🔴"
-        lines = [
-            f"{icon} BIG PLAYER {stage} — {direction}",
-            f"Score {score:.0f}/100 · {confirmations}/2 · {activity_type}",
-        ]
-        if payload.get("futures_setup"):
-            lines.append(f"Futures: {payload['futures_setup']}")
-        if conflict:
-            lines.append("⚠️ Options/Top-9 conflict — TRADE WAIT; activity alert only.")
-        else:
-            lines.append("Direction supporting evidence; One-Brain entry confirmation alag hai.")
-        lines.append("Automatic order nahi lagaya gaya.")
-        message = "\n".join(lines)
         if self.async_delivery:
             threading.Thread(
-                target=self._deliver,
-                args=(message, signature, timestamp),
+                target=self._deliver_pattern,
+                args=(message, signatures, timestamp),
                 daemon=True,
-                name="telegram-big-player-send",
+                name="telegram-pattern-send",
             ).start()
             return True
-        return self._deliver(message, signature, timestamp)
+        return self._deliver_pattern(message, signatures, timestamp)
+
+    def _deliver_pattern(self, message: str, signatures: list[str], timestamp: float) -> bool:
+        try:
+            self._sender(message)
+            with self._lock:
+                self.alert_count += 1
+                self.last_alert = signatures[0] if signatures else "pattern"
+                self.last_alert_at = timestamp
+                self.last_error = ""
+            return True
+        except Exception as exc:
+            with self._lock:
+                for signature in signatures:
+                    if self._last_sent.get(signature) == timestamp:
+                        self._last_sent.pop(signature, None)
+                self.last_error = str(exc)[:300]
+                self._persist_dedupe_state()
+            return False
 
     def status(self) -> dict[str, Any]:
         with self._lock:

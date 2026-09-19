@@ -47,6 +47,8 @@ class InstrumentMaster:
     _memory_lock = threading.RLock()
     _raw_memory: dict[str, tuple[int, int, pd.DataFrame]] = {}
     _normalized_memory: dict[str, tuple[int, int, pd.DataFrame]] = {}
+    _vix_memory: dict[tuple[str, int, int], ResolvedInstrument | None] = {}
+    _future_memory: dict[tuple[str, int, int, str], ResolvedInstrument | None] = {}
 
     def __init__(self, cache_path: Path | None = None):
         self.cache_path = cache_path or Path("data/instrument_master.csv")
@@ -73,6 +75,8 @@ class InstrumentMaster:
         with cls._memory_lock:
             cls._raw_memory.clear()
             cls._normalized_memory.clear()
+            cls._vix_memory.clear()
+            cls._future_memory.clear()
 
     @staticmethod
     def _first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -183,6 +187,11 @@ class InstrumentMaster:
         self,
         df: pd.DataFrame | None = None,
     ) -> ResolvedInstrument | None:
+        identity = self._cache_identity()
+        if identity is not None:
+            with self._memory_lock:
+                if identity in self._vix_memory:
+                    return self._vix_memory[identity]
         frame = self.normalize(df if df is not None else self.load())
         symbol_match = frame["symbol"].str.replace(" ", "", regex=False).eq("INDIAVIX")
         display_match = (
@@ -197,21 +206,31 @@ class InstrumentMaster:
             candidates["instrument"].isin(["INDEX", "INDEXVALUE", "IDX"])
         ]
         row = (index_like if not index_like.empty else candidates).iloc[0]
-        return ResolvedInstrument(
+        result = ResolvedInstrument(
             symbol="INDIA VIX",
             security_id=int(row["security_id"]),
             exchange_segment="IDX_I",
             instrument="INDEX",
             display_name=str(row["display_name"] or "INDIA VIX"),
         )
+        if identity is not None:
+            with self._memory_lock:
+                self._vix_memory[identity] = result
+        return result
 
     def resolve_nearest_nifty_future(
         self,
         df: pd.DataFrame | None = None,
         now: datetime | None = None,
     ) -> ResolvedInstrument | None:
-        frame = self.normalize(df if df is not None else self.load())
         current = pd.Timestamp(now or datetime.now())
+        identity = self._cache_identity()
+        future_key = (*identity, current.date().isoformat()) if identity is not None else None
+        if future_key is not None:
+            with self._memory_lock:
+                if future_key in self._future_memory:
+                    return self._future_memory[future_key]
+        frame = self.normalize(df if df is not None else self.load())
         candidates = frame[
             frame["instrument"].isin(["FUTIDX", "FUTURE", "FUTURES"])
             & (
@@ -236,7 +255,7 @@ class InstrumentMaster:
         if candidates.empty:
             return None
         row = candidates.iloc[0]
-        return ResolvedInstrument(
+        result = ResolvedInstrument(
             symbol="NIFTY_FUT",
             security_id=int(row["security_id"]),
             exchange_segment="NSE_FNO",
@@ -244,3 +263,7 @@ class InstrumentMaster:
             display_name=str(row["display_name"] or "NIFTY FUTURE"),
             expiry=row["expiry"].date().isoformat(),
         )
+        if future_key is not None:
+            with self._memory_lock:
+                self._future_memory[future_key] = result
+        return result
