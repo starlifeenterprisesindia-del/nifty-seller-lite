@@ -25,7 +25,17 @@ def _decision_rows(store=None) -> list[dict[str, Any]]:
         key = str(row.get("at") or "")
         if not key:
             continue
-        merged[key] = dict(row)
+        previous = merged.get(key, {})
+        combined = dict(previous)
+        # Remote persistence is authoritative, but an older remote row may not
+        # yet contain outcome fields that the local process already backfilled.
+        # Never replace a useful value with None/blank during the merge.
+        for field, value in row.items():
+            if value is not None and value != "":
+                combined[field] = value
+            elif field not in combined:
+                combined[field] = value
+        merged[key] = combined
     return sorted(merged.values(), key=lambda row: str(row.get("at") or ""))
 
 
@@ -75,11 +85,28 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
         "5m/15m/30m baad missed-move outcome bhi backfill karta hai. Koi broker order nahi."
     )
     if store is not None:
-        st.caption(f"Last checked: {store.last_checked} · Candidate status: {store.last_blocker} · Last saved: {store.last_saved or 'No save yet'}")
+        decisions = _decision_rows(store)
+        report = st.session_state.get("day_memory_report") or {}
+        coverage = (report.get("recording_coverage") or {}) if isinstance(report, dict) else {}
+        today_decisions = [row for row in decisions if str(row.get("session_date")) == session_date]
+        latest_at = str(today_decisions[-1].get("at") or "") if today_decisions else ""
+        latest_time = latest_at[11:19] if len(latest_at) >= 19 else (latest_at or "—")
+        persistent_rows = int(coverage.get("app_decision_rows") or 0)
+        st.caption(
+            f"Decision Journal: {'RECORDED' if today_decisions else 'NO ROWS'} · "
+            f"today {len(today_decisions)} · Railway persistent {persistent_rows} · latest {latest_time}"
+        )
+        if entries:
+            st.caption(
+                f"Paper Trade Journal: {len([x for x in entries if str(x.get('session_date')) == session_date])} "
+                "gate-passed simulation(s)."
+            )
+        else:
+            st.caption("Paper Trade Journal: 0 gate-passed trades — WAIT/READY decisions are still recorded above.")
         if store.last_error:
             st.warning(store.last_error)
         else:
-            st.caption("Local journal available; cloud backup only if configured. Not broker trades.")
+            st.caption("Decision history and paper-trade history are separate; neither places broker orders.")
         import json
         try:
             history = json.loads(store.path.with_suffix(".signals.json").read_text())

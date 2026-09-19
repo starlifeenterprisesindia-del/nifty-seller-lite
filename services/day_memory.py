@@ -423,6 +423,49 @@ class DayMemory:
         self.prune_archives()
         return True
 
+    def _backfill_app_decision_outcomes(self, db, at, spot):
+        """Persist +5m/+15m/+30m spot outcomes for Railway app decisions.
+
+        This runs only when a fresh app observation arrives.  It reuses the
+        already-available spot and SQLite rows, so it adds no broker/API calls
+        and negligible processing overhead.
+        """
+        try:
+            current_spot = float(spot)
+        except (TypeError, ValueError):
+            return
+        current_day = at.astimezone(IST).date().isoformat()
+        rows = db.execute(
+            "SELECT minute,at,body FROM app_decisions WHERE substr(at,1,10)=? ORDER BY at",
+            (current_day,),
+        ).fetchall()
+        for minute, opened_raw, raw in rows:
+            try:
+                opened = datetime.fromisoformat(str(opened_raw))
+                if opened.tzinfo is None:
+                    opened = opened.replace(tzinfo=IST)
+                age_min = (at - opened).total_seconds() / 60.0
+                decision = json.loads(raw)
+                base = float(decision.get("spot"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            changed = False
+            delta = round(current_spot - base, 2)
+            for horizon in (5, 15, 30):
+                key = f"outcome_{horizon}m_points"
+                if decision.get(key) is None and age_min >= horizon:
+                    decision[key] = delta
+                    decision[f"outcome_{horizon}m_label"] = (
+                        "UP" if delta >= 5 else "DOWN" if delta <= -5 else "RANGE"
+                    )
+                    decision[f"outcome_{horizon}m_observed_at"] = at.isoformat()
+                    changed = True
+            if changed:
+                db.execute(
+                    "UPDATE app_decisions SET body=? WHERE minute=?",
+                    (encode(clean(decision)), minute),
+                )
+
     def app_event(self, now, body):
         at = datetime.fromisoformat(str(body["at"]))
         if at.tzinfo is None or not 0 <= (now - at).total_seconds() <= 120 or not recording_time(now):
@@ -448,6 +491,9 @@ class DayMemory:
             # Durable one-row-per-minute app journal.  The Streamlit container can
             # restart independently of Railway, so operational decisions must live
             # beside the persistent expiry recorder rather than only in local files.
+            # Before replacing the current minute, use this fresh spot to close
+            # pending outcome horizons on earlier app decisions.
+            self._backfill_app_decision_outcomes(db, at, body.get("spot"))
             simple = body.get("simple_brain") if isinstance(body.get("simple_brain"), dict) else {}
             decision = clean({
                 "at": at.isoformat(),

@@ -1,0 +1,8 @@
+Nifty Seller Lite v2.49.1 — Journal Outcome & Status Hotfix
+
+- Separate Decision Journal status from Paper Trade Journal status in the UI.
+- Remove misleading “No save yet” wording when live WAIT/READY decisions are already persisted.
+- Persist +5m/+15m/+30m decision outcomes directly into Railway app_decisions.
+- Preserve non-null local outcome values when merging with older Railway rows.
+- No new market-data/API calls; One-Brain scoring, thresholds and trade logic are unchanged.
+- Paper trades remain 0 unless a protected setup actually passes the entry gate.
