@@ -340,3 +340,22 @@ def test_live_session_missing_nifty_quote_still_fails_safely():
     service = SnapshotService(LiveMissingNiftyQuoteClient(), StubMaster())
     with pytest.raises(SnapshotBuildError, match="NIFTY quote missing"):
         service.build(datetime(2026, 7, 20, 10, 0, tzinfo=IST))
+
+
+def test_global_oi_walls_use_full_chain_without_extra_fetch():
+    import pandas as pd
+    from services.snapshot_service import _global_oi_walls
+
+    frame = pd.DataFrame(
+        [
+            {"side": "CE", "strike": 23350, "oi": 50},
+            {"side": "CE", "strike": 24000, "oi": 150},
+            {"side": "PE", "strike": 23300, "oi": 200},
+            {"side": "PE", "strike": 23000, "oi": 120},
+        ]
+    )
+    walls = _global_oi_walls(frame)
+    assert walls["CE"]["strike"] == 24000.0
+    assert walls["CE"]["oi"] == 150.0
+    assert walls["PE"]["strike"] == 23300.0
+    assert walls["PE"]["oi"] == 200.0

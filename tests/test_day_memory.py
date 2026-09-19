@@ -232,3 +232,32 @@ def test_app_event_can_initialize_persistent_decision_journal_before_background_
     assert report["recording_coverage"]["app_decision_rows"] == 1
     assert report["app_decisions"][0]["direction"] == "DOWN"
     assert report["app_decisions"][0]["session_live"] is True
+
+
+def test_ai_tracker_event_persists_without_creating_decision_row(tmp_path):
+    store = DayMemory(tmp_path / "day.sqlite3")
+    at = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
+    store.record(snapshot(at))
+    body = {
+        "prediction_id": "SNAP-x:UP:2026-08-27T10:00:00+05:30",
+        "started_at": at.isoformat(),
+        "last_checked_at": (at + timedelta(minutes=3)).isoformat(),
+        "direction": "UP",
+        "confidence": 68.0,
+        "start_price": 23400.0,
+        "current_price": 23418.0,
+        "move_points": 18.0,
+        "mfe_points": 18.0,
+        "mae_points": 0.0,
+        "elapsed_minutes": 3.0,
+        "status": "ON TRACK",
+        "closed": False,
+        "checkpoints": {},
+    }
+    now = at + timedelta(minutes=3)
+    assert store.ai_tracker_event(now, body)
+    report = store.report()
+    tracker = [row for row in report["events"] if row["kind"] == "AI TRACKER"]
+    assert len(tracker) == 1
+    assert tracker[0]["status"] == "ON TRACK"
+    assert report["recording_coverage"]["app_decision_rows"] == 0

@@ -1,51 +1,48 @@
-# Architecture - V2.48 Simple One-Brain
+# Architecture — V2.50 Lean AI Tracker
 
 ## One authoritative snapshot
 
-`services/snapshot_service.py` builds one immutable `MarketSnapshot`. Screen, journal and PDFs consume the same snapshot. Market-data services fetch data; analysis modules never fetch broker data themselves.
+`services/snapshot_service.py` builds one `MarketSnapshot`. Screen, journal, PDF and decision logic consume that same snapshot. Analysis modules do not fetch broker data independently.
 
-## Simple operational decision path
+## Canonical operational brain
 
-The rich legacy evidence engine remains available for diagnostics and protected-plan construction, but the **operational entry authority** is `analysis/simple_brain.py`.
+`analysis/simple_brain.py` is the operational decision authority after evidence is built:
 
-The live path is deliberately short:
+1. **Trend / Regime — 40%**
+2. **Options Flow — 25%**
+3. **Participation — 20%**
+4. **Barrier / Entry — 15%**
 
-**Regime -> Direction -> Entry -> Risk -> Action**
+Weights normalize over available evidence. **Missing = no vote.** Big Player is confirmation inside Participation, not a fifth directional vote. FII/DII, VIX, news, Greeks, W/M and special candles keep their context/risk/quality roles and do not create duplicate final decisions.
 
-Only four blocks are used by the Simple One-Brain:
+## Future Brain
 
-1. **Trend / Regime (40%)** — completed 15m + 3m price action and the existing core EMA/MACD/RSI evidence. A confirmed 15m breakout/breakdown is directional regime evidence and cannot remain an 82% RANGE veto.
-2. **Options Flow (25%)** — bounded 1m/3m/5m blended OI/premium/volume evidence. A fresh 1m+3m reversal compresses a stale opposite 5m extreme into TRANSITION instead of producing false 90%+ conviction.
-3. **Participation (20%)** — NIFTY futures volume + Top-9. Big Player is confirmation inside this block, not a duplicate fifth vote.
-4. **Barrier / Entry (15%)** — nearest support/resistance is classified as HOLDING/NEAR, UNDER ATTACK, BROKEN or OPEN ROOM. A broken barrier is no longer an automatic permanent WAIT.
+`analysis/future_brain.py` remains advisory for the next 5/15 minutes. Longer 30m/1h rows are context strength, not a second calibrated probability engine. The old duplicate 5–15 minute outlook is not rendered on the main screen.
 
-Scores are normalized over available core evidence. Missing optional evidence does not consume denominator weight and cannot make the entry threshold mathematically unreachable.
+## AI Move Check
 
-## Advisory/risk-only modules
+`analysis/ai_move_tracker.py` freezes a valid live UP/DOWN thesis from the canonical Simple One-Brain. `ui/ai_move_tracker.py` runs as a 3-minute Streamlit fragment and reads only Railway's already-running `/live` cache. It does **not** fetch Dhan data or recalculate indicators/options/Top-9/Brain.
 
-`analysis/future_brain.py` remains a next-5/15-minute advisory. It can warn about bounce/reversal risk but ordinary MIXED output does not veto a valid current setup. RSI extremes are chase-risk modifiers, not automatic opposite-direction votes.
+The tracker records current signed move, MFE, MAE, 5m/15m/30m checkpoints and a locked relevant barrier. Full snapshots may confirm that barrier using their already-computed completed 3m close. A tiny Railway-only `AI TRACKER` event persists each 3-minute observation; it never creates a decision vote or Dhan call.
 
-VIX, verified fresh news/events and data integrity are risk context. FII/DII is background context. Greeks/IV/theta/delta are used for protected strike/hedge quality. W/M and special candles remain supporting detail and do not create independent hard direction votes.
+## Journal
 
-## Execution safety
+New decision rows are limited to **09:30–15:00 IST**. Existing rows can continue receiving outcome backfills after 15:00 so late signals are not left incomplete.
 
-`analysis/execution_guard.py` keeps genuine hard safety checks: live session/data, price progression, protected plan availability, defined-risk budget, one-trade lock and entry window. In Simple One-Brain mode it does not repeat the old 75-fit, 15m/3m, barrier, persistence and Future-Brain gates as separate vetoes.
+## Alerts
+
+Strong 3m candle, valid W/M and Big Player activity share one combined Telegram path. Fingerprints are reserved before asynchronous delivery and recent fingerprints persist on Railway volume to prevent duplicate messages across reruns/restarts. Manual CE/PE premium alerts remain separate because they are user-defined price alerts, not market-evidence alerts.
+
+## Options walls
+
+Operational Options Intelligence continues to use the bounded near-ATM window. The full chain is already available during snapshot construction, so presentation also records **Global Max OI CE/PE** without another API call. The two concepts are explicitly labelled and are not double-counted.
+
+## Performance rules
+
+- no extra Dhan call for AI Move Check
+- no full Brain rerun from the 3-minute tracker
+- instrument master / VIX / nearest-future resolution cached in process
+- one combined alert path rather than duplicate Big Player delivery
+- runtime files and caches excluded from release
 
 The app remains read-only and never places, modifies or exits broker orders.
-
-## Fast lane
-
-The 5-second monitor stays lightweight. It does not decide trades. A confirmed major move can request a priority full snapshot (with cooldown), reducing the delay between a fast market move and a fresh Simple One-Brain decision.
-
-## Journal and learning
-
-`services/shadow_journal.py` has two lanes:
-
-- **Decision Journal** records meaningful WAIT/READY/ENTRY states and backfills observed +5m/+15m/+30m spot outcomes.
-- **Paper Trade Journal** records only gate-passed protected simulated trades.
-
-This lets the app distinguish a protective WAIT from a missed move instead of learning only from executed paper trades. Railway day-memory also stores Simple One-Brain regime/direction/entry fields. Historical/Future matching is advisory and cannot hard-block entry.
-
-## Presentation
-
-The main UI presents one operational answer: **MARKET, REGIME, ENTRY, ACTION, TRIGGER, RISK/NEXT LEVEL**. Future Brain and advanced evidence remain expandable diagnostics so they cannot create visible decision conflict.

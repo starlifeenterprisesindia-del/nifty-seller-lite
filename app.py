@@ -58,7 +58,6 @@ from ui.components import (
     render_indicators,
     render_levels,
     render_market_context,
-    render_market_outlook,
     render_market_session,
     render_news_context,
     render_main_ai_market_view,
@@ -73,7 +72,6 @@ from ui.components import (
     render_volume,
     render_walls_and_pcr,
     render_protected_candidates,
-    render_big_player_activity,
     render_compact_status_bar,
 )
 from ui.premium_calculator import render_spot_premium_calculator
@@ -83,8 +81,9 @@ from ui.shadow_journal import (
     render_shadow_journal_download,
     render_shadow_journal_status,
 )
-from ui.pattern_alerts import render_pattern_alerts
+from ui.pattern_alerts import render_pattern_alerts, process_combined_signal_alerts
 from ui.timeframe_outlook import render_timeframe_outlook
+from ui.ai_move_tracker import render_ai_move_tracker
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
 
 
@@ -289,9 +288,9 @@ with st.sidebar:
         auto_enabled = st.toggle("Auto Snapshot ON", key="auto_snapshot_enabled")
         duration_minutes = st.selectbox(
             "Kitni der chale",
-            (5, 15, 30),
+            (5, 15, 30, 60),
             index=1,
-            format_func=lambda value: f"{value} minute",
+            format_func=lambda value: "1 hour" if value == 60 else f"{value} minute",
             key="auto_snapshot_duration_minutes",
             disabled=not auto_enabled,
         )
@@ -913,6 +912,10 @@ def render_fast_live_monitor() -> None:
 
 render_fast_live_monitor()
 
+# Alert delivery is independent of whether the visual panel is expanded. It reuses
+# the existing snapshot only; no new broker/API market calculation is performed.
+process_combined_signal_alerts(snapshot, live_server_url, live_server_api_key)
+
 
 def render_market_decision_reason_panel() -> None:
     """Display the existing decision evidence beside its Common Final Gate."""
@@ -941,17 +944,16 @@ render_main_ai_market_view(
     previous_view_snapshot,
     decision_reason_renderer=render_market_decision_reason_panel,
 )
+
+# Lightweight price-only validation of the latest canonical UP/DOWN thesis.
+# It polls only Railway's existing WebSocket cache every 3 minutes; no new Dhan,
+# option-chain, indicator, Top-9 or news calculation is triggered.
+render_ai_move_tracker(view_snapshot, live_server_url, live_server_api_key)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
 render_protected_candidates(view_snapshot)
 with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
     if panel_open:
         render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
-with persistent_panel(
-    "🐘 Big Player Activity — Buying / Selling Alert",
-    "panel_big_player_open",
-) as panel_open:
-    if panel_open:
-        render_big_player_activity(view_snapshot)
 with persistent_panel(
     "🎯 RSI Top–Bottom Setup — Alag Strategy",
     "panel_rsi_reversal_setup_open",
@@ -967,12 +969,12 @@ with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") a
 with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
     if panel_open:
         render_spot_premium_calculator(view_snapshot)
-with persistent_panel("🕯️ Strong candle / W-M alerts", "panel_pattern_alerts_open") as panel_open:
+with persistent_panel("🔔 Strong Candle / W-M / Big Player Alerts", "panel_pattern_alerts_open") as panel_open:
     if panel_open:
         render_pattern_alerts(snapshot, live_server_url, live_server_api_key)
 
 with persistent_panel(
-    "🔔 Heavy Activity + Manual Price Alerts",
+    "🔔 Manual CE/PE Premium Alert",
     "panel_market_alerts_open",
 ) as panel_open:
     if panel_open:
@@ -983,12 +985,11 @@ with persistent_panel(
         )
 
 with persistent_panel(
-    "Compact Evidence + Next 5–15 Min Outlook",
+    "Compact Evidence — Diagnostic",
     "panel_compact_evidence_open",
 ) as panel_open:
     if panel_open:
         render_evidence_matrix(view_snapshot, previous_view_snapshot)
-        render_market_outlook(view_snapshot)
 
 with persistent_panel(
     "Advanced Options Evidence",

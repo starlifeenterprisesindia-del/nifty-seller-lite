@@ -1,45 +1,32 @@
-# Nifty Seller Lite 2.49 — Simple One-Brain Stability
+# Nifty Seller Lite 2.50 — Lean AI Tracker
 
-Read-only NIFTY options decision-support app built around one simple operational path:
+Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
-The app keeps the existing rich market evidence, protected strike planner, barrier map, Fast Monitor, journal and reports, but removes duplicate hard vetoes from the live decision path. The Simple One-Brain uses only four core blocks: Trend/Regime 40%, blended Options Flow 25%, Participation 20%, and Barrier/Entry 15%. Scores normalize over available evidence.
+The canonical Simple One-Brain remains intentionally small: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**, never an invented neutral vote. Future Brain is advisory only and no UI panel creates a second decision engine.
 
-Confirmed 15m breakout/breakdown is treated as a directional regime; RSI extremes are chase-risk only; Future Brain is advisory only; Big Player is confirmation inside Participation; VIX/FII-DII/news/Greeks/patterns retain their appropriate risk, context or strike-quality roles without becoming separate direction gates.
+## 2.50 highlights
 
-The Decision Journal records WAIT/READY/ENTRY observations and later observed +5m/+15m/+30m outcomes. Live app decisions are also mirrored into Railway persistent expiry storage, while the Paper Trade Journal remains restricted to protected gate-passed simulations. The 5-second Fast Monitor can trigger a priority full snapshot on a major move but never places or decides a trade itself.
+- **AI Move Check**: freezes a canonical UP/DOWN thesis and checks price every 3 minutes from Railway's existing live cache. It tracks ON TRACK / WEAKENING / STALLED / INVALIDATED / TARGET MET, MFE/MAE and 5m/15m/30m outcomes. It does not recalculate indicators, option flow, Top-9, news or One-Brain. Each 3-minute result is also written as a tiny Railway `AI TRACKER` history event for later audit.
+- **Locked barrier tracking**: the tracker keeps the original relevant support/resistance so the goalpost cannot silently move. A completed 3m close from the normal snapshot can confirm the break.
+- **Journal window 09:30–15:00 IST**: no new decision rows outside the clean learning window; already-open rows may still receive later outcome backfills.
+- **Auto Snapshot adds 1 hour**.
+- **Combined Strong Candle / W-M / Big Player alerts**: one Telegram lane with deduplication; the old separate Big Player alert path is removed.
+- **Calculator persistence**: one outer panel only, so Streamlit reruns no longer collapse an unnecessary inner expander; manual entry inputs retain session-state keys.
+- **Top-9 missing data = NO VOTE**: stale/flat session-change fallback cannot create fake 100% neutral Participation.
+- **Cleaner presentation**: Compact Evidence is diagnostic, entry DATA WAIT is shown as data incomplete, Brain Fit is separated from Strike/Pair Quality, near-ATM OI walls are clearly distinguished from full-chain Global Max OI.
+- **Lean performance**: instrument reference resolution is cached in-process; the AI tracker makes only one lightweight `/live` read every 3 minutes and adds no Dhan/option-chain calls.
 
-## Main screen
+## Main screen philosophy
 
-- One-Brain final action and market direction
-- Nearest support/resistance and full R1/R2/S1/S2 map
-- Spot-to-Premium calculator with automatic barrier targets, ETA range, reach chance and total P&L
-- Expiry-aware structural SL, conservative premium SL, T1/T2 RR and time-exit plan
-- Optional manual upper/lower targets
-- Compact 5-15 minute outlook and all-five strategy audit
-- Collapsed market and options evidence
-- Quick PDF, Complete Diagnostic PDF and one-click credential-free Support Bundle ZIP
-
-## One-Brain boundary
-
-`analysis/simple_brain.py` is the live operational entry authority after the canonical snapshot evidence is built. `analysis/decision.py` remains the legacy/core evidence and protected-plan source for compatibility and diagnostics. UI/PDF/premium tools never fetch data or independently approve a trade.
-
-The automatic R1/R2/S1/S2 premium table reuses the existing pricing engine. ETA/chance is contextual evidence only.
+Show one operational answer first. Deep evidence stays behind expanders. The app favors fewer calculations, correct calculations, and observable prediction outcomes over adding more indicators.
 
 ## Run
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
-```
-
-Add Dhan credentials to Streamlit Secrets:
-
-```toml
-[dhan]
-client_id = "..."
-access_token = "..."
 ```
 
 ## Verify
@@ -49,4 +36,4 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Runtime state, credentials, caches, generated PDFs and ZIPs are excluded through `.gitignore`.
+Runtime state, credentials, caches, generated reports and local data are excluded through `.gitignore`.

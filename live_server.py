@@ -301,6 +301,11 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
             recorded = True
         except (ValueError, TypeError, KeyError):
             raise HTTPException(status_code=400, detail="Invalid history event")
+    if payload.get("tracker") and DAY_RECORDER.store:
+        try:
+            recorded = bool(DAY_RECORDER.store.ai_tracker_event(datetime.now(IST), payload["tracker"])) or recorded
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(status_code=400, detail="Invalid tracker event")
     # Final app evidence is posted every full snapshot. It does not need the full
     # SQLite report back each time; the app fetches that report on its own 60s TTL.
     # This keeps recording authoritative while removing repeated report-building work.
@@ -525,17 +530,6 @@ def cancel_alert(
 ) -> dict[str, Any]:
     _authorise(key, x_live_key)
     return {"ok": True, "data": {"cancelled": PREMIUM_STORE.cancel(alert_id)}}
-
-
-@app.post("/alerts/big-player")
-def big_player_alert(
-    payload: dict[str, Any] = Body(...),
-    key: str = Query(default=""),
-    x_live_key: str = Header(default=""),
-) -> dict[str, Any]:
-    _authorise(key, x_live_key)
-    sent = ALERTS.observe_big_player(payload)
-    return {"ok": True, "data": {"accepted": True, "sent": sent}}
 
 
 @app.post("/alerts/pattern")

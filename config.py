@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.49.1_JOURNAL_OUTCOME_STATUS"
+    version: str = "2.50.0_LEAN_AI_TRACKER"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -167,6 +167,10 @@ class AppConfig:
     simple_entry_watch_score: float = 54.0
     simple_execution_required_confirmations: int = 1
     simple_decision_journal_interval_seconds: int = 60
+    simple_decision_journal_start: time = time(9, 30)
+    simple_decision_journal_end: time = time(15, 0)
+    ai_move_tracker_interval_seconds: int = 180
+    ai_move_tracker_max_minutes: int = 30
     simple_priority_snapshot_cooldown_seconds: int = 12
     # Keep a support/resistance break trigger armed long enough for the market to
     # actually cross it.  Without this memory the nearest barrier can move with

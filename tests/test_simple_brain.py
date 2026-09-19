@@ -165,3 +165,18 @@ def test_armed_support_trigger_does_not_move_goalpost_after_break():
     assert "23,447" in result["trigger"]
     assert result["entry_state"] == "TAKE NOW"
     assert result["final_action"] == "CE SELL"
+
+
+def test_top9_session_change_does_not_create_fake_neutral_participation():
+    snapshot, future = _snapshot()
+    snapshot.volume = NS(
+        three_minute=NS(status="UNAVAILABLE", confidence=0.0, move_support="", price_direction=""),
+        fifteen_minute=NS(status="UNAVAILABLE", confidence=0.0, move_support="", price_direction=""),
+    )
+    # Broker/session change is flat but recent 3m movement is unavailable. This is
+    # reference data, not a 100% neutral participation vote.
+    rows = tuple(NS(change_3m_pct=None, change_pct=0.0, official_weight_pct=5.0) for _ in range(9))
+    snapshot.heavyweights = NS(status="READY", covered_weight_pct=45.0, rows=rows)
+    result = calculate_simple_brain(snapshot, future)
+    assert result["blocks"]["participation"]["available"] is False
+    assert result["blocks"]["participation"]["neutral"] == 0.0

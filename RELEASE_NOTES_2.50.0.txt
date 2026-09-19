@@ -1,0 +1,21 @@
+Nifty Seller Lite 2.50.0 — Lean AI Tracker
+
+- Added lightweight 3-minute AI Move Check with MFE/MAE, 5/15/30m checkpoints, locked barrier tracking and tiny persistent Railway AI-TRACKER history events.
+- Added 60-minute Auto Snapshot option.
+- Restricted new Decision Journal rows to 09:30–15:00 IST while preserving later outcome backfill.
+- Fixed Top-9 missing/stale movement so Participation becomes NO VOTE instead of fake 100% neutral.
+- Merged Strong Candle, W/M and Big Player automatic Telegram alerts into one deduplicated path; removed the separate Big Player alert endpoint.
+- Preserved Spot-to-Premium calculator state across auto reruns by removing redundant nested expander behavior.
+- Removed duplicate legacy 5–15 minute outlook from the visible app; Future Brain stays canonical advisory.
+- Clarified Compact Evidence diagnostic role, DATA INCOMPLETE entry state, Brain Fit vs Strike/Pair Quality.
+- Distinguished near-ATM OI wall from full-chain Global Max OI without an additional option-chain request.
+- Cached VIX and nearest NIFTY future instrument resolution to reduce repeated instrument-reference work.
+- Simplified Big Player session-phase wording so time-of-day is not mislabeled as activity strength.
+- Clean release: no runtime data, caches, .bak files or old release notes.
+
+Validation
+- Static compile: 155 Python files compiled successfully.
+- Final changed-area regression: 56 tests passed.
+- Broader core/non-Streamlit regression during this build: 419 passed, 1 skipped.
+- Streamlit-dependent UI tests were not runnable in the build container because Streamlit is not installed there; deployment still installs Streamlit from requirements.txt.
+- No runtime data/, __pycache__, .pytest_cache, .bak files or old release notes are included in the clean cumulative package.
