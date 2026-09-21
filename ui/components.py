@@ -1006,7 +1006,8 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     common_entry = common.get("entry") or {}
     guidance = build_entry_guidance(best_plan, entry_ready=bool(common.get("entry_allowed")), live=snapshot.market_session.is_live)
     with st.container(border=True):
-        st.markdown(f"**Best compatible entry — {leader}: {guidance.status}**")
+        label = "ENTRY" if common.get("entry_allowed") else "CANDIDATE ONLY — ENTRY GATE CLOSED"
+        st.markdown(f"**Best compatible {label} — {leader}: {guidance.status}**")
         c1, c2, c3 = st.columns(3)
         c1.metric("Current package", common_entry.get("current", guidance.current))
         c2.metric("Preferred limit zone", common_entry.get("preferred_zone", guidance.preferred_zone))
@@ -1028,7 +1029,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         )
     st.caption(
         "Decay Edge me SELL ka absolute theta hedge se zyada hona better hai. "
-        "Value Quality liquidity + delta + premium + hedge quality par based hai. "
+        "Value Quality liquidity + premium + hedge quality par based hai; IV WARNING me Greeks ka ranking weight automatically kam hota hai. "
         "KAMZOR VALUE setup ko sirf reference samjho; order app kabhi khud place nahi karti."
     )
 

@@ -20,11 +20,16 @@ class GatewayReader:
         return self._checked(self.gateway.market_quote, instruments)
 
     def _checked(self, method, *args):
-        with self.gateway._lock:
-            result = method(*args)
-            if self.gateway.last_error:
-                raise RuntimeError("Gateway returned cached data after failure")
-            return result
+        # Background memory must never pin the gateway ahead of the foreground app.
+        # Gateway methods already own their internal lock. If a foreground request
+        # arrived between background calls, abort this recorder pass immediately.
+        idle_reader = getattr(self.gateway, "foreground_idle_seconds", None)
+        if callable(idle_reader) and idle_reader() < 2.0:
+            raise RuntimeError("Foreground request priority")
+        result = method(*args)
+        if self.gateway.last_error:
+            raise RuntimeError("Gateway returned cached data after failure")
+        return result
 
     def intraday_candles(self, **kwargs):
         payload = dict(kwargs)
@@ -87,10 +92,23 @@ class DayRecorder:
                 started = clock.monotonic()
                 try:
                     gateway = self.gateway_factory()
+                    minimum_idle = max(8.0, float(os.getenv("DAY_MEMORY_MIN_IDLE_SECONDS", "12") or 12))
+                    # Give the foreground app first priority, but do not permanently
+                    # starve recording when full snapshots run every 30 seconds. Wait
+                    # briefly without holding any gateway lock and use the first safe
+                    # idle window. In 15-second mode this naturally skips rather than
+                    # competing and making the app slow.
+                    wait_budget = max(0.0, float(os.getenv("DAY_MEMORY_IDLE_WAIT_BUDGET_SECONDS", "12") or 12))
+                    deadline = clock.monotonic() + wait_budget
                     idle_seconds = gateway.foreground_idle_seconds()
-                    minimum_idle = max(10.0, float(os.getenv("DAY_MEMORY_MIN_IDLE_SECONDS", "25") or 25))
-                    if idle_seconds < minimum_idle:
+                    while idle_seconds < minimum_idle and clock.monotonic() < deadline:
                         self.status = f"WAIT — app request priority ({idle_seconds:.0f}s idle)"
+                        self.stop_event.wait(1.0)
+                        if self.stop_event.is_set():
+                            return
+                        idle_seconds = gateway.foreground_idle_seconds()
+                    if idle_seconds < minimum_idle:
+                        self.status = f"WAIT — app busy; recorder skipped this minute ({idle_seconds:.0f}s idle)"
                         self.stop_event.wait(max(1.0, 60.0 - clock.time() % 60.0))
                         continue
                     if service is None:

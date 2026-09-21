@@ -32,6 +32,23 @@ def _number(value: Any) -> float | None:
     return result if isfinite(result) else None
 
 
+
+def _greeks_reliability(row: pd.Series) -> float:
+    quality = str(row.get("greeks_quality") or "").upper()
+    # Legacy/offline frames may not carry an explicit quality column. Preserve
+    # their established ranking; only an explicit broker warning is softened.
+    if quality in {"", "READY"}:
+        return 1.0
+    if quality == "IV WARNING":
+        return 0.30
+    return 0.0
+
+
+def _soften_greek_score(score: float, reliability: float, neutral: float = 50.0) -> float:
+    """Shrink uncertain broker Greeks toward neutral instead of letting them rank hard."""
+    r = clamp(float(reliability), 0.0, 1.0)
+    return neutral + (float(score) - neutral) * r
+
 def _future_direction(value: Any) -> str:
     text = str(value or "").upper()
     if text in {"UP", "BULLISH"}:
@@ -374,15 +391,19 @@ def _select_long_leg(
             f"{side} BUY", future_direction, future_strength,
             strike=strike, spot=spot,
         )
-        total = (
-            liquidity * 0.30
-            + _buy_delta_score(
+        greek_reliability = _greeks_reliability(row)
+        delta_rank = _soften_greek_score(
+            _buy_delta_score(
                 _number(row.get("delta")),
                 target=target_delta,
                 minimum=min_delta,
                 maximum=max_delta,
-            )
-            * 0.25
+            ),
+            greek_reliability,
+        )
+        total = (
+            liquidity * 0.30
+            + delta_rank * 0.25
             + distance_score * 0.10
             + level_score * 0.20
             + alignment * 0.15
@@ -688,20 +709,27 @@ def _select_short_leg(
         wall_score, wall_reason = _wall_score(side, strike, options)
         theta = _number(row.get("theta"))
         theta_values = pd.to_numeric(rows.get("theta", pd.Series(dtype=float)), errors="coerce").abs()
-        theta_score = _percentile_score(abs(theta) if theta is not None else None, theta_values)
+        greek_reliability = _greeks_reliability(row)
+        theta_score = _soften_greek_score(
+            _percentile_score(abs(theta) if theta is not None else None, theta_values),
+            greek_reliability,
+        )
+        delta_rank = _soften_greek_score(
+            _delta_score(
+                _number(row.get("delta")),
+                target=target_delta,
+                minimum=min_delta,
+                maximum=max_delta,
+            ),
+            greek_reliability,
+        )
         alignment = _future_strike_alignment(
             f"{side} SELL", future_direction, future_strength,
             strike=strike, spot=spot,
         )
         total = (
             liquidity * 0.25
-            + _delta_score(
-                _number(row.get("delta")),
-                target=target_delta,
-                minimum=min_delta,
-                maximum=max_delta,
-            )
-            * 0.15
+            + delta_rank * 0.15
             + _distance_score(distance_pct) * 0.10
             + level_score * 0.15
             + wall_score * 0.10
@@ -863,7 +891,13 @@ def _select_hedge_leg(
         hedge_cost_ratio = hedge_price / short_price
         cost_score = clamp(100.0 - abs(hedge_cost_ratio - 0.35) * 140.0, 20.0, 100.0)
         hedge_theta = _number(row.get("theta"))
-        if short_theta is not None and hedge_theta is not None and short_theta > 0:
+        hedge_greek_reliability = _greeks_reliability(row)
+        if (
+            short_theta is not None
+            and hedge_theta is not None
+            and short_theta > 0
+            and hedge_greek_reliability >= 0.99
+        ):
             # We want the short option's absolute time decay to exceed the hedge's,
             # while the existing distance/liquidity/cost gates keep the hedge useful.
             theta_ratio = abs(hedge_theta) / short_theta

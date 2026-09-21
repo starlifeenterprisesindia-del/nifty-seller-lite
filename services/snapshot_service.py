@@ -610,10 +610,19 @@ class SnapshotService:
             and quote_candle_divergence <= quote_candle_limit
         )
         spot_flatline_run = self._spot_flatline_run(candles_1m, current)
-        spot_progression_ok = spot_flatline_run < CONFIG.spot_flatline_min_candles
-        # A changing quote timestamp cannot make repeated synthetic candles live.
-        # Keep recording late-session LTP/expiry diagnostics, but mark the complete
-        # snapshot reference-only whenever the underlying price series flatlines.
+        late_spot_reference = (
+            current.time().replace(tzinfo=None) >= CONFIG.spot_reference_only_start
+        )
+        # Dhan/NIFTY spot charts may stop printing new index bars after ~15:15 while
+        # option quotes can still move. The execution window already closes at 15:00,
+        # so this broker-side late-session behaviour is reference-only, not a feed fault.
+        spot_progression_ok = (
+            True
+            if late_spot_reference
+            else spot_flatline_run < CONFIG.spot_flatline_min_candles
+        )
+        # Before 15:15 a changing quote timestamp cannot make repeated synthetic
+        # candles live. After 15:15, preserve the last broker spot bar as reference.
         quote_candle_aligned = quote_candle_aligned and spot_progression_ok
         market_session = classify_market_session(
             current,
@@ -738,12 +747,22 @@ class SnapshotService:
             fetched_at=current,
             age_seconds=latest_1m_age,
             message=(
-                "NIFTY 1m price series is progressing"
+                "LATE SESSION REFERENCE — broker/index spot chart may stop progressing after 15:15; option block can still change"
+                if late_spot_reference
+                else "NIFTY 1m price series is progressing"
                 if spot_progression_ok
                 else f"SOURCE FLATLINE — last {spot_flatline_run} completed 1m bars repeat exact OHLC and volume"
             ),
             source="DhanHQ completed NIFTY 1m candles",
-            use_state=("LIVE" if spot_progression_ok and market_session.is_live else "STALE" if not spot_progression_ok else "REFERENCE"),
+            use_state=(
+                "REFERENCE"
+                if late_spot_reference
+                else "LIVE"
+                if spot_progression_ok and market_session.is_live
+                else "STALE"
+                if not spot_progression_ok
+                else "REFERENCE"
+            ),
         )
         future_candle_available = (
             not future_candles_3m.empty and not future_candles_15m.empty
@@ -1448,6 +1467,9 @@ class SnapshotService:
                 "global_oi_walls": global_oi_walls,
                 "option_state_prior_snapshots": len(option_history),
                 "option_state_current_stored": state_appended,
+                # Reuse the already-built compact state for durable Railway history.
+                # UI/server persistence must not rebuild Greeks or call Dhan again.
+                "option_state_snapshot": option_state_snapshot,
                 "top9_weight_date": CONFIG.top9_weight_date,
                 "strategy_scores_enabled": True,
                 "decision_engine": "analysis.decision.calculate_final_decision",

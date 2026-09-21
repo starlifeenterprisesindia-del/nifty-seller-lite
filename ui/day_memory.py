@@ -63,6 +63,43 @@ def app_observation(snapshot):
                   "fresh": snapshot.market_session.is_live and all(getattr(snapshot.feed_status.get(k),"use_state","")=="LIVE" for k in ("quotes","candles","option_chain"))})
 
 
+
+def market_history_observation(snapshot):
+    """Compact rolling history from the already-built snapshot; zero broker calls."""
+    option_snapshot = None
+    option_feed = snapshot.feed_status.get("option_chain")
+    if (
+        snapshot.expiry
+        and option_feed is not None
+        and getattr(option_feed, "use_state", "") == "LIVE"
+    ):
+        raw_state = (getattr(snapshot, "metadata", {}) or {}).get("option_state_snapshot")
+        if isinstance(raw_state, dict):
+            option_snapshot = raw_state
+
+    prices = {}
+    for quote in list(getattr(snapshot, "heavyweight_quotes", ()) or ()):
+        symbol = str((quote or {}).get("symbol") or "").strip()
+        try:
+            value = float((quote or {}).get("last_price"))
+        except (TypeError, ValueError):
+            continue
+        if symbol and value > 0:
+            prices[symbol] = value
+    top9 = None
+    if prices:
+        try:
+            nifty = float(snapshot.nifty_quote.get("last_price"))
+        except (TypeError, ValueError):
+            nifty = None
+        top9 = {
+            "at": snapshot.created_at.isoformat(),
+            "nifty": nifty,
+            "universe": sorted(prices),
+            "prices": prices,
+        }
+    return clean({"option_snapshot": option_snapshot, "top9": top9})
+
 def sync_day_memory(snapshot, url, key, *, record_event: bool = True):
     """Called before presentation; fresh same-version history only, never a vote."""
     now = datetime.now().timestamp()
@@ -121,9 +158,19 @@ def record_final_day_memory(snapshot, url, key):
         client = RailwayDhanClient(url, key, timeout_seconds=3)
         # Record-only call: the full history report already has a 60-second fetch TTL
         # in sync_day_memory(). Avoid rebuilding/transferring it every 15-second snapshot.
-        client._post(
-            "/day-memory", {"event": app_observation(snapshot), "report": False}
+        now_ts = datetime.now().timestamp()
+        last_history_push = float(st.session_state.get("market_history_push_at", 0.0))
+        history = (
+            market_history_observation(snapshot)
+            if now_ts - last_history_push >= 25.0
+            else None
         )
+        client._post(
+            "/day-memory",
+            {"event": app_observation(snapshot), "history": history, "report": False},
+        )
+        if history is not None:
+            st.session_state.market_history_push_at = now_ts
         st.session_state.day_memory_final_snapshot = snapshot_key
         st.session_state.pop("day_memory_error", None)
     except Exception:
