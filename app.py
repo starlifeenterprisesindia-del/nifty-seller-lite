@@ -297,7 +297,7 @@ with st.sidebar:
         interval_seconds = st.selectbox(
             "Har kitni der snapshot",
             (15, 30, 60),
-            index=0,
+            index=1,
             format_func=lambda value: (
                 "1 minute" if value == 60 else f"{value} second"
             ),
@@ -311,7 +311,7 @@ with st.sidebar:
             disabled=not auto_enabled,
         )
         st.caption(
-            "Fast Monitor NIFTY + ATM CE/PE quote leta hai; MAJOR MOVE par priority full snapshot trigger karta hai."
+            "Recommended: full snapshot 30s + Fast Monitor 5s. MAJOR MOVE par fast monitor priority full snapshot trigger karta hai."
         )
         if auto_enabled and "auto_snapshot_started_at" not in st.session_state:
             st.session_state.auto_snapshot_started_at = time.time()

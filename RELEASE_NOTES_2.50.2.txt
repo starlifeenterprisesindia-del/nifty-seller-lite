@@ -1,0 +1,8 @@
+Nifty Seller Lite 2.50.2_SPEED_SAFE_HISTORY
+
+- Default full snapshot interval changed to 30s; 5s Fast Monitor remains the early-warning lane. Priority rebuild cooldown is 20s so a volatile spell cannot keep the heavy pipeline running continuously.
+- Broker/index spot freeze after ~15:15 is treated as late-session reference behavior, not a false feed failure.
+- Railway rolling Options/Top-9 history is persisted from the already-built foreground snapshot through the existing day-memory request; no extra Dhan market call is added.
+- Background Day Recorder now yields to foreground traffic and aborts between broker calls if foreground activity arrives.
+- IV WARNING Greeks are softened toward neutral for strike ranking; liquidity, spread, OI/volume, barriers and hedge economics keep authority.
+- Strategy panel labels a ranked setup as CANDIDATE ONLY when the entry gate is closed.

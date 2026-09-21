@@ -21,11 +21,11 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.50.1_SPEED_TRUTH_HOTFIX"
+    version: str = "2.50.2_SPEED_SAFE_HISTORY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
-    full_snapshot_default_seconds: int = 15
+    full_snapshot_default_seconds: int = 30
     quote_max_age_seconds: int = 12
     context_quote_max_age_seconds: int = 60
     candle_max_age_minutes: int = 5
@@ -41,6 +41,10 @@ class AppConfig:
     market_close: time = time(15, 30)
     derivatives_close: time = time(15, 40)
     expiry_close_quality_start: time = time(15, 15)
+    # Broker/index charts can stop advancing after ~15:15 even while option
+    # quotes continue to change. New entries already end at 15:00, so treat this
+    # late window as reference-only instead of declaring the feed broken.
+    spot_reference_only_start: time = time(15, 15)
     spot_flatline_min_candles: int = 4
     nifty: InstrumentRef = InstrumentRef(
         name="NIFTY 50",
@@ -171,7 +175,7 @@ class AppConfig:
     simple_decision_journal_end: time = time(15, 0)
     ai_move_tracker_interval_seconds: int = 180
     ai_move_tracker_max_minutes: int = 30
-    simple_priority_snapshot_cooldown_seconds: int = 12
+    simple_priority_snapshot_cooldown_seconds: int = 20
     # Keep a support/resistance break trigger armed long enough for the market to
     # actually cross it.  Without this memory the nearest barrier can move with
     # price and the app can keep saying WAIT after the original trigger broke.

@@ -295,6 +295,15 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
         raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
     _authorise("", x_live_key)
     recorded = False
+    history_saved = {"option_stored": False, "top9_stored": False}
+    if payload.get("history") and DAY_RECORDER.history_root:
+        try:
+            from services.shared_history import append_observation
+            history_saved = append_observation(
+                DAY_RECORDER.history_root, datetime.now(IST), payload.get("history")
+            )
+        except Exception:
+            history_saved = {"option_stored": False, "top9_stored": False}
     if payload.get("event") and DAY_RECORDER.store:
         try:
             DAY_RECORDER.store.app_event(datetime.now(IST), payload["event"])
@@ -310,7 +319,7 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
     # SQLite report back each time; the app fetches that report on its own 60s TTL.
     # This keeps recording authoritative while removing repeated report-building work.
     if payload.get("report", True) is False:
-        return {"ok": True, "data": {"recorded": recorded}}
+        return {"ok": True, "data": {"recorded": recorded, **history_saved}}
     return {"ok": True, "data": DAY_RECORDER.report()}
 
 
