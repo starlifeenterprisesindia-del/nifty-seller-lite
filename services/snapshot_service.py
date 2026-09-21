@@ -1242,6 +1242,7 @@ class SnapshotService:
             as_of=current,
             current_price=(float(current_price) if current_price is not None else None),
         )
+        perf_mark("final_decision")
 
         trade_plan = calculate_trade_plan(
             frame=validated_option_frame,
@@ -1254,6 +1255,7 @@ class SnapshotService:
             indicators=indicators,
             risk_profile=profile,
         )
+        perf_mark("trade_plan")
 
         fresh_signal = (
             market_session.is_live
@@ -1302,6 +1304,7 @@ class SnapshotService:
                 else "UNAVAILABLE"
             ),
         )
+        perf_mark("discipline_append")
 
         execution_guard = calculate_execution_guard(
             decision=decision,
@@ -1315,6 +1318,7 @@ class SnapshotService:
             feed_status=statuses,
             as_of=current,
         )
+        perf_mark("execution_guard")
 
         position_guardian = calculate_position_guardian(
             discipline_state=discipline_state,
@@ -1344,7 +1348,7 @@ class SnapshotService:
             ),
         )
 
-        perf_mark("decision_and_plan")
+        perf_mark("position_guardian")
         build_seconds = round(clock.perf_counter() - perf_started, 4)
         performance = {
             "build_seconds": build_seconds,

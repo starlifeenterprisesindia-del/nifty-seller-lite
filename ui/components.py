@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import asdict
 from html import escape
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +32,27 @@ from services.summary_presenter import (
     unified_direction_line,
 )
 
+
+
+def _effective_age_seconds(snapshot: MarketSnapshot, item: Any) -> float | None:
+    """Age a frozen feed through the time spent building/rendering the snapshot.
+
+    FeedStatus.age_seconds is measured while the snapshot is being assembled. If a
+    build takes several seconds, showing only that frozen age can incorrectly label
+    old-on-screen data as "10s fresh". This is display-only and never changes the
+    One-Brain calculation.
+    """
+    base = getattr(item, "age_seconds", None)
+    try:
+        elapsed = max(0.0, (datetime.now(snapshot.created_at.tzinfo) - snapshot.created_at).total_seconds())
+    except Exception:
+        elapsed = 0.0
+    if base is None:
+        return elapsed if elapsed > 0 else None
+    try:
+        return max(0.0, float(base)) + elapsed
+    except (TypeError, ValueError):
+        return elapsed if elapsed > 0 else None
 
 def _barrier_sources(level: Any | None) -> str:
     if level is None or not level.sources:
@@ -492,7 +514,7 @@ def render_compact_status_bar(snapshot: MarketSnapshot) -> None:
     critical = [statuses.get(key) for key in ("quotes", "candles", "option_chain")]
     critical = [item for item in critical if item is not None]
     bad = [item for item in critical if not item.ok or item.use_state not in {"LIVE", "REFERENCE"}]
-    ages = [float(item.age_seconds) for item in critical if item.age_seconds is not None]
+    ages = [age for item in critical if (age := _effective_age_seconds(snapshot, item)) is not None]
     age = f" · max age {max(ages):.0f}s" if ages else ""
     if snapshot.market_session.is_live and not bad:
         st.success(f"🟢 MARKET OPEN · DATA FRESH{age} · One-Brain live")
@@ -2046,7 +2068,7 @@ def render_data_health(snapshot: MarketSnapshot) -> None:
     elif delayed:
         label, detail, kind = "DELAYED", ", ".join(item.name for item in delayed), "warning"
     elif critical:
-        ages = [item.age_seconds for item in critical if item.age_seconds is not None]
+        ages = [age for item in critical if (age := _effective_age_seconds(snapshot, item)) is not None]
         age_text = f" · max age {max(ages):.0f}s" if ages else ""
         label, detail, kind = "FRESH", "Critical feeds ready" + age_text, "success"
     else:

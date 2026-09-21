@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import weakref
+
 from dataclasses import replace
 from math import isfinite
 from typing import Any
@@ -92,6 +95,57 @@ def _future_strike_alignment(
     return clamp(base * (1.0 - 0.45 * influence) + strike_score * 0.45 * influence, 0.0, 100.0)
 
 
+_FRAME_CACHE_LOCK = threading.Lock()
+_FRAME_CACHE: dict[int, tuple[weakref.ReferenceType, dict[str, object]]] = {}
+
+
+def _frame_cache(frame: pd.DataFrame) -> dict[str, object]:
+    """Small per-frozen-frame numeric cache used only during trade-plan ranking.
+
+    It avoids hundreds of repeated pandas scans without changing any market value or
+    scoring rule. A weakref removes the cache as soon as the snapshot frame dies.
+    """
+    key = id(frame)
+    with _FRAME_CACHE_LOCK:
+        cached = _FRAME_CACHE.get(key)
+        if cached is not None and cached[0]() is frame:
+            return cached[1]
+
+    sides = frame.get("side", pd.Series(index=frame.index, dtype=object)).astype(str).str.upper()
+    strikes = pd.to_numeric(frame.get("strike"), errors="coerce")
+    prices = pd.to_numeric(frame.get("last_price"), errors="coerce")
+    theta = pd.to_numeric(frame.get("theta", pd.Series(index=frame.index, dtype=float)), errors="coerce")
+    unique_strikes = sorted(strikes.dropna().unique())
+    gaps = [b - a for a, b in zip(unique_strikes, unique_strikes[1:]) if b > a]
+    step = float(pd.Series(gaps).median()) if gaps else None
+    theta_lookup: dict[tuple[str, float], float] = {}
+    hedge_strikes: dict[str, object] = {}
+    for side in ("CE", "PE"):
+        mask = sides.eq(side)
+        side_strikes = strikes[mask]
+        side_prices = prices[mask]
+        hedge_strikes[side] = side_strikes[side_prices.ge(CONFIG.trade_min_hedge_premium)].dropna().to_numpy(dtype=float)
+    for side, strike, value in zip(sides, strikes, theta):
+        if pd.notna(strike) and pd.notna(value):
+            theta_lookup[(str(side), float(strike))] = float(value)
+    data: dict[str, object] = {
+        "step": step,
+        "theta": theta_lookup,
+        "hedge_strikes": hedge_strikes,
+    }
+
+    def _drop(_ref, cache_key=key):
+        with _FRAME_CACHE_LOCK:
+            current = _FRAME_CACHE.get(cache_key)
+            if current is not None and current[0] is _ref:
+                _FRAME_CACHE.pop(cache_key, None)
+
+    ref = weakref.ref(frame, _drop)
+    with _FRAME_CACHE_LOCK:
+        _FRAME_CACHE[key] = (ref, data)
+    return data
+
+
 def _row_for_leg(frame: pd.DataFrame, leg: OptionLeg) -> pd.Series | None:
     rows = frame[
         frame["side"].astype(str).str.upper().eq(leg.side)
@@ -103,17 +157,16 @@ def _row_for_leg(frame: pd.DataFrame, leg: OptionLeg) -> pd.Series | None:
 def _plan_decay_edge(frame: pd.DataFrame, plan: SetupPlan) -> float | None:
     sold = bought = 0.0
     seen = False
+    theta_lookup = _frame_cache(frame).get("theta", {})
     for leg in plan.short_legs:
-        row = _row_for_leg(frame, leg)
-        theta = _number(row.get("theta")) if row is not None else None
+        theta = theta_lookup.get((str(leg.side).upper(), float(leg.strike)))
         if theta is not None:
-            sold += abs(theta)
+            sold += abs(float(theta))
             seen = True
     for leg in plan.hedge_legs:
-        row = _row_for_leg(frame, leg)
-        theta = _number(row.get("theta")) if row is not None else None
+        theta = theta_lookup.get((str(leg.side).upper(), float(leg.strike)))
         if theta is not None:
-            bought += abs(theta)
+            bought += abs(float(theta))
             seen = True
     return sold - bought if seen else None
 
@@ -284,14 +337,7 @@ def _select_long_leg(
     rows = _buy_candidate_rows(frame, side, spot)
     if not rows.empty:
         rows = rows[
-            rows["strike"].map(
-                lambda strike: _has_farther_leg(
-                    frame,
-                    side=side,
-                    strike=float(strike),
-                    minimum_steps=1,
-                )
-            )
+            _protected_strike_mask(frame, rows, side=side, minimum_steps=1)
         ].reset_index(drop=True)
     if rows.empty:
         return None, 0.0, (f"No usable ATM/near-ITM {side} buy row",)
@@ -603,14 +649,10 @@ def _select_short_leg(
     had_directional_rows = not rows.empty
     if not rows.empty:
         rows = rows[
-            rows["strike"].map(
-                lambda strike: _has_farther_leg(
-                    frame,
-                    side=side,
-                    strike=float(strike),
-                    minimum_steps=minimum_hedge_steps if minimum_hedge_steps is not None else CONFIG.trade_hedge_steps,
-                    maximum_steps=CONFIG.trade_max_hedge_steps,
-                )
+            _protected_strike_mask(
+                frame, rows, side=side,
+                minimum_steps=(minimum_hedge_steps if minimum_hedge_steps is not None else CONFIG.trade_hedge_steps),
+                maximum_steps=CONFIG.trade_max_hedge_steps,
             )
         ].reset_index(drop=True)
     if rows.empty:
@@ -689,11 +731,40 @@ def _select_short_leg(
 
 
 def _strike_step(frame: pd.DataFrame) -> float | None:
-    strikes = sorted(
-        pd.to_numeric(frame.get("strike"), errors="coerce").dropna().unique()
-    )
-    gaps = [b - a for a, b in zip(strikes, strikes[1:]) if b > a]
-    return float(pd.Series(gaps).median()) if gaps else None
+    step = _frame_cache(frame).get("step")
+    return None if step is None else float(step)
+
+
+def _protected_strike_mask(
+    frame: pd.DataFrame,
+    rows: pd.DataFrame,
+    *,
+    side: str,
+    minimum_steps: int,
+    maximum_steps: int | None = None,
+) -> pd.Series:
+    if rows.empty:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    cache = _frame_cache(frame)
+    step = cache.get("step")
+    if step is None or float(step) <= 0:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    hedge_strikes = cache.get("hedge_strikes", {}).get(side)
+    if hedge_strikes is None or getattr(hedge_strikes, "size", 0) == 0:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    minimum_gap = max(1, int(minimum_steps)) * float(step)
+    maximum_gap = None if maximum_steps is None else max(1, int(maximum_steps)) * float(step)
+    protected: list[bool] = []
+    for strike in pd.to_numeric(rows["strike"], errors="coerce"):
+        if pd.isna(strike):
+            protected.append(False)
+            continue
+        gaps = hedge_strikes - float(strike) if side == "CE" else float(strike) - hedge_strikes
+        valid = gaps >= minimum_gap
+        if maximum_gap is not None:
+            valid &= gaps <= maximum_gap
+        protected.append(bool(valid.any()))
+    return pd.Series(protected, index=rows.index, dtype=bool)
 
 
 def _select_hedge_leg(

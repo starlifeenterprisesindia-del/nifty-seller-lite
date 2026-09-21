@@ -1,0 +1,11 @@
+Nifty Seller Lite v2.50.1 — Speed + Freshness Truth Hotfix
+
+- Optimized protected trade-plan ranking without changing scoring or selected outputs.
+- Removed hundreds of repeated option-frame scans used by hedge existence, strike-step and theta-decay checks.
+- Split snapshot performance timing into final_decision, trade_plan, discipline_append, execution_guard and position_guardian so a slow stage is visible precisely.
+- Data-freshness UI now includes time spent building/rendering the frozen snapshot; a 40-second build can no longer still claim only ~10-second on-screen age.
+- One-Brain logic, 40/25/20/15 weights, entry gates, barriers, option-flow logic and AI Move Tracker are unchanged.
+
+Validation:
+- Representative trade-plan output before vs after optimization: byte-for-byte identical serialized result.
+- Targeted regression suite: 46 passed, 1 skipped; 1 Streamlit UI test deselected because Streamlit is not installed in the build environment.
