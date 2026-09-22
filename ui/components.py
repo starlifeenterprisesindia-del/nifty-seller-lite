@@ -2414,6 +2414,170 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
     st.caption(f"PCR context: **{pcr.state}** | Status: {pcr.status}")
 
 
+def render_options_live_board(snapshot: MarketSnapshot) -> None:
+    """Broker-style single-screen options board using only the current snapshot.
+
+    This is presentation-only: it performs no API request and does not recompute
+    One-Brain scores. The goal is to keep the flow windows, PCR/walls and the
+    strike chain visible together for audit/live comparison.
+    """
+    item = snapshot.option_intelligence
+    chain = snapshot.option_chain.copy()
+    if chain.empty:
+        st.warning("Options Live Board unavailable — option chain is empty.")
+        return
+
+    st.subheader("📊 Options Live Board")
+    st.caption(
+        "Broker-style single screen • CE left | STRIKE center | PE right • "
+        "same authoritative snapshot, no extra Dhan/API call."
+    )
+
+    pcr = item.pcr
+    ready_windows = [
+        w for w in item.windows
+        if str(getattr(w, "status", "")).upper() not in {"UNAVAILABLE", "INSUFFICIENT CONTINUITY"}
+        and str(getattr(w, "bias", "")).upper() not in {"UNAVAILABLE", "NONE", ""}
+    ]
+    maturity = f"{len(ready_windows)}/{len(item.windows)} READY" if item.windows else "0/0"
+    ce_wall = item.ce_wall
+    pe_wall = item.pe_wall
+
+    cards = [
+        ("OPTIONS BIAS", str(item.market_bias or "MIXED"), f"Evidence {item.confidence:.0f}% · {item.persistence}"),
+        ("FLOW MATURITY", maturity, "1m / 3m / 5m continuity"),
+        ("NEAR-ATM PCR", f"{pcr.near_atm_oi_pcr:.2f}" if pcr.near_atm_oi_pcr is not None else "—", str(pcr.state or pcr.status)),
+        ("INTRADAY PCR", f"{pcr.intraday_addition_pcr:.2f}" if pcr.intraday_addition_pcr is not None else "—", "OI addition context"),
+        ("CE WALL / CLUSTER", f"{ce_wall.strike:,.0f}" if ce_wall.strike is not None else "—", f"Cluster {ce_wall.cluster_center:,.0f}" if ce_wall.cluster_center is not None else "Cluster —"),
+        ("PE WALL / CLUSTER", f"{pe_wall.strike:,.0f}" if pe_wall.strike is not None else "—", f"Cluster {pe_wall.cluster_center:,.0f}" if pe_wall.cluster_center is not None else "Cluster —"),
+    ]
+    _render_compact_cards(cards)
+
+    # Compact flow-window strip: enough information for live audit without
+    # opening another tab. Values are exactly those already computed in the
+    # canonical OptionIntelligence object.
+    flow_rows = []
+    for w in item.windows:
+        flow_rows.append({
+            "Window": w.label,
+            "CE OI Δ": w.ce_oi_delta,
+            "PE OI Δ": w.pe_oi_delta,
+            "CE Prem Δ": w.ce_premium_delta,
+            "PE Prem Δ": w.pe_premium_delta,
+            "CE Vol Δ": w.ce_volume_delta,
+            "PE Vol Δ": w.pe_volume_delta,
+            "Bias": w.bias,
+            "Status": w.status,
+        })
+    if flow_rows:
+        st.dataframe(pd.DataFrame(flow_rows), width="stretch", hide_index=True, row_height=34)
+
+    # Normalize both sides into one broker-style strike matrix.
+    work = chain.copy()
+    for col in ("strike", "last_price", "oi", "day_oi_change", "volume", "day_price_change", "top_bid_price", "top_ask_price"):
+        if col not in work.columns:
+            work[col] = None
+    work["side"] = work["side"].astype(str).str.upper()
+
+    ce = work[work["side"] == "CE"].copy()
+    pe = work[work["side"] == "PE"].copy()
+    ce = ce.sort_values("strike").drop_duplicates("strike", keep="last")
+    pe = pe.sort_values("strike").drop_duplicates("strike", keep="last")
+
+    strikes = sorted(set(ce["strike"].dropna().tolist()) | set(pe["strike"].dropna().tolist()))
+    if not strikes:
+        st.info("No strike rows available in the current snapshot.")
+        return
+
+    # Keep the active window compact. The current source normally carries 15
+    # strikes; if it grows later, show ATM +/- 7 to avoid turning this board into
+    # a long scrolling diagnostic table.
+    spot = float((snapshot.nifty_quote or {}).get("last_price") or 0.0)
+    atm = min(strikes, key=lambda x: abs(float(x) - spot)) if spot else strikes[len(strikes)//2]
+    atm_idx = strikes.index(atm)
+    lo = max(0, atm_idx - 7)
+    hi = min(len(strikes), atm_idx + 8)
+    visible_strikes = strikes[lo:hi]
+
+    ce_map = {float(r["strike"]): r for _, r in ce.iterrows()}
+    pe_map = {float(r["strike"]): r for _, r in pe.iterrows()}
+
+    def price(value):
+        if value is None or pd.isna(value):
+            return "—"
+        try:
+            return f"{float(value):,.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    def qty(value, *, signed=False):
+        if value is None or pd.isna(value):
+            return "—"
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        sign = "+" if signed and val > 0 else ("-" if val < 0 else "")
+        abs_val = abs(val)
+        if abs_val >= 10_000_000:
+            body = f"{abs_val / 10_000_000:.2f}Cr"
+        elif abs_val >= 100_000:
+            body = f"{abs_val / 100_000:.2f}L"
+        elif abs_val >= 1_000:
+            body = f"{abs_val / 1_000:.1f}K"
+        else:
+            body = f"{abs_val:.0f}"
+        return f"{sign}{body}"
+
+    rows = []
+    for strike in visible_strikes:
+        c = ce_map.get(float(strike), {})
+        p = pe_map.get(float(strike), {})
+        rows.append({
+            "CE OI": qty(c.get("oi")),
+            "CE OI Δ": qty(c.get("day_oi_change"), signed=True),
+            "CE VOL": qty(c.get("volume")),
+            "CE LTP": price(c.get("last_price")),
+            "STRIKE": f"{float(strike):,.0f}" + ("  ◀ ATM" if float(strike) == float(atm) else ""),
+            "PE LTP": price(p.get("last_price")),
+            "PE VOL": qty(p.get("volume")),
+            "PE OI Δ": qty(p.get("day_oi_change"), signed=True),
+            "PE OI": qty(p.get("oi")),
+        })
+    frame = pd.DataFrame(rows)
+
+    ce_columns = {"CE OI", "CE OI Δ", "CE VOL", "CE LTP"}
+    pe_columns = {"PE LTP", "PE VOL", "PE OI Δ", "PE OI"}
+
+    def board_style(data: pd.DataFrame) -> pd.DataFrame:
+        styles = pd.DataFrame("", index=data.index, columns=data.columns)
+        for col in ce_columns:
+            if col in styles:
+                styles[col] = "background-color: rgba(34,197,94,.055)"
+        for col in pe_columns:
+            if col in styles:
+                styles[col] = "background-color: rgba(239,68,68,.055)"
+        if "STRIKE" in styles:
+            styles["STRIKE"] = "background-color: rgba(245,158,11,.08);font-weight:700"
+        for idx in data.index:
+            if "ATM" in str(data.at[idx, "STRIKE"]):
+                styles.loc[idx, :] = "background-color: rgba(245,158,11,.20);font-weight:800"
+        return styles
+
+    styled = frame.style.apply(board_style, axis=None)
+    st.dataframe(styled, width="stretch", hide_index=True, row_height=31)
+    spot_line = f"Spot {spot:,.2f} • ATM {float(atm):,.0f}"
+    if ce_wall.strike is not None:
+        spot_line += f" • CE wall {ce_wall.strike:,.0f}"
+    if pe_wall.strike is not None:
+        spot_line += f" • PE wall {pe_wall.strike:,.0f}"
+    st.caption(spot_line)
+    st.caption(
+        "Board display-only hai: One-Brain/strategy score, Greeks aur broker requests duplicate nahi hote. "
+        "Advanced detail neeche optional panel me available hai."
+    )
+
+
 def render_heavyweight_intelligence(snapshot: MarketSnapshot) -> None:
     item = snapshot.heavyweights
     st.info(f"Recent combined: {item.recent_state} · 15m {item.recent_15m_move_pct}% · 3m {item.recent_3m_move_pct}%")
