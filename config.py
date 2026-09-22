@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.50.2_SPEED_SAFE_HISTORY"
+    version: str = "2.50.3_BROKER_OPTIONS_BOARD"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5

@@ -1,0 +1,8 @@
+Nifty Seller Lite 2.50.3_BROKER_OPTIONS_BOARD
+
+- Added single-screen broker-style Options Live Board.
+- CE on left, strike in center, PE on right with ATM highlight.
+- Bias, flow maturity, PCR, CE/PE walls and clusters appear above the chain.
+- 1m/3m/5m OI/premium/volume deltas appear on the same screen.
+- Uses only the already-built MarketSnapshot: no extra Dhan/API request and no duplicate One-Brain calculation.
+- Existing Advanced Options Evidence remains available for deep diagnostics.
