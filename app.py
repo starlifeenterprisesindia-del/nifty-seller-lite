@@ -88,6 +88,7 @@ from ui.ai_move_tracker import render_ai_move_tracker
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
 from ui.presentation_helpers import public_mode_enabled
 from ui.performance_diagnostics import render_performance_diagnostics
+from ui.help_guide import render_help_guide
 
 
 @contextmanager
@@ -156,7 +157,7 @@ st.markdown(
     h1{font-size:2.35rem!important;margin-bottom:.15rem!important}
     h2{margin-top:1rem!important}
     [data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.65rem}
-    @media(max-width:760px){.block-container{padding:.8rem .75rem 1.5rem}h1{font-size:1.85rem!important}}
+    @media(max-width:760px){.block-container{padding:.8rem .55rem 1.5rem}h1{font-size:1.75rem!important}.stMetric{padding:.25rem!important}[data-testid="stDataFrame"]{font-size:.82rem}}
     </style>
     """,
     unsafe_allow_html=True,
@@ -1040,6 +1041,9 @@ with persistent_panel("⚙️ Performance Diagnostics", "panel_performance_diagn
             ),
             snapshot_built_now=snapshot_built_now,
         )
+with persistent_panel("❓ One Brain Quick Guide", "panel_help_guide_open") as panel_open:
+    if panel_open:
+        render_help_guide()
 with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
     if panel_open:
         render_day_memory(snapshot, live_server_url, live_server_api_key)

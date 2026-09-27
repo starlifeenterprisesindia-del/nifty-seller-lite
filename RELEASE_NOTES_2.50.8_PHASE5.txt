@@ -1,0 +1,8 @@
+Nifty Seller Lite 2.50.8_PHASE5_USABILITY_ALERT_AUDIT
+
+Phase-5 (Golden Rule):
+- Alert Audit summary: delivery rate, median/P95 latency, failed count, <=3s vs >3s, conflict rate.
+- Display-only alert filters for status and direction.
+- One Brain Quick Guide with concise explanations for key terms.
+- Performance metric help text and small-screen readability polish.
+- No new broker/API calls. No core One Brain calculation or decision path changes.

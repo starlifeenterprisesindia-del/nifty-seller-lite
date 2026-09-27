@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.50.7_PHASE4_DIAGNOSTICS_REPLAY"
+    version: str = "2.50.8_PHASE5_USABILITY_ALERT_AUDIT"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
