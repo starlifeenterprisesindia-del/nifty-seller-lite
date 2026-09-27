@@ -1,0 +1,22 @@
+One Brain Phase-2 audit/review upgrade (Golden Rule safe)
+
+Golden Rule: no feature may slow calculations/processing, add decision latency, or alter One-Brain core logic.
+
+Shipped:
+- Persistent bounded Alert Audit/History for FAST_MOVE and combined W/M+candle+Big-Player Telegram deliveries.
+- Alert audit records generated/delivered timestamps, latency, status, signal identity, NIFTY reference and Big-Player context where available.
+- Alert-history persistence occurs from the delivery/background path; no new broker/API market calls.
+- Manual Refresh Alert Audit UI; it does not poll continuously.
+- Explicit on-demand Post-market Move Review from already recorded SQLite samples.
+- Review labels 15-minute 30+ point observed episodes as MOVE WHILE WAIT or MOVE AFTER SIGNAL; it does not claim a missed profitable trade.
+- Big-Player validation telemetry: direction/score/state at episode start plus first same-direction 60+ activity observed within the window.
+- No automatic Big-Player threshold tuning. Live thresholds stay unchanged until enough real session evidence is reviewed.
+
+Golden Rule verification:
+- Core decision.py unchanged.
+- option_intelligence.py unchanged.
+- big_player.py unchanged.
+- execution_guard.py unchanged.
+- snapshot_service.py unchanged.
+- models.py unchanged.
+- Post-market review is explicit/read-only and never runs in the live decision path.

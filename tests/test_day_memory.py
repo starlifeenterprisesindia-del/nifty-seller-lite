@@ -261,3 +261,16 @@ def test_ai_tracker_event_persists_without_creating_decision_row(tmp_path):
     assert len(tracker) == 1
     assert tracker[0]["status"] == "ON TRACK"
     assert report["recording_coverage"]["app_decision_rows"] == 0
+
+
+def test_post_market_review_is_explicit_read_only(tmp_path):
+    store = DayMemory(tmp_path / "day.sqlite3")
+    at = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
+    for minute in range(16):
+        store.record(snapshot(at + timedelta(minutes=minute), spot=24100 + minute * 3))
+    before = store.report()["counts"]["samples"]
+    review = store.post_market_review(horizon_minutes=15, move_points=30)
+    after = store.report()["counts"]["samples"]
+    assert before == after == 16
+    assert review["non_overlapping_episodes"][0]["label"] == "MOVE WHILE WAIT"
+    assert "big_player_validation" in review

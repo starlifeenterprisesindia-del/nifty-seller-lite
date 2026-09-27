@@ -323,6 +323,22 @@ def day_memory(payload: dict[str, Any] = Body(default={}), x_live_key: str = Hea
     return {"ok": True, "data": DAY_RECORDER.report()}
 
 
+@app.post("/day-memory-review")
+def day_memory_review(payload: dict[str, Any] = Body(default={}), x_live_key: str = Header(default="")):
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
+    _authorise("", x_live_key)
+    if not DAY_RECORDER.store:
+        raise HTTPException(status_code=503, detail="Persistent recorder unavailable")
+    try:
+        horizon = max(5, min(60, int(payload.get("horizon_minutes", 15))))
+        threshold = max(5, min(300, float(payload.get("move_points", 30))))
+        review = DAY_RECORDER.store.post_market_review(horizon, threshold)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "data": review}
+
+
 @app.post("/day-memory-export")
 def day_memory_export(x_live_key: str = Header(default="")):
     import base64
@@ -546,3 +562,14 @@ def pattern_alert(payload: dict[str, Any] = Body(...), key: str = Query(default=
                   x_live_key: str = Header(default="")) -> dict[str, Any]:
     _authorise(key, x_live_key)
     return {"ok": True, "data": {"sent": ALERTS.observe_pattern(payload)}}
+
+
+@app.post("/alerts/pattern-history")
+def pattern_alert_history(payload: dict[str, Any] = Body(default={}), key: str = Query(default=""),
+                          x_live_key: str = Header(default="")) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    try:
+        limit = int(payload.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    return {"ok": True, "data": {"alerts": ALERTS.alert_history(limit)}}
