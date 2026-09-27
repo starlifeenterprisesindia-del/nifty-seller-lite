@@ -87,6 +87,7 @@ from ui.timeframe_outlook import render_timeframe_outlook
 from ui.ai_move_tracker import render_ai_move_tracker
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
 from ui.presentation_helpers import public_mode_enabled
+from ui.performance_diagnostics import render_performance_diagnostics
 
 
 @contextmanager
@@ -1027,6 +1028,18 @@ with persistent_panel(
             render_news_context(view_snapshot)
 
 render_detailed_evidence(view_snapshot)
+with persistent_panel("⚙️ Performance Diagnostics", "panel_performance_diagnostics_open") as panel_open:
+    if panel_open:
+        render_performance_diagnostics(
+            snapshot,
+            refresh_interval_seconds=float(
+                st.session_state.get(
+                    "auto_snapshot_interval_seconds",
+                    CONFIG.full_snapshot_default_seconds,
+                )
+            ),
+            snapshot_built_now=snapshot_built_now,
+        )
 with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
     if panel_open:
         render_day_memory(snapshot, live_server_url, live_server_api_key)
