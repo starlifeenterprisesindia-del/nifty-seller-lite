@@ -19,10 +19,10 @@ def render_performance_diagnostics(
     )
     st.caption(report["note"])
     a, b, c, d = st.columns(4)
-    a.metric("Pipeline", f"{report['pipeline_seconds']:.2f}s")
-    b.metric("Snapshot build", f"{report['build_seconds']:.2f}s")
-    c.metric("Headroom", f"{report['refresh_headroom_seconds']:.1f}s")
-    d.metric("Refresh load", f"{report['refresh_load_pct']:.1f}%")
+    a.metric("Pipeline", f"{report['pipeline_seconds']:.2f}s", help="Current full snapshot pipeline ka recorded processing time.")
+    b.metric("Snapshot build", f"{report['build_seconds']:.2f}s", help="Fresh snapshot construct hone ka recorded time.")
+    c.metric("Headroom", f"{report['refresh_headroom_seconds']:.1f}s", help="Next refresh budget me estimated spare time; higher is better.")
+    d.metric("Refresh load", f"{report['refresh_load_pct']:.1f}%", help="Configured refresh interval ka kitna hissa processing ne consume kiya.")
 
     slowest = report.get("slowest_stage") or "—"
     st.caption(

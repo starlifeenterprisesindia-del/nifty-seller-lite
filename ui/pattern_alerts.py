@@ -1,6 +1,7 @@
 import streamlit as st
 
 from analysis.pattern_alerts import combined_signal_alert
+from analysis.alert_audit import filter_alert_history, summarize_alert_history
 from services.railway_live_client import RailwayDhanClient, post_railway_json
 
 
@@ -73,9 +74,56 @@ def render_pattern_alerts(snapshot, server_url="", server_key=""):
             st.session_state.combined_alert_history_error = type(exc).__name__
     if st.session_state.get("combined_alert_history_error"):
         st.warning("Alert audit fetch nahi hua — live calculations unaffected hain.")
+    history = st.session_state.get("combined_alert_history", [])[:30]
+    if history:
+        summary = summarize_alert_history(history)
+        a, b, c, d = st.columns(4)
+        a.metric(
+            "Delivery",
+            f"{summary['delivery_rate_pct']:.1f}%" if summary['delivery_rate_pct'] is not None else "—",
+            help="Fetched audit rows me SENT alerts ka percentage.",
+        )
+        b.metric(
+            "Median latency",
+            f"{summary['median_latency_seconds']:.2f}s" if summary['median_latency_seconds'] is not None else "—",
+            help="Alert generated se Telegram delivery complete hone tak median time.",
+        )
+        c.metric(
+            "P95 latency",
+            f"{summary['p95_latency_seconds']:.2f}s" if summary['p95_latency_seconds'] is not None else "—",
+            help="95% recorded deliveries is latency ke andar hain (sample dependent).",
+        )
+        d.metric(
+            "Failed",
+            summary['failed'],
+            help="Delivery failures recorded in the fetched audit window.",
+        )
+        st.caption(
+            f"≤3s: {summary['fast_count']} · >3s: {summary['slow_count']} · "
+            f"Conflict rate: {summary['conflict_rate_pct'] if summary['conflict_rate_pct'] is not None else '—'}%"
+        )
+
+        f1, f2 = st.columns(2)
+        status_filter = f1.selectbox(
+            "Status filter", ("ALL", "SENT", "FAILED"), key="alert_audit_status_filter",
+            help="Display-only filter; server history ko change nahi karta.",
+        )
+        direction_filter = f2.selectbox(
+            "Direction filter", ("ALL", "BULLISH", "BEARISH"), key="alert_audit_direction_filter",
+            help="Display-only filter.",
+        )
+        filtered = filter_alert_history(history, status=status_filter, direction=direction_filter)
+    else:
+        filtered = []
+
     rows = []
-    for item in st.session_state.get("combined_alert_history", [])[:30]:
+    for item in filtered:
         bp = item.get("big_player") or {}
+        latency = item.get("latency_seconds")
+        try:
+            latency_flag = "SLOW" if float(latency) > 3.0 else "OK"
+        except (TypeError, ValueError):
+            latency_flag = "—"
         rows.append({
             "Generated": str(item.get("generated_at") or item.get("captured_at") or "")[:19].replace("T", " "),
             "Type": item.get("kind", "—"),
@@ -83,9 +131,12 @@ def render_pattern_alerts(snapshot, server_url="", server_key=""):
             "NIFTY": item.get("nifty_ltp"),
             "BP": (f"{bp.get('stage','')} {bp.get('direction','')} {bp.get('score','—')}".strip() if bp else "—"),
             "Status": item.get("status", "—"),
-            "Latency s": item.get("latency_seconds"),
+            "Latency s": latency,
+            "Latency": latency_flag,
             "Signal": item.get("names") or item.get("signature") or "—",
             "Conflict": "YES" if item.get("conflict") else "NO",
         })
     if rows:
         st.dataframe(rows, hide_index=True, use_container_width=True)
+    elif history:
+        st.info("Selected filters me koi alert nahi mila.")
