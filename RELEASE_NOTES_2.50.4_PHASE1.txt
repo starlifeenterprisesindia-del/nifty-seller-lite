@@ -1,0 +1,14 @@
+One Brain Phase-1 trust/display upgrade (Golden Rule safe)
+
+Golden Rule: no feature may slow calculations/processing, add decision latency, or alter One-Brain core logic.
+
+Shipped:
+- No new broker/API calls.
+- No change to One-Brain scoring weights, persistence semantics, strategy ranking, execution gates, snapshot service, or Dhan fetch path.
+- Options Live Board exposes current IV, Delta and Theta from the existing canonical option-chain snapshot.
+- Added display-only Data Confidence score from existing FeedStatus objects.
+- Added display-only human-friendly flow maturity states (NEW SPIKE / FORMING / SUSTAINED / FADING-TRANSITION / WARMING / MIXED).
+- Added compact WHY and CONFLICT/CAUTION context on the main One-Brain workspace and Options Live Board.
+
+Held back by Golden Rule:
+- 1m/3m/5m IV-delta calculation was prototyped but removed after benchmark showed measurable core compute overhead. It is not included in this build.
