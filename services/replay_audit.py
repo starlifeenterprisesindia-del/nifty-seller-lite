@@ -8,6 +8,7 @@ import gzip
 import json
 import sys
 from datetime import datetime, timedelta
+from statistics import median
 
 
 def _activity(row):
@@ -71,8 +72,13 @@ def audit_samples(samples, horizon_minutes=15, move_points=30):
             if activity.get("direction") == observed_direction and float(activity.get("score") or 0) >= 60:
                 matching.append((sample, activity))
         first_match = matching[0] if matching else None
+        end_at = datetime.fromisoformat(end["at"])
         episodes.append({
             "start":row["at"],"end":end["at"],"observed_move":round(change,2),
+            "absolute_move":round(abs(change),2),
+            "duration_minutes":round((end_at-at).total_seconds()/60.0,1),
+            "start_spot":round(float(row["spot"]),2),
+            "end_spot":round(float(end["spot"]),2),
             "observed_direction": observed_direction,
             "background_action_at_start":action,"direction_at_start":row.get("direction"),
             "label":"MOVE WHILE WAIT" if action=="WAIT" else "MOVE AFTER SIGNAL",
@@ -91,15 +97,38 @@ def audit_samples(samples, horizon_minutes=15, move_points=30):
     aligned_at_start = [e for e in directional_at_start if e["big_player_at_start"]["direction"] == e["observed_direction"]]
     opposite_at_start = [e for e in directional_at_start if e["big_player_at_start"]["direction"] != e["observed_direction"]]
     same_direction_observed = [e for e in episodes if e.get("first_same_direction_big_player_at")]
+    lags = [float(e["big_player_observation_lag_minutes"]) for e in same_direction_observed
+            if e.get("big_player_observation_lag_minutes") is not None]
+    wait_episodes = [e for e in episodes if e.get("background_action_at_start") == "WAIT"]
+    signal_episodes = [e for e in episodes if e.get("background_action_at_start") != "WAIT"]
+    upward = [e for e in episodes if e.get("observed_direction") == "BUYING"]
+    downward = [e for e in episodes if e.get("observed_direction") == "SELLING"]
+    magnitudes = [float(e.get("absolute_move") or 0.0) for e in episodes]
     return {
         "samples":len(rows),"horizon_minutes":horizon_minutes,"move_threshold_points":move_points,
         "non_overlapping_episodes":episodes,
+        "episode_summary": {
+            "move_episodes": len(episodes),
+            "wait_at_start": len(wait_episodes),
+            "signal_present_at_start": len(signal_episodes),
+            "upward_moves": len(upward),
+            "downward_moves": len(downward),
+            "median_move_points": round(median(magnitudes), 2) if magnitudes else None,
+            "largest_move_points": round(max(magnitudes), 2) if magnitudes else None,
+            "median_same_direction_bp_lag_minutes": round(median(lags), 1) if lags else None,
+            "same_direction_bp_within_3m": sum(lag <= 3 for lag in lags),
+            "same_direction_bp_within_5m": sum(lag <= 5 for lag in lags),
+            "note": "Observed-session replay summary only; it is not a backtest, P&L estimate, or win-rate.",
+        },
         "big_player_validation": {
             "move_episodes": len(episodes),
             "directional_at_episode_start": len(directional_at_start),
             "aligned_at_episode_start": len(aligned_at_start),
             "opposite_at_episode_start": len(opposite_at_start),
             "same_direction_60plus_observed_within_window": len(same_direction_observed),
+            "median_same_direction_lag_minutes": round(median(lags), 1) if lags else None,
+            "same_direction_within_3m": sum(lag <= 3 for lag in lags),
+            "same_direction_within_5m": sum(lag <= 5 for lag in lags),
             "note": "Diagnostic counts only; thresholds are not auto-tuned and no accuracy/win-rate claim is made.",
         },
         "warning":"Observed endpoints only. Fees, fills, stops and intraminute path not simulated; no accuracy claim."

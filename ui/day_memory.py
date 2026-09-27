@@ -223,47 +223,101 @@ def render_day_memory(snapshot, url, key):
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
 
-        st.markdown("### Post-market Move Review")
+        st.markdown("### Post-market Replay Review")
         st.caption(
-            "Manual/on-demand diagnostic: saved samples se 15-minute 30+ point moves dekhta hai. "
+            "Manual/on-demand diagnostic: saved samples ke observed moves aur Big Player timing ko replay karta hai. "
             "Koi broker call, live score change ya automatic threshold tuning nahi hoti."
         )
-        if st.button("Build Post-market Review", key="build_post_market_review"):
+        rc1, rc2 = st.columns(2)
+        replay_horizon = rc1.selectbox(
+            "Replay horizon",
+            (5, 10, 15, 30),
+            index=2,
+            format_func=lambda value: f"{value} minute",
+            key="post_market_review_horizon",
+        )
+        replay_move = rc2.selectbox(
+            "Minimum observed move",
+            (20, 30, 50, 75),
+            index=1,
+            format_func=lambda value: f"{value} points",
+            key="post_market_review_move_points",
+        )
+        if st.button("Build Replay Review", key="build_post_market_review"):
             try:
                 st.session_state.post_market_review = RailwayDhanClient(
                     url, key, timeout_seconds=10
-                )._post("/day-memory-review", {"horizon_minutes": 15, "move_points": 30})
+                )._post(
+                    "/day-memory-review",
+                    {"horizon_minutes": int(replay_horizon), "move_points": int(replay_move)},
+                )
                 st.session_state.pop("post_market_review_error", None)
             except Exception as exc:
                 st.session_state.post_market_review_error = type(exc).__name__
         if st.session_state.get("post_market_review_error"):
-            st.warning("Review build nahi hua — recorded data safe hai aur One Brain unaffected hai.")
+            st.warning("Replay build nahi hua — recorded data safe hai aur One Brain unaffected hai.")
         review = st.session_state.get("post_market_review")
         if review:
             validation = review.get("big_player_validation") or {}
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Observed moves", validation.get("move_episodes", 0))
-            c2.metric("BP directional start", validation.get("directional_at_episode_start", 0))
-            c3.metric("BP aligned start", validation.get("aligned_at_episode_start", 0))
-            c4.metric("BP opposite start", validation.get("opposite_at_episode_start", 0))
+            summary = review.get("episode_summary") or {}
+            st.caption(
+                f"Replay rule: {review.get('horizon_minutes', replay_horizon)}m / "
+                f"{review.get('move_threshold_points', replay_move)} points · "
+                f"Samples {review.get('samples', 0)}"
+            )
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Observed moves", summary.get("move_episodes", validation.get("move_episodes", 0)))
+            c2.metric("WAIT at start", summary.get("wait_at_start", 0))
+            c3.metric("Signal at start", summary.get("signal_present_at_start", 0))
+            c4.metric("BP aligned start", validation.get("aligned_at_episode_start", 0))
+            lag = summary.get("median_same_direction_bp_lag_minutes")
+            c5.metric("Median BP lag", "—" if lag is None else f"{float(lag):.1f}m")
+
+            if summary:
+                st.caption(
+                    f"Move size median {summary.get('median_move_points') if summary.get('median_move_points') is not None else '—'} pts · "
+                    f"largest {summary.get('largest_move_points') if summary.get('largest_move_points') is not None else '—'} pts · "
+                    f"same-direction BP <=3m {summary.get('same_direction_bp_within_3m', 0)} · "
+                    f"<=5m {summary.get('same_direction_bp_within_5m', 0)}"
+                )
+
             rows = []
             for item in review.get("non_overlapping_episodes", []):
                 activity = item.get("big_player_at_start") or {}
                 rows.append({
                     "Start": str(item.get("start") or "")[:16].replace("T", " "),
-                    "15m move": item.get("observed_move"),
-                    "Observed": item.get("observed_direction"),
-                    "AI at start": item.get("background_action_at_start"),
-                    "Review": "WAIT ke dauran move" if item.get("label") == "MOVE WHILE WAIT" else "Signal ke baad move",
+                    "End": str(item.get("end") or "")[:16].replace("T", " "),
+                    "Move pts": item.get("observed_move"),
+                    "Direction": item.get("observed_direction"),
+                    "App at start": item.get("background_action_at_start"),
+                    "Context": "WAIT at start" if item.get("label") == "MOVE WHILE WAIT" else "Signal present",
                     "BP start": activity.get("direction", "—"),
                     "BP score": activity.get("score"),
                     "BP state": activity.get("state", "—"),
                     "Same-dir BP lag min": item.get("big_player_observation_lag_minutes"),
                 })
-            if rows:
-                st.dataframe(rows, hide_index=True, use_container_width=True)
-            else:
-                st.info("Selected 15m/30-point rule par complete observed move episode nahi mila.")
+            episode_tab, timing_tab = st.tabs(["Replay timeline", "Big Player timing"])
+            with episode_tab:
+                if rows:
+                    st.dataframe(rows, hide_index=True, use_container_width=True)
+                else:
+                    st.info("Selected replay rule par complete observed move episode nahi mila.")
+            with timing_tab:
+                if rows:
+                    timing_rows = [
+                        {
+                            "Start": row["Start"],
+                            "Direction": row["Direction"],
+                            "BP start": row["BP start"],
+                            "BP score": row["BP score"],
+                            "Same-dir BP lag min": row["Same-dir BP lag min"],
+                        }
+                        for row in rows
+                    ]
+                    st.dataframe(timing_rows, hide_index=True, use_container_width=True)
+                else:
+                    st.info("Big Player timing compare karne ke liye replay episodes chahiye.")
+            st.caption(str(summary.get("note") or ""))
             st.caption(str(review.get("warning") or ""))
 
         analytics = snapshot.metadata.get("history_analytics", {})
