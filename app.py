@@ -955,7 +955,7 @@ render_main_ai_market_view(
 render_ai_move_tracker(view_snapshot, live_server_url, live_server_api_key)
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
 render_protected_candidates(view_snapshot)
-render_options_live_board(view_snapshot)
+render_options_live_board(view_snapshot, state_store)
 with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
     if panel_open:
         render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))

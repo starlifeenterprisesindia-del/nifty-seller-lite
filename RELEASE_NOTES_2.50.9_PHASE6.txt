@@ -1,0 +1,11 @@
+Nifty Seller Lite 2.50.9_PHASE6_IV_DELTA_ZERO_CORE
+
+Phase-6 (Golden Rule):
+- Added explicit on-demand IV Delta for 1m / 3m / 5m using already-persisted option-state history.
+- Default IV Delta path is OFF: no history read or IV-delta computation until the user clicks Load IV Delta.
+- No broker/Dhan/API request is made by IV Delta.
+- 3m is preferred for per-strike IV Delta display when continuity is ready; 1m/5m are safe fallbacks.
+- IV Delta is display-only and never feeds One Brain score, trade plan, execution guard, Big Player or alerts.
+- State-store ownership remains with app/snapshot service; the IV helper only consumes rows passed to it.
+- Help guide updated with IV Delta meaning and limitations.
+- Core One Brain calculation files unchanged.
