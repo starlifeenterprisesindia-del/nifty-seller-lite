@@ -1267,6 +1267,7 @@ def render_main_ai_market_view(
             if "DATA" in compact_entry_state
             else f"{float(compact_simple.get('entry_readiness') or snapshot.decision.decision_confidence):.0f}%"
         )
+        data_score, _data_detail = _data_confidence(snapshot)
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
@@ -1275,6 +1276,11 @@ def render_main_ai_market_view(
                     "Entry State" if snapshot.market_session.is_live else "Reference State",
                     compact_entry_value,
                     compact_entry_state,
+                ),
+                (
+                    "Data Confidence",
+                    f"{data_score}/100" if snapshot.market_session.is_live else f"{data_score}/100 REF",
+                    "Feed trust only · One-Brain score unchanged",
                 ),
             ]
         )
@@ -1288,7 +1294,12 @@ def render_main_ai_market_view(
             f"Options flow {'ready' if option_ready else 'warming/unavailable'}. "
             f"Barrier {barrier_state}. {compact_entry_state}."
         )
-        st.info("🧠 **AI samajh:** " + short_reason)
+        flow_maturity = _display_flow_maturity(snapshot.option_intelligence)
+        flow_conflict = _option_conflict_text(snapshot.option_intelligence)
+        st.info(
+            "🧠 **AI samajh:** " + short_reason
+            + f" Flow maturity {flow_maturity}. Conflict/Caution: {flow_conflict}."
+        )
         with st.expander("Full AI reasoning", expanded=False):
             st.caption(safe_brain_hinglish_line(snapshot, previous_snapshot))
         patterns = getattr(snapshot, "patterns", None)
@@ -2055,6 +2066,76 @@ def render_feed_status(snapshot: MarketSnapshot) -> None:
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
+def _data_confidence(snapshot: MarketSnapshot) -> tuple[int, str]:
+    """Display-only trust score from existing FeedStatus objects.
+
+    No API calls and no impact on One-Brain scores. Closed sessions are explicitly
+    labelled reference-only so normal after-market staleness is not misread as a
+    live-feed failure.
+    """
+    weights = {"quotes": 25, "candles": 25, "option_chain": 30, "future_volume": 10, "vix": 10}
+    statuses = snapshot.feed_status or {}
+    total = 0.0
+    details = []
+    for key, weight in weights.items():
+        item = statuses.get(key)
+        if item is None:
+            factor, state = 0.0, "MISSING"
+        else:
+            state = str(getattr(item, "use_state", "UNAVAILABLE") or "UNAVAILABLE").upper()
+            if not bool(getattr(item, "ok", False)) or state == "UNAVAILABLE":
+                factor = 0.0
+            elif state == "LIVE":
+                factor = 1.0
+            elif state in {"CAUTION", "DELAYED"}:
+                factor = 0.65
+            elif state == "STALE":
+                factor = 0.25
+            else:
+                factor = 0.50
+        total += weight * factor
+        details.append(f"{key}:{state}")
+    score = int(round(max(0.0, min(100.0, total))))
+    mode = "REFERENCE ONLY" if not snapshot.market_session.is_live else "LIVE TRUST"
+    return score, mode + " · " + " · ".join(details)
+
+
+def _display_flow_maturity(item: Any) -> str:
+    """Human-friendly persistence label; presentation only."""
+    ready = [w for w in getattr(item, "windows", ()) if str(getattr(w, "status", "")).upper() == "READY"]
+    by_sec = {int(getattr(w, "target_seconds", 0)): str(getattr(w, "bias", "MIXED")).upper() for w in ready}
+    fast1, fast3, slow5 = by_sec.get(60), by_sec.get(180), by_sec.get(300)
+    directional = {"BULLISH", "BEARISH"}
+    if fast1 in directional and fast3 == fast1 and slow5 in directional and slow5 != fast1:
+        return "FADING / TRANSITION"
+    persistence = str(getattr(item, "persistence", "") or "").upper()
+    if "PERSISTENT" in persistence:
+        return "SUSTAINED"
+    if "DEVELOPING" in persistence:
+        return "FORMING"
+    directional_ready = [w for w in ready if str(getattr(w, "bias", "")).upper() in directional]
+    if len(directional_ready) == 1:
+        return "NEW SPIKE"
+    if len(directional_ready) >= 2 and len({str(w.bias).upper() for w in directional_ready}) == 1:
+        return "FORMING"
+    if not ready:
+        return "WARMING UP"
+    return "MIXED"
+
+
+def _option_conflict_text(item: Any) -> str:
+    ready = [w for w in getattr(item, "windows", ()) if str(getattr(w, "status", "")).upper() == "READY"]
+    biases = [str(getattr(w, "bias", "")).upper() for w in ready]
+    directional = {b for b in biases if b in {"BULLISH", "BEARISH"}}
+    if len(directional) > 1:
+        return "1m/3m/5m directional disagreement"
+    market_bias = str(getattr(item, "market_bias", "")).upper()
+    if market_bias in {"BULLISH", "BEARISH"} and any(b in {"BULLISH", "BEARISH"} and b != market_bias for b in biases):
+        return "Fast/slow flow conflict"
+    blockers = tuple(getattr(item, "blockers", ()) or ())
+    return str(blockers[0]) if blockers else "No major flow conflict"
+
+
 def render_data_health(snapshot: MarketSnapshot) -> None:
     """Compact display-only trust label; it never changes One-Brain scores."""
     statuses = snapshot.feed_status or {}
@@ -2074,7 +2155,10 @@ def render_data_health(snapshot: MarketSnapshot) -> None:
         label, detail, kind = "FRESH", "Critical feeds ready" + age_text, "success"
     else:
         label, detail, kind = "BROKER SE MATCH CHECK", "Freshness details available nahi", "warning"
-    getattr(st, kind)(f"📡 **Data Health: {label}** — {detail}")
+    score, score_detail = _data_confidence(snapshot)
+    confidence_text = f"{score}/100" if snapshot.market_session.is_live else f"{score}/100 reference"
+    getattr(st, kind)(f"📡 **Data Health: {label}** — {detail} · **Data Confidence {confidence_text}**")
+    st.caption(score_detail)
 
 
 def render_core_evidence(snapshot: MarketSnapshot) -> None:
@@ -2440,18 +2524,24 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
         and str(getattr(w, "bias", "")).upper() not in {"UNAVAILABLE", "NONE", ""}
     ]
     maturity = f"{len(ready_windows)}/{len(item.windows)} READY" if item.windows else "0/0"
+    maturity_state = _display_flow_maturity(item)
+    data_score, _ = _data_confidence(snapshot)
     ce_wall = item.ce_wall
     pe_wall = item.pe_wall
 
     cards = [
-        ("OPTIONS BIAS", str(item.market_bias or "MIXED"), f"Evidence {item.confidence:.0f}% · {item.persistence}"),
-        ("FLOW MATURITY", maturity, "1m / 3m / 5m continuity"),
+        ("OPTIONS BIAS", str(item.market_bias or "MIXED"), f"Evidence {item.confidence:.0f}% · {maturity_state}"),
+        ("FLOW MATURITY", maturity_state, maturity + " · 1m / 3m / 5m"),
+        ("DATA CONFIDENCE", f"{data_score}/100", "Display-only feed trust; no score impact"),
         ("NEAR-ATM PCR", f"{pcr.near_atm_oi_pcr:.2f}" if pcr.near_atm_oi_pcr is not None else "—", str(pcr.state or pcr.status)),
         ("INTRADAY PCR", f"{pcr.intraday_addition_pcr:.2f}" if pcr.intraday_addition_pcr is not None else "—", "OI addition context"),
         ("CE WALL / CLUSTER", f"{ce_wall.strike:,.0f}" if ce_wall.strike is not None else "—", f"Cluster {ce_wall.cluster_center:,.0f}" if ce_wall.cluster_center is not None else "Cluster —"),
         ("PE WALL / CLUSTER", f"{pe_wall.strike:,.0f}" if pe_wall.strike is not None else "—", f"Cluster {pe_wall.cluster_center:,.0f}" if pe_wall.cluster_center is not None else "Cluster —"),
     ]
     _render_compact_cards(cards)
+    why = str((item.reasons or ("Option flow mixed",))[0])
+    conflict = _option_conflict_text(item)
+    st.info(f"**WHY:** {why}  •  **CONFLICT/CAUTION:** {conflict}")
 
     # Compact flow-window strip: enough information for live audit without
     # opening another tab. Values are exactly those already computed in the
@@ -2474,7 +2564,7 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
 
     # Normalize both sides into one broker-style strike matrix.
     work = chain.copy()
-    for col in ("strike", "last_price", "oi", "day_oi_change", "volume", "day_price_change", "top_bid_price", "top_ask_price"):
+    for col in ("strike", "last_price", "oi", "day_oi_change", "volume", "day_price_change", "top_bid_price", "top_ask_price", "implied_volatility", "delta", "theta"):
         if col not in work.columns:
             work[col] = None
     work["side"] = work["side"].astype(str).str.upper()
@@ -2529,6 +2619,14 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
             body = f"{abs_val:.0f}"
         return f"{sign}{body}"
 
+    def greek(value, digits=3):
+        if value is None or pd.isna(value):
+            return "—"
+        try:
+            return f"{float(value):.{digits}f}"
+        except (TypeError, ValueError):
+            return "—"
+
     rows = []
     for strike in visible_strikes:
         c = ce_map.get(float(strike), {})
@@ -2537,17 +2635,23 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
             "CE OI": qty(c.get("oi")),
             "CE OI Δ": qty(c.get("day_oi_change"), signed=True),
             "CE VOL": qty(c.get("volume")),
+            "CE IV": greek(c.get("implied_volatility"), 2),
+            "CE Delta": greek(c.get("delta"), 3),
+            "CE Theta": greek(c.get("theta"), 2),
             "CE LTP": price(c.get("last_price")),
             "STRIKE": f"{float(strike):,.0f}" + ("  ◀ ATM" if float(strike) == float(atm) else ""),
             "PE LTP": price(p.get("last_price")),
+            "PE Theta": greek(p.get("theta"), 2),
+            "PE Delta": greek(p.get("delta"), 3),
+            "PE IV": greek(p.get("implied_volatility"), 2),
             "PE VOL": qty(p.get("volume")),
             "PE OI Δ": qty(p.get("day_oi_change"), signed=True),
             "PE OI": qty(p.get("oi")),
         })
     frame = pd.DataFrame(rows)
 
-    ce_columns = {"CE OI", "CE OI Δ", "CE VOL", "CE LTP"}
-    pe_columns = {"PE LTP", "PE VOL", "PE OI Δ", "PE OI"}
+    ce_columns = {"CE OI", "CE OI Δ", "CE VOL", "CE IV", "CE Delta", "CE Theta", "CE LTP"}
+    pe_columns = {"PE LTP", "PE Theta", "PE Delta", "PE IV", "PE VOL", "PE OI Δ", "PE OI"}
 
     def board_style(data: pd.DataFrame) -> pd.DataFrame:
         styles = pd.DataFrame("", index=data.index, columns=data.columns)
