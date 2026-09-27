@@ -224,7 +224,7 @@ def test_calculator_is_read_only_and_not_a_second_strategy_brain():
     assert "DhanClient(" not in module
     assert "requests." not in module
     assert "PLACE_ORDER" not in module.upper()
-    assert app.count("render_spot_premium_calculator(view_snapshot)") == 1
+    assert app.count("render_spot_premium_calculator(view_snapshot, state_store)") == 1
 
 
 def test_invalid_iv_is_ignored_safely():
@@ -424,3 +424,16 @@ def test_v219_ui_is_compact_and_keeps_optional_manual_and_iv_controls():
     assert "IV change scenario (optional)" in ui
     assert "Premium Breakdown — Abhi" not in ui
     assert "Selected strike OI" not in ui
+
+
+def test_spot_premium_auto_iv_reuses_saved_history_only():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ui = (root / "ui" / "premium_calculator.py").read_text(encoding="utf-8")
+    assert "compute_iv_delta_payload" in ui
+    assert "option_state_store.load_session" in ui
+    assert "DhanClient(" not in ui
+    assert "requests." not in ui
+    assert "Auto IV Δ" in ui
+    assert "Manual IV scenario override" in ui

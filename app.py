@@ -973,7 +973,7 @@ with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") a
         )
 with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
     if panel_open:
-        render_spot_premium_calculator(view_snapshot)
+        render_spot_premium_calculator(view_snapshot, state_store)
 with persistent_panel("🔔 Strong Candle / W-M / Big Player Alerts", "panel_pattern_alerts_open") as panel_open:
     if panel_open:
         render_pattern_alerts(snapshot, live_server_url, live_server_api_key)
