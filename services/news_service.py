@@ -320,7 +320,55 @@ class MarketNewsService:
         summary = f"{len(rows)} recent headline(s); risk {risk}; bias {bias}. Latest: {lead}"
         return bias, risk, summary[:420]
 
+    @staticmethod
+    def _outside_regular_market_window(now: datetime) -> bool:
+        """Conservative network-skip window for presentation-only news.
+
+        Snapshot/decision freshness remains authoritative. This helper only prevents
+        slow RSS calls on weekends and clearly outside NSE continuous-market hours.
+        Public holidays during market hours are intentionally not guessed here.
+        """
+
+        local = now
+        if local.weekday() >= 5:
+            return True
+        clock = local.time().replace(tzinfo=None)
+        from datetime import time
+        return clock < time(9, 15) or clock > time(15, 30)
+
+    def _reference_cache(self, now: datetime) -> NewsContext:
+        """Return last cached context without any network request."""
+
+        if self.cache_path.exists():
+            try:
+                payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+                context = self._context_from_payload(payload, now)
+                return NewsContext(
+                    as_of=now,
+                    headlines=context.headlines,
+                    bias=context.bias,
+                    risk_level=context.risk_level,
+                    summary="Market closed/outside live window; RSS fetch skipped. " + context.summary,
+                    newest_age_minutes=context.newest_age_minutes,
+                    status=context.status,
+                    source=context.source + " (cached reference)",
+                )
+            except Exception:
+                pass
+        return NewsContext(
+            as_of=now,
+            headlines=(),
+            bias="NEUTRAL",
+            risk_level="NONE",
+            summary="Market closed/outside live window; RSS fetch skipped; news live weight zero.",
+            newest_age_minutes=None,
+            status="UNAVAILABLE",
+            source="Cached reference only",
+        )
+
     def fetch(self, now: datetime) -> NewsContext:
+        if self._outside_regular_market_window(now):
+            return self._reference_cache(now)
         cached = self._read_cache(now)
         if cached is not None:
             return cached

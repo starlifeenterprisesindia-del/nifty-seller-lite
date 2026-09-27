@@ -158,6 +158,65 @@ def market_rukh_display(snapshot: Any) -> tuple[str, float, str]:
     return decision_direction or "MIXED", confidence, f"Core {core_state or 'UNRESOLVED'}"
 
 
+
+def simple_core_block_coverage(simple: dict[str, Any] | None) -> float | None:
+    """Presentation-only availability of the four displayed Simple-Brain blocks.
+
+    This is deliberately separate from ``evidence_coverage`` in Simple Brain, which
+    is the *entry-readiness* denominator (45/25/15/15).  The on-screen four-block
+    table uses 40/25/20/15, so showing both avoids making 60% look like a mysterious
+    or contradictory calculation.  No score or decision is changed here.
+    """
+
+    if not isinstance(simple, dict):
+        return None
+    blocks = simple.get("blocks") or {}
+    if not isinstance(blocks, dict) or not blocks:
+        return None
+    total = 0.0
+    known = 0.0
+    for key, raw in blocks.items():
+        if not isinstance(raw, dict):
+            continue
+        try:
+            weight = float(raw.get("weight") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        known += weight
+        if key == "barrier_entry":
+            state = _upper(raw.get("state"))
+            available = bool(state and state not in {"UNKNOWN", "UNAVAILABLE", "MISSING"})
+        else:
+            available = bool(raw.get("available", False))
+        if available:
+            total += weight
+    if known <= 0:
+        return None
+    return round(min(100.0, max(0.0, total)), 1)
+
+
+def future_brain_display_label(future: dict[str, Any] | None) -> tuple[str, str]:
+    """Return a conservative display label for the advisory Future Brain.
+
+    Percentages remain visible for diagnostics, but small historical samples are
+    explicitly labelled experimental rather than visually resembling calibrated
+    probabilities.
+    """
+
+    if not isinstance(future, dict) or not future:
+        return "Future Brain — advisory only", "No historical calibration summary available"
+    try:
+        matches = int(future.get("historical_matches") or 0)
+    except (TypeError, ValueError):
+        matches = 0
+    status = _upper(future.get("historical_status")) or "INSUFFICIENT DATA"
+    model_label = _upper(future.get("model_label")) or "FORECAST SCORE"
+    if matches < 100 or status in {"INSUFFICIENT DATA", "EARLY ESTIMATE"}:
+        title = "Future Brain — EXPERIMENTAL / advisory only"
+        note = f"{matches} historical match(es) · {status} · {model_label}; scores are not calibrated win probabilities"
+        return title, note
+    return "Future Brain — advisory only", f"{matches} historical match(es) · {status} · {model_label}"
+
 def _zone(level: Any) -> str | None:
     if level is None:
         return None

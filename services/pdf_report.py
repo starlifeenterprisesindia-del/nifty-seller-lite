@@ -23,7 +23,7 @@ from reportlab.platypus import (
 )
 
 from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
-from analysis.presentation_safety import safe_brain_hinglish_line
+from analysis.presentation_safety import safe_brain_hinglish_line, simple_core_block_coverage, future_brain_display_label
 from config import CONFIG
 from models import MarketSnapshot
 from services.summary_presenter import (
@@ -496,7 +496,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     speed = snapshot.barrier_map.market_speed
     story.append(
         _table(
-            ["NIFTY", "Market rukh", "Rukh evidence", "Final action", "Entry readiness", "Market danger", "Data status"],
+            ["NIFTY", "Direction", "Directional evidence", "Final action", "Entry readiness", "Market danger", "Data status"],
             [[
                 snapshot.nifty_quote.get("last_price"),
                 direction,
@@ -519,7 +519,9 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     )
     future = snapshot.metadata.get("future_brain") or {}
     if future:
-        story.append(_sub_title("Future Brain - Next 5 / 15 Minute"))
+        future_title, future_history_note = future_brain_display_label(future)
+        story.append(_sub_title(future_title + " - Next 5 / 15 Minute"))
+        story.append(Paragraph(future_history_note, styles["Small"]))
         story.append(_table(
             ["Transition", "5m UP/DOWN/RANGE", "15m UP/DOWN/RANGE", "Advisory", "History"],
             [[
@@ -632,8 +634,14 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
             widths=[45*mm, 30*mm, 34*mm, 55*mm, 32*mm, 62*mm], compact=True,
         ))
         if op["simple"].get("evidence_coverage") is not None:
+            core_availability = simple_core_block_coverage(op["simple"])
+            core_text = (
+                f" Core-block availability: {core_availability:.1f}%."
+                if core_availability is not None else ""
+            )
             story.append(Paragraph(
-                f"Evidence coverage: {float(op['simple'].get('evidence_coverage') or 0):.1f}% — unavailable block receives no neutral/range vote.",
+                f"Entry-evidence coverage: {float(op['simple'].get('evidence_coverage') or 0):.1f}%."
+                f"{core_text} Unavailable block receives no neutral/range vote.",
                 styles["Small"],
             ))
     story.append(_sub_title("Background / diagnostic evidence — extra hard vote nahi"))
@@ -735,7 +743,7 @@ def build_full_audit_pdf(snapshot: MarketSnapshot, previous_snapshot: MarketSnap
     decision_color = _GREEN if op["action"] != "WAIT" else _WARN
     story.append(
         _callout(
-            f"FINAL ACTION: {op['action']} | REGIME: {op['regime']} | DIRECTION: {op['direction']} {op['direction_strength']:.1f}% | "
+            f"FINAL ACTION: {op['action']} | REGIME: {op['regime']} | DIRECTION: {op['direction']} {op['direction_strength']:.1f}/100 | "
             f"ENTRY: {op['entry_state']} {op['entry_readiness']:.1f}% | TRIGGER: {op['trigger']}",
             decision_color,
         )

@@ -220,6 +220,11 @@ def render_day_memory(snapshot, url, key):
         history_feed = snapshot.feed_status.get("analysis_history")
         if history_feed:
             st.caption("Calculation history: " + str(history_feed.message))
+            if not snapshot.market_session.is_live and "samples=0" in str(history_feed.message):
+                st.caption(
+                    "Reference/closed session me live Top-9 history append nahi hoti; "
+                    "0 samples ko persistence failure na samjho. Live session me verify karna hai."
+                )
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
 

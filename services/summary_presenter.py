@@ -64,7 +64,7 @@ def unified_direction_line(snapshot: MarketSnapshot) -> str:
         entry = str(simple.get("entry_state") or "WAIT")
         coverage = simple.get("evidence_coverage")
         coverage_text = (
-            f" · evidence coverage {float(coverage):.0f}%"
+            f" · entry-evidence coverage {float(coverage):.0f}%"
             if coverage is not None
             else ""
         )

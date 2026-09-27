@@ -22,6 +22,8 @@ from analysis.presentation_safety import (
     market_rukh_display,
     normalized_news_display,
     safe_brain_hinglish_line,
+    simple_core_block_coverage,
+    future_brain_display_label,
 )
 from models import MarketLevel, MarketSnapshot, TimeframeIndicators
 from services.summary_presenter import (
@@ -1213,7 +1215,10 @@ def render_main_ai_market_view(
             st.markdown("### 🎯 One Simple Decision")
             entry_state = str(simple.get("entry_state") or "WAIT")
             a, b, c, d = st.columns(4)
-            a.metric("MARKET", f"{simple.get('direction', 'MIXED')} {float(simple.get('direction_strength') or 0):.0f}%")
+            core_block_coverage = simple_core_block_coverage(simple)
+            a.metric("DIRECTION", f"{simple.get('direction', 'MIXED')} {float(simple.get('direction_strength') or 0):.0f}/100")
+            if core_block_coverage is not None:
+                a.caption(f"Core blocks available {core_block_coverage:.0f}%")
             b.metric("REGIME", str(simple.get("regime") or "TRANSITION"))
             c.metric(
                 entry_metric_label(),
@@ -1237,8 +1242,8 @@ def render_main_ai_market_view(
             coverage = simple.get("evidence_coverage")
             if coverage is not None:
                 st.caption(
-                    f"Evidence coverage: {float(coverage):.0f}% · "
-                    "missing block ko RANGE/neutral vote nahi maana jata."
+                    f"Entry-evidence coverage: {float(coverage):.0f}% · "
+                    "ye entry-readiness denominator hai; missing block ko RANGE/neutral vote nahi maana jata."
                 )
             with st.expander("4 core blocks — calculation", expanded=False):
                 blocks = simple.get("blocks") or {}
@@ -1259,7 +1264,9 @@ def render_main_ai_market_view(
                 for reason in simple.get("reasons") or ():
                     st.caption("• " + str(reason))
             if future:
-                with st.expander("🔮 Future Brain — advisory only", expanded=False):
+                future_title, future_history_note = future_brain_display_label(future)
+                with st.expander("🔮 " + future_title, expanded=False):
+                    st.caption(future_history_note)
                     st.caption("Future Brain ab ordinary MIXED forecast par current trade direction ko hard block nahi karta.")
                     p1, p2, p3 = st.columns(3)
                     p1.metric("15m UP", f"{float(future.get('up_15m') or 0):.1f}%")
@@ -1285,7 +1292,13 @@ def render_main_ai_market_view(
         _render_compact_cards(
             [
                 ("NIFTY", f"{float(spot):,.2f}" if spot is not None else "—", "Current / last available"),
-                ("Final Market Bias", direction, f"Evidence {direction_score:.0f}/100 · {direction_note}"),
+                (
+                    "Final Market Bias",
+                    direction,
+                    f"Directional evidence {direction_score:.0f}/100"
+                    + (f" · core coverage {core_block_coverage:.0f}%" if core_block_coverage is not None else "")
+                    + f" · {direction_note}",
+                ),
                 (
                     "Entry State" if snapshot.market_session.is_live else "Reference State",
                     compact_entry_value,

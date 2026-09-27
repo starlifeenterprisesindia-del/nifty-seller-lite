@@ -19,6 +19,7 @@ from analysis.sl_target_planner import (
     stop_spot_price,
 )
 from analysis.premium_entry_planner import build_premium_entry_plan
+from analysis.iv_delta_display import compute_iv_delta_payload
 from models import MarketSnapshot
 from ui.strike_entry import render_strike_entry
 
@@ -142,7 +143,7 @@ def _holding_limit(snapshot: MarketSnapshot, selection: str, expiry_minutes: int
     return max(1, limit)
 
 
-def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
+def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store: Any | None = None) -> None:
     frame = snapshot.option_chain
     live_spot = _number(snapshot.nifty_quote.get("last_price"))
     if frame.empty or live_spot <= 0:
@@ -272,15 +273,88 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot) -> None:
 
     advanced_on = st.checkbox("Advanced IV/Time details", key="spc2_advanced_on")
     iv_change = 0.0
+    auto_iv_status = "OFF"
+    auto_iv_window = None
+    auto_iv_delta = None
     if advanced_on:
-        iv_change = st.number_input(
-            "IV change scenario (optional)",
-            min_value=-20.0,
-            max_value=20.0,
-            value=0.0,
-            step=0.5,
-            key="spc2_iv_change",
+        # Auto IV delta is presentation/calculator-only. It reuses the compact
+        # option snapshot already attached to MarketSnapshot and bounded same-day
+        # persisted history. No broker/API call and no One-Brain recomputation.
+        iv_payload = None
+        if st.session_state.get("iv_delta_snapshot_id") == snapshot.snapshot_id:
+            cached = st.session_state.get("iv_delta_payload")
+            if isinstance(cached, dict):
+                iv_payload = cached
+        if iv_payload is None:
+            current_state = (getattr(snapshot, "metadata", {}) or {}).get("option_state_snapshot") or {}
+            if option_state_store is not None and snapshot.expiry and current_state:
+                try:
+                    history = option_state_store.load_session(
+                        captured_at=snapshot.created_at, expiry=str(snapshot.expiry)
+                    )
+                    iv_payload = compute_iv_delta_payload(
+                        current_snapshot=current_state, history=history
+                    )
+                except Exception as exc:
+                    iv_payload = {
+                        "status": "UNAVAILABLE",
+                        "message": f"IV history read failed: {exc}",
+                        "windows": [],
+                        "preferred_window": None,
+                        "preferred_strikes": {},
+                    }
+            else:
+                iv_payload = {
+                    "status": "UNAVAILABLE",
+                    "message": "Saved IV history unavailable.",
+                    "windows": [],
+                    "preferred_window": None,
+                    "preferred_strikes": {},
+                }
+            st.session_state.iv_delta_payload = iv_payload
+            st.session_state.iv_delta_snapshot_id = snapshot.snapshot_id
+
+        auto_iv_status = str(iv_payload.get("status") or "UNAVAILABLE")
+        auto_iv_window = iv_payload.get("preferred_window")
+        preferred = iv_payload.get("preferred_strikes") or {}
+        side_map = preferred.get(side) or {} if isinstance(preferred, dict) else {}
+        try:
+            raw_delta = side_map.get(float(strike))
+            if raw_delta is None:
+                # JSON/cache variants may carry string strike keys.
+                raw_delta = side_map.get(str(float(strike))) or side_map.get(str(int(float(strike))))
+            if raw_delta is not None:
+                auto_iv_delta = float(raw_delta)
+        except (TypeError, ValueError, AttributeError):
+            auto_iv_delta = None
+
+        if auto_iv_delta is not None:
+            iv_change = max(-20.0, min(20.0, float(auto_iv_delta)))
+            st.info(
+                f"⚡ Auto IV Δ: {iv_change:+.2f} pts ({auto_iv_window or 'saved history'}) · "
+                "selected strike · no broker/API call"
+            )
+        else:
+            st.caption(
+                f"Auto IV Δ: {auto_iv_status} · saved history abhi enough nahi; "
+                "IV effect 0 rakha gaya, koi value invent nahi ki gayi."
+            )
+
+        manual_iv_override = st.checkbox(
+            "Manual IV scenario override",
+            value=False,
+            key="spc2_manual_iv_override",
+            help="Normally OFF rakho. Auto IV Δ available ho to wahi calculator use karega.",
         )
+        if manual_iv_override:
+            iv_change = st.number_input(
+                "IV change scenario (optional)",
+                min_value=-20.0,
+                max_value=20.0,
+                value=float(round(iv_change, 2)),
+                step=0.5,
+                key="spc2_iv_change",
+            )
 
     signature = (
         snapshot.snapshot_id,
