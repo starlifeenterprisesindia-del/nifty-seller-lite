@@ -86,6 +86,7 @@ from ui.pattern_alerts import render_pattern_alerts, process_combined_signal_ale
 from ui.timeframe_outlook import render_timeframe_outlook
 from ui.ai_move_tracker import render_ai_move_tracker
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
+from ui.presentation_helpers import public_mode_enabled
 
 
 @contextmanager
@@ -1155,6 +1156,7 @@ with st.expander("🧰 Checks & Downloads Centre", expanded=False):
 
     with st.expander("App, Railway and feed checks", expanded=False):
         st.write(f"App version: `{CONFIG.version}`")
+        st.write(f"Presentation mode: `{'PUBLIC SAFE' if public_mode_enabled() else 'INTERNAL'}`")
         st.write(
             "Railway gateway: "
             + ("READY" if railway_ready else "NOT CONFIGURED / LEGACY MODE")
