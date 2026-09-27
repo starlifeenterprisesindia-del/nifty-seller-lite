@@ -31,6 +31,14 @@ from services.summary_presenter import (
     snapshot_change_items,
     unified_direction_line,
 )
+from ui.presentation_helpers import (
+    entry_metric_label,
+    public_action_label,
+    public_mode_enabled,
+    ready_banner_label,
+    smart_focus_tags,
+    strategy_status_label,
+)
 
 
 
@@ -984,11 +992,11 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         rows.append(
             {
                 "Rank": rank,
-                "Strategy": name,
+                "Strategy": public_action_label(name),
                 "Brain Fit": f"{strategy.score:.0f}%",
                 "Strike + Hedge": _plan_structure_text(plan),
                 "Premium": premium,
-                "Status": status,
+                "Status": strategy_status_label(status),
             }
         )
     frame = pd.DataFrame(rows)
@@ -1006,8 +1014,11 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     common_entry = common.get("entry") or {}
     guidance = build_entry_guidance(best_plan, entry_ready=bool(common.get("entry_allowed")), live=snapshot.market_session.is_live)
     with st.container(border=True):
-        label = "ENTRY" if common.get("entry_allowed") else "CANDIDATE ONLY — ENTRY GATE CLOSED"
-        st.markdown(f"**Best compatible {label} — {leader}: {guidance.status}**")
+        if public_mode_enabled():
+            label = "CONDITIONS MET" if common.get("entry_allowed") else "CANDIDATE ONLY — CONDITIONS PENDING"
+        else:
+            label = "ENTRY" if common.get("entry_allowed") else "CANDIDATE ONLY — ENTRY GATE CLOSED"
+        st.markdown(f"**Best compatible {label} — {public_action_label(leader)}: {guidance.status}**")
         c1, c2, c3 = st.columns(3)
         c1.metric("Current package", common_entry.get("current", guidance.current))
         c2.metric("Preferred limit zone", common_entry.get("preferred_zone", guidance.preferred_zone))
@@ -1066,7 +1077,7 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
         elif common_action == "WAIT":
             subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — entry abhi WAIT"
             reference = (
-                f"Reference {name} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
+                f"Reference {public_action_label(name)} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
                 if plan is not None and plan.available and score > 0
                 else ""
             )
@@ -1083,16 +1094,18 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
                 + blocker_text
             )
         else:
-            candidate = common_action
-            subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — ENTRY BLOCKED"
+            candidate = public_action_label(common_action)
+            blocked_text = "CONDITIONS PENDING" if public_mode_enabled() else "ENTRY BLOCKED"
+            subtitle = f"{direction_text} · Evidence {direction_score:.1f}% — {blocked_text}"
             structure = (
                 f"Candidate {candidate} (Fit {score:.1f}%): {_plan_structure_text(plan)} · "
                 + str((snapshot.execution_guard.blockers or ("Safety confirmation pending",))[0])
             )
     else:
         css_class = "ready"
-        title = common_action
-        subtitle = f"SIMPLE ONE-BRAIN READY · Entry readiness {float((getattr(snapshot, 'metadata', {}).get('simple_brain') or {}).get('entry_readiness') or common.get('trade_confidence') or 0):.1f}/100"
+        title = public_action_label(common_action)
+        readiness_word = "Condition readiness" if public_mode_enabled() else "Entry readiness"
+        subtitle = f"SIMPLE ONE-BRAIN READY · {readiness_word} {float((getattr(snapshot, 'metadata', {}).get('simple_brain') or {}).get('entry_readiness') or common.get('trade_confidence') or 0):.1f}/100"
         structure = _plan_structure_text(plan_map.get(common_action))
     live_text = "LIVE" if feed_ok else "LAST DATA"
     hero = (
@@ -1202,15 +1215,15 @@ def render_main_ai_market_view(
             a.metric("MARKET", f"{simple.get('direction', 'MIXED')} {float(simple.get('direction_strength') or 0):.0f}%")
             b.metric("REGIME", str(simple.get("regime") or "TRANSITION"))
             c.metric(
-                "ENTRY",
+                entry_metric_label(),
                 "DATA INCOMPLETE" if "DATA" in entry_state else f"{float(simple.get('entry_readiness') or 0):.0f}/100",
             )
             if "DATA" in entry_state:
                 c.caption(f"Structural readiness {float(simple.get('entry_readiness') or 0):.0f}/100")
-            d.metric("ACTION", str(common.get("final_action") or simple.get("final_action") or "WAIT"))
+            d.metric("ACTION", public_action_label(str(common.get("final_action") or simple.get("final_action") or "WAIT")))
             trigger = str(simple.get("trigger") or simple.get("instruction") or "")
             if common.get("entry_allowed"):
-                st.success(f"🚨 **TAKE NOW — {common.get('final_action')}** · {trigger}")
+                st.success(f"🚨 **{ready_banner_label()} — {public_action_label(common.get('final_action'))}** · {trigger}")
             elif "WAIT" in entry_state or "NO CLEAR" in entry_state or "DATA" in entry_state:
                 st.warning(f"⏳ **{entry_state}** · {trigger}")
             else:
@@ -2584,6 +2597,7 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
     # a long scrolling diagnostic table.
     spot = float((snapshot.nifty_quote or {}).get("last_price") or 0.0)
     atm = min(strikes, key=lambda x: abs(float(x) - spot)) if spot else strikes[len(strikes)//2]
+    focus_tags = smart_focus_tags(snapshot, atm=float(atm))
     atm_idx = strikes.index(atm)
     lo = max(0, atm_idx - 7)
     hi = min(len(strikes), atm_idx + 8)
@@ -2640,6 +2654,7 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
             "CE Theta": greek(c.get("theta"), 2),
             "CE LTP": price(c.get("last_price")),
             "STRIKE": f"{float(strike):,.0f}" + ("  ◀ ATM" if float(strike) == float(atm) else ""),
+            "FOCUS": " · ".join(focus_tags.get(float(strike), ())) or "—",
             "PE LTP": price(p.get("last_price")),
             "PE Theta": greek(p.get("theta"), 2),
             "PE Delta": greek(p.get("delta"), 3),
@@ -2663,6 +2678,8 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
                 styles[col] = "background-color: rgba(239,68,68,.055)"
         if "STRIKE" in styles:
             styles["STRIKE"] = "background-color: rgba(245,158,11,.08);font-weight:700"
+        if "FOCUS" in styles:
+            styles["FOCUS"] = "background-color: rgba(59,130,246,.06);font-weight:650"
         for idx in data.index:
             if "ATM" in str(data.at[idx, "STRIKE"]):
                 styles.loc[idx, :] = "background-color: rgba(245,158,11,.20);font-weight:800"
@@ -2676,8 +2693,12 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
     if pe_wall.strike is not None:
         spot_line += f" • PE wall {pe_wall.strike:,.0f}"
     st.caption(spot_line)
+    active_focus = [f"{strike:,.0f}: {' / '.join(tags)}" for strike, tags in sorted(focus_tags.items()) if strike in {float(x) for x in visible_strikes}]
+    if active_focus:
+        st.caption("🎯 Smart Focus: " + " | ".join(active_focus))
     st.caption(
-        "Board display-only hai: One-Brain/strategy score, Greeks aur broker requests duplicate nahi hote. "
+        "Smart Focus display-only hai; ATM, existing walls/clusters aur already-computed protected-plan strikes ko mark karta hai. "
+        "Board/One-Brain/strategy score, Greeks aur broker requests duplicate nahi hote. "
         "Advanced detail neeche optional panel me available hai."
     )
 
