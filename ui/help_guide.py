@@ -12,6 +12,7 @@ GLOSSARY = [
     ("CE / PE Wall", "Strike jahan relatively strong option OI/structure barrier dikhta hai. Wall toot bhi sakti hai; price + flow confirmation zaroori hai."),
     ("Cluster", "Nearby strikes ka grouped concentration. Single strike se broader zone context deta hai."),
     ("Greeks", "Delta price sensitivity, Theta time decay, Gamma delta-change sensitivity, Vega IV sensitivity. Board par compact values context ke liye hain."),
+    ("IV Δ", "Implied Volatility ka saved-history change. Load IV Δ button par hi 1m/3m/5m compare hota hai; volatility-point change hai, One Brain score ya profit probability nahi."),
     ("Alert Latency", "Alert generate hone aur delivery complete hone ke beech ka time. Diagnostics delivery path ko audit karta hai, trading engine ko nahi."),
     ("Replay / Post-market Review", "Recorded snapshots se baad me dekhta hai ki move signal se pehle/baad aaya aur Big Player confirmation kitni der me hui."),
 ]

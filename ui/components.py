@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 from analysis.canonical_forecast import build_canonical_forecast, compatible_strategies
 from analysis.entry_guidance import build_entry_guidance
+from analysis.iv_delta_display import compute_iv_delta_payload
 
 from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
 from analysis.presentation_safety import (
@@ -2511,7 +2512,7 @@ def render_walls_and_pcr(snapshot: MarketSnapshot) -> None:
     st.caption(f"PCR context: **{pcr.state}** | Status: {pcr.status}")
 
 
-def render_options_live_board(snapshot: MarketSnapshot) -> None:
+def render_options_live_board(snapshot: MarketSnapshot, option_state_store: Any | None = None) -> None:
     """Broker-style single-screen options board using only the current snapshot.
 
     This is presentation-only: it performs no API request and does not recompute
@@ -2556,12 +2557,93 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
     conflict = _option_conflict_text(item)
     st.info(f"**WHY:** {why}  •  **CONFLICT/CAUTION:** {conflict}")
 
+    # IV delta is deliberately on-demand. Reading bounded persisted history is
+    # presentation work and must never become part of the One-Brain refresh path.
+    iv_payload = None
+    if st.session_state.get("iv_delta_snapshot_id") == snapshot.snapshot_id:
+        cached = st.session_state.get("iv_delta_payload")
+        if isinstance(cached, dict):
+            iv_payload = cached
+    iv_cols = st.columns([1, 2])
+    if iv_cols[0].button(
+        "⚡ Load IV Δ",
+        key="load_iv_delta_display_only",
+        help="Existing saved option snapshots only. No Dhan/API call and no One-Brain score impact.",
+        use_container_width=True,
+    ):
+        with st.spinner("Saved IV history compare ho rahi hai — broker call nahi ho rahi..."):
+            current_state = (getattr(snapshot, "metadata", {}) or {}).get("option_state_snapshot") or {}
+            if option_state_store is None or not snapshot.expiry or not current_state:
+                iv_payload = {
+                    "status": "UNAVAILABLE",
+                    "message": "Saved option history unavailable for IV Δ.",
+                    "windows": [],
+                    "preferred_window": None,
+                    "preferred_strikes": {},
+                }
+            else:
+                try:
+                    history = option_state_store.load_session(
+                        captured_at=snapshot.created_at, expiry=str(snapshot.expiry)
+                    )
+                    iv_payload = compute_iv_delta_payload(
+                        current_snapshot=current_state, history=history
+                    )
+                except Exception as exc:
+                    iv_payload = {
+                        "status": "UNAVAILABLE",
+                        "message": f"IV history read failed: {exc}",
+                        "windows": [],
+                        "preferred_window": None,
+                        "preferred_strikes": {},
+                    }
+        st.session_state.iv_delta_payload = iv_payload
+        st.session_state.iv_delta_snapshot_id = snapshot.snapshot_id
+    iv_cols[1].caption(
+        "IV Δ default OFF hai. Click par hi saved history se 1m/3m/5m change niklega; "
+        "core calculation aur broker/API path untouched rehta hai."
+    )
+
+    iv_by_window = {}
+    if isinstance(iv_payload, dict):
+        iv_by_window = {
+            str(row.get("label")): row
+            for row in (iv_payload.get("windows") or [])
+            if isinstance(row, dict)
+        }
+        iv_rows = []
+        for label in ("1m", "3m", "5m"):
+            row = iv_by_window.get(label) or {}
+            def _iv_text(value):
+                try:
+                    return f"{float(value):+.2f} pts"
+                except (TypeError, ValueError):
+                    return "—"
+            age = row.get("actual_age_seconds")
+            iv_rows.append({
+                "Window": label,
+                "CE IV Δ": _iv_text(row.get("ce_iv_delta")),
+                "PE IV Δ": _iv_text(row.get("pe_iv_delta")),
+                "Actual age": f"{float(age):.0f}s" if age is not None else "—",
+                "Matched": int(row.get("matched_rows") or 0),
+                "Status": row.get("status") or "WARMING UP",
+            })
+        st.dataframe(pd.DataFrame(iv_rows), width="stretch", hide_index=True, row_height=32)
+        preferred = iv_payload.get("preferred_window")
+        if preferred:
+            st.caption(
+                f"IV Δ strike-board reference: {preferred}. Values volatility-point change hain, "
+                "direction/profit probability nahi."
+            )
+        else:
+            st.caption(str(iv_payload.get("message") or "IV history warming up."))
+
     # Compact flow-window strip: enough information for live audit without
     # opening another tab. Values are exactly those already computed in the
     # canonical OptionIntelligence object.
     flow_rows = []
     for w in item.windows:
-        flow_rows.append({
+        row = {
             "Window": w.label,
             "CE OI Δ": w.ce_oi_delta,
             "PE OI Δ": w.pe_oi_delta,
@@ -2571,7 +2653,12 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
             "PE Vol Δ": w.pe_volume_delta,
             "Bias": w.bias,
             "Status": w.status,
-        })
+        }
+        iv_window = iv_by_window.get(str(w.label)) or {}
+        if iv_payload is not None:
+            row["CE IV Δ"] = iv_window.get("ce_iv_delta")
+            row["PE IV Δ"] = iv_window.get("pe_iv_delta")
+        flow_rows.append(row)
     if flow_rows:
         st.dataframe(pd.DataFrame(flow_rows), width="stretch", hide_index=True, row_height=34)
 
@@ -2641,11 +2728,16 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
         except (TypeError, ValueError):
             return "—"
 
+    iv_preferred_label = str((iv_payload or {}).get("preferred_window") or "")
+    iv_strikes = (iv_payload or {}).get("preferred_strikes") or {}
+    ce_iv_delta = iv_strikes.get("CE") or {} if isinstance(iv_strikes, dict) else {}
+    pe_iv_delta = iv_strikes.get("PE") or {} if isinstance(iv_strikes, dict) else {}
+
     rows = []
     for strike in visible_strikes:
         c = ce_map.get(float(strike), {})
         p = pe_map.get(float(strike), {})
-        rows.append({
+        row = {
             "CE OI": qty(c.get("oi")),
             "CE OI Δ": qty(c.get("day_oi_change"), signed=True),
             "CE VOL": qty(c.get("volume")),
@@ -2662,11 +2754,15 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
             "PE VOL": qty(p.get("volume")),
             "PE OI Δ": qty(p.get("day_oi_change"), signed=True),
             "PE OI": qty(p.get("oi")),
-        })
+        }
+        if iv_payload is not None and iv_preferred_label:
+            row[f"CE IV Δ ({iv_preferred_label})"] = greek(ce_iv_delta.get(float(strike)), 2)
+            row[f"PE IV Δ ({iv_preferred_label})"] = greek(pe_iv_delta.get(float(strike)), 2)
+        rows.append(row)
     frame = pd.DataFrame(rows)
 
-    ce_columns = {"CE OI", "CE OI Δ", "CE VOL", "CE IV", "CE Delta", "CE Theta", "CE LTP"}
-    pe_columns = {"PE LTP", "PE Theta", "PE Delta", "PE IV", "PE VOL", "PE OI Δ", "PE OI"}
+    ce_columns = {col for col in frame.columns if str(col).startswith("CE ")}
+    pe_columns = {col for col in frame.columns if str(col).startswith("PE ")}
 
     def board_style(data: pd.DataFrame) -> pd.DataFrame:
         styles = pd.DataFrame("", index=data.index, columns=data.columns)
@@ -2699,6 +2795,7 @@ def render_options_live_board(snapshot: MarketSnapshot) -> None:
     st.caption(
         "Smart Focus display-only hai; ATM, existing walls/clusters aur already-computed protected-plan strikes ko mark karta hai. "
         "Board/One-Brain/strategy score, Greeks aur broker requests duplicate nahi hote. "
+        "IV Δ bhi explicit click par saved history se load hota hai; default refresh cost zero rakhi gayi hai. "
         "Advanced detail neeche optional panel me available hai."
     )
 
