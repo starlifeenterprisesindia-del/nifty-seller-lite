@@ -10,7 +10,33 @@ import sys
 from datetime import datetime, timedelta
 
 
+def _activity(row):
+    raw = row.get("activity") or {}
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        score = round(float(raw.get("score") or 0.0), 1)
+    except (TypeError, ValueError):
+        score = 0.0
+    return {
+        "direction": str(raw.get("direction") or "MIXED"),
+        "score": score,
+        "state": str(raw.get("state") or ""),
+        "persistence": str(raw.get("persistence") or ""),
+        "activity_type": str(raw.get("activity_type") or ""),
+        "confirmation_count": int(raw.get("confirmation_count") or 0),
+        "confirmation_total": int(raw.get("confirmation_total") or 0),
+    }
+
+
 def audit_samples(samples, horizon_minutes=15, move_points=30):
+    """Review observed moves from recorded samples only.
+
+    This is deliberately post-market/offline diagnostics. It never feeds a score,
+    changes a threshold or calls a broker. "MOVE WHILE WAIT" means only that the
+    saved app/background action at the episode start was WAIT; it is not a claim
+    that a profitable trade was missed.
+    """
     if horizon_minutes <= 0 or move_points <= 0:
         raise ValueError("Positive horizon and move threshold required")
     rows=sorted(samples,key=lambda r:r["at"])
@@ -37,13 +63,47 @@ def audit_samples(samples, horizon_minutes=15, move_points=30):
         if abs(change)<move_points:
             continue
         action=row.get("background_action","UNKNOWN")
-        episodes.append({"start":row["at"],"end":end["at"],"observed_move":round(change,2),
-                         "background_action_at_start":action,"direction_at_start":row.get("direction"),
-                         "label":"MOVE WHILE WAIT" if action=="WAIT" else "MOVE AFTER SIGNAL",
-                         "note":"Background context only; not a missed profitable trade or actual app decision"})
+        observed_direction = "BUYING" if change > 0 else "SELLING"
+        start_activity = _activity(row)
+        matching = []
+        for sample in segment:
+            activity = _activity(sample)
+            if activity.get("direction") == observed_direction and float(activity.get("score") or 0) >= 60:
+                matching.append((sample, activity))
+        first_match = matching[0] if matching else None
+        episodes.append({
+            "start":row["at"],"end":end["at"],"observed_move":round(change,2),
+            "observed_direction": observed_direction,
+            "background_action_at_start":action,"direction_at_start":row.get("direction"),
+            "label":"MOVE WHILE WAIT" if action=="WAIT" else "MOVE AFTER SIGNAL",
+            "big_player_at_start": start_activity,
+            "first_same_direction_big_player_at": first_match[0].get("at") if first_match else None,
+            "first_same_direction_big_player_score": first_match[1].get("score") if first_match else None,
+            "big_player_observation_lag_minutes": (
+                round((datetime.fromisoformat(first_match[0]["at"])-at).total_seconds()/60.0, 1)
+                if first_match else None
+            ),
+            "note":"Observed endpoints only; not a missed profitable trade or actual app decision"
+        })
         next_start=datetime.fromisoformat(end["at"])
-    return {"samples":len(rows),"horizon_minutes":horizon_minutes,"move_threshold_points":move_points,
-            "non_overlapping_episodes":episodes,"warning":"Observed endpoints only. Fees, fills, stops and intraminute path not simulated; no accuracy claim."}
+
+    directional_at_start = [e for e in episodes if (e.get("big_player_at_start") or {}).get("direction") in {"BUYING","SELLING"}]
+    aligned_at_start = [e for e in directional_at_start if e["big_player_at_start"]["direction"] == e["observed_direction"]]
+    opposite_at_start = [e for e in directional_at_start if e["big_player_at_start"]["direction"] != e["observed_direction"]]
+    same_direction_observed = [e for e in episodes if e.get("first_same_direction_big_player_at")]
+    return {
+        "samples":len(rows),"horizon_minutes":horizon_minutes,"move_threshold_points":move_points,
+        "non_overlapping_episodes":episodes,
+        "big_player_validation": {
+            "move_episodes": len(episodes),
+            "directional_at_episode_start": len(directional_at_start),
+            "aligned_at_episode_start": len(aligned_at_start),
+            "opposite_at_episode_start": len(opposite_at_start),
+            "same_direction_60plus_observed_within_window": len(same_direction_observed),
+            "note": "Diagnostic counts only; thresholds are not auto-tuned and no accuracy/win-rate claim is made.",
+        },
+        "warning":"Observed endpoints only. Fees, fills, stops and intraminute path not simulated; no accuracy claim."
+    }
 
 
 def read_export(path):

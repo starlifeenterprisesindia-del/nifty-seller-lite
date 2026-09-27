@@ -580,6 +580,24 @@ class DayMemory:
             self._event(db, at.isoformat(), "AI TRACKER", identity, allowed)
         return True
 
+    def post_market_review(self, horizon_minutes=15, move_points=30):
+        """Explicit read-only review; never runs in the live recording/decision path."""
+        from services.replay_audit import audit_samples
+        with self.connect() as db:
+            rows = [json.loads(raw) for (raw,) in db.execute(
+                "SELECT json_object("
+                "'at',json_extract(body,'$.at'),"
+                "'expiry',json_extract(body,'$.expiry'),"
+                "'version',json_extract(body,'$.version'),"
+                "'spot',json_extract(body,'$.spot'),"
+                "'background_action',json_extract(body,'$.background_action'),"
+                "'direction',json_extract(body,'$.direction'),"
+                "'feeds',json_extract(body,'$.feeds'),"
+                "'activity',json_extract(body,'$.activity')) "
+                "FROM samples ORDER BY at"
+            )]
+        return audit_samples(rows, horizon_minutes=horizon_minutes, move_points=move_points)
+
     def report(self):
         with self.connect() as db:
             meta = dict(db.execute("SELECT key,value FROM meta"))

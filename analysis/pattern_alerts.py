@@ -125,11 +125,29 @@ def combined_signal_alert(snapshot):
         )
     lines.append("Alert-only; automatic order nahi lagaya gaya.")
 
+    try:
+        nifty_ltp = float((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
+    except (TypeError, ValueError):
+        nifty_ltp = None
+    big_player_audit = None
+    if activity is not None and (heavy or early):
+        big_player_audit = {
+            "direction": str(getattr(activity, "direction", "MIXED")),
+            "score": round(float(getattr(activity, "score", 0) or 0), 1),
+            "state": str(getattr(activity, "state", "")),
+            "persistence": str(getattr(activity, "persistence", "")),
+            "activity_type": str(getattr(activity, "activity_type", "")),
+            "confirmation_count": int(getattr(activity, "confirmation_count", 0) or 0),
+            "confirmation_total": int(getattr(activity, "confirmation_total", 0) or 0),
+            "stage": "CONFIRMED" if heavy else "EARLY",
+        }
     return {
         "direction": direction if direction in {"BULLISH", "BEARISH"} else "BULLISH",
         "names": " + ".join(labels),
         "pattern_ids": ids,
         "captured_at": snapshot.created_at.isoformat(),
+        "nifty_ltp": nifty_ltp,
+        "big_player": big_player_audit,
         "message": "\n".join(lines),
         "conflict": conflict,
     }

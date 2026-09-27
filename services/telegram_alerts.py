@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import deque
 import time
 from datetime import datetime, time as clock_time
 from pathlib import Path
@@ -85,11 +86,20 @@ class LiveAlertEngine:
         self.last_alert = ""
         self.last_error = ""
         self.alert_count = 0
+        # Alert audit is deliberately isolated from the real-time decision path.
+        # Delivery threads append a tiny bounded record *after* network delivery;
+        # no broker call or market calculation is added here.
+        self._history_lock = threading.Lock()
+        self._history: deque[dict[str, Any]] = deque(maxlen=200)
         self._dedupe_path: Path | None = None
+        self._history_path: Path | None = None
         mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
         if mount:
-            self._dedupe_path = Path(mount) / "nifty_day_memory" / "telegram_dedupe.json"
+            root = Path(mount) / "nifty_day_memory"
+            self._dedupe_path = root / "telegram_dedupe.json"
+            self._history_path = root / "telegram_alert_history.json"
             self._load_dedupe_state()
+            self._load_alert_history()
 
     def _load_dedupe_state(self) -> None:
         """Restore only recent alert fingerprints; tiny file, no market work."""
@@ -119,6 +129,40 @@ class LiveAlertEngine:
             tmp.replace(self._dedupe_path)
         except OSError:
             pass
+
+    def _load_alert_history(self) -> None:
+        if self._history_path is None:
+            return
+        try:
+            payload = json.loads(self._history_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                for row in payload[-200:]:
+                    if isinstance(row, dict):
+                        self._history.append(dict(row))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+
+    def _append_alert_history(self, row: dict[str, Any]) -> None:
+        """Append bounded audit data from a delivery thread, never market logic."""
+        clean = {str(k): v for k, v in row.items() if v is not None}
+        with self._history_lock:
+            self._history.append(clean)
+            if self._history_path is None:
+                return
+            try:
+                self._history_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._history_path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(list(self._history), separators=(",", ":")), encoding="utf-8")
+                tmp.replace(self._history_path)
+            except OSError:
+                pass
+
+    def alert_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Read-only recent delivery audit. No market/API work is performed."""
+        count = max(1, min(200, int(limit)))
+        with self._history_lock:
+            rows = list(self._history)[-count:]
+        return [dict(row) for row in reversed(rows)]
 
     @property
     def configured(self) -> bool:
@@ -193,17 +237,34 @@ class LiveAlertEngine:
         return self._deliver(message, signature, timestamp)
 
     def _deliver(self, message: str, signature: str, timestamp: float) -> bool:
+        delivered_at = time.time()
         try:
             self._sender(message)
+            delivered_at = time.time()
             with self._lock:
                 self.last_alert_at = timestamp
                 self.last_alert = signature
                 self.last_error = ""
                 self.alert_count += 1
+            self._append_alert_history({
+                "kind": "FAST_MOVE", "status": "SENT", "signature": signature,
+                "generated_at": datetime.fromtimestamp(timestamp, IST).isoformat(),
+                "delivered_at": datetime.fromtimestamp(delivered_at, IST).isoformat(),
+                "latency_seconds": round(max(0.0, delivered_at - timestamp), 3),
+                "message": message[:500],
+            })
             return True
         except Exception as exc:
+            failed_at = time.time()
             with self._lock:
                 self.last_error = str(exc)[:300]
+            self._append_alert_history({
+                "kind": "FAST_MOVE", "status": "FAILED", "signature": signature,
+                "generated_at": datetime.fromtimestamp(timestamp, IST).isoformat(),
+                "delivered_at": datetime.fromtimestamp(failed_at, IST).isoformat(),
+                "latency_seconds": round(max(0.0, failed_at - timestamp), 3),
+                "error": type(exc).__name__,
+            })
             return False
 
     def send_test(self) -> None:
@@ -239,32 +300,62 @@ class LiveAlertEngine:
                 self._last_sent[signature] = timestamp
             self._persist_dedupe_state()
 
+        audit = {
+            "kind": "COMBINED_SIGNAL",
+            "captured_at": str(payload.get("captured_at") or ""),
+            "direction": str(payload.get("direction") or ""),
+            "names": str(payload.get("names") or "")[:300],
+            "conflict": bool(payload.get("conflict")),
+            "nifty_ltp": payload.get("nifty_ltp"),
+            "big_player": payload.get("big_player") if isinstance(payload.get("big_player"), dict) else None,
+            "generated_at": datetime.fromtimestamp(timestamp, IST).isoformat(),
+        }
         if self.async_delivery:
             threading.Thread(
                 target=self._deliver_pattern,
-                args=(message, signatures, timestamp),
+                args=(message, signatures, timestamp, audit),
                 daemon=True,
                 name="telegram-pattern-send",
             ).start()
             return True
-        return self._deliver_pattern(message, signatures, timestamp)
+        return self._deliver_pattern(message, signatures, timestamp, audit)
 
-    def _deliver_pattern(self, message: str, signatures: list[str], timestamp: float) -> bool:
+    def _deliver_pattern(
+        self, message: str, signatures: list[str], timestamp: float, audit: dict[str, Any] | None = None
+    ) -> bool:
         try:
             self._sender(message)
+            delivered_at = time.time()
             with self._lock:
                 self.alert_count += 1
                 self.last_alert = signatures[0] if signatures else "pattern"
                 self.last_alert_at = timestamp
                 self.last_error = ""
+            self._append_alert_history({
+                **(audit or {"kind": "COMBINED_SIGNAL"}),
+                "status": "SENT",
+                "signature": signatures[0] if signatures else "pattern",
+                "delivered_at": datetime.fromtimestamp(delivered_at, IST).isoformat(),
+                "latency_seconds": round(max(0.0, delivered_at - timestamp), 3),
+                "message": message[:700],
+            })
             return True
         except Exception as exc:
+            failed_at = time.time()
             with self._lock:
                 for signature in signatures:
                     if self._last_sent.get(signature) == timestamp:
                         self._last_sent.pop(signature, None)
                 self.last_error = str(exc)[:300]
                 self._persist_dedupe_state()
+            self._append_alert_history({
+                **(audit or {"kind": "COMBINED_SIGNAL"}),
+                "status": "FAILED",
+                "signature": signatures[0] if signatures else "pattern",
+                "delivered_at": datetime.fromtimestamp(failed_at, IST).isoformat(),
+                "latency_seconds": round(max(0.0, failed_at - timestamp), 3),
+                "error": type(exc).__name__,
+            })
             return False
 
     def status(self) -> dict[str, Any]:

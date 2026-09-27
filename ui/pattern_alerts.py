@@ -1,7 +1,7 @@
 import streamlit as st
 
 from analysis.pattern_alerts import combined_signal_alert
-from services.railway_live_client import post_railway_json
+from services.railway_live_client import RailwayDhanClient, post_railway_json
 
 
 def process_combined_signal_alerts(snapshot, server_url="", server_key=""):
@@ -57,3 +57,35 @@ def render_pattern_alerts(snapshot, server_url="", server_key=""):
     status = st.session_state.get("combined_signal_alert_status")
     if status:
         st.caption(str(status))
+
+    st.markdown("**Alert Audit / History**")
+    st.caption("Manual refresh only — isse live One Brain calculation ya broker feed par koi extra load nahi padta.")
+    if not server_url or not server_key:
+        st.caption("Railway gateway configured hone par delivery history yahan dikhegi.")
+        return
+    if st.button("Refresh Alert Audit", key="refresh_combined_alert_audit"):
+        try:
+            st.session_state.combined_alert_history = RailwayDhanClient(
+                server_url, server_key, timeout_seconds=3
+            )._post("/alerts/pattern-history", {"limit": 30}).get("alerts", [])
+            st.session_state.pop("combined_alert_history_error", None)
+        except Exception as exc:
+            st.session_state.combined_alert_history_error = type(exc).__name__
+    if st.session_state.get("combined_alert_history_error"):
+        st.warning("Alert audit fetch nahi hua — live calculations unaffected hain.")
+    rows = []
+    for item in st.session_state.get("combined_alert_history", [])[:30]:
+        bp = item.get("big_player") or {}
+        rows.append({
+            "Generated": str(item.get("generated_at") or item.get("captured_at") or "")[:19].replace("T", " "),
+            "Type": item.get("kind", "—"),
+            "Direction": item.get("direction", "—"),
+            "NIFTY": item.get("nifty_ltp"),
+            "BP": (f"{bp.get('stage','')} {bp.get('direction','')} {bp.get('score','—')}".strip() if bp else "—"),
+            "Status": item.get("status", "—"),
+            "Latency s": item.get("latency_seconds"),
+            "Signal": item.get("names") or item.get("signature") or "—",
+            "Conflict": "YES" if item.get("conflict") else "NO",
+        })
+    if rows:
+        st.dataframe(rows, hide_index=True, use_container_width=True)

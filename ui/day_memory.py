@@ -222,6 +222,50 @@ def render_day_memory(snapshot, url, key):
             st.caption("Calculation history: " + str(history_feed.message))
         if cached.get("last_error"):
             st.warning("Data gap: "+str(cached["last_error"].get("reason","Unknown")))
+
+        st.markdown("### Post-market Move Review")
+        st.caption(
+            "Manual/on-demand diagnostic: saved samples se 15-minute 30+ point moves dekhta hai. "
+            "Koi broker call, live score change ya automatic threshold tuning nahi hoti."
+        )
+        if st.button("Build Post-market Review", key="build_post_market_review"):
+            try:
+                st.session_state.post_market_review = RailwayDhanClient(
+                    url, key, timeout_seconds=10
+                )._post("/day-memory-review", {"horizon_minutes": 15, "move_points": 30})
+                st.session_state.pop("post_market_review_error", None)
+            except Exception as exc:
+                st.session_state.post_market_review_error = type(exc).__name__
+        if st.session_state.get("post_market_review_error"):
+            st.warning("Review build nahi hua — recorded data safe hai aur One Brain unaffected hai.")
+        review = st.session_state.get("post_market_review")
+        if review:
+            validation = review.get("big_player_validation") or {}
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Observed moves", validation.get("move_episodes", 0))
+            c2.metric("BP directional start", validation.get("directional_at_episode_start", 0))
+            c3.metric("BP aligned start", validation.get("aligned_at_episode_start", 0))
+            c4.metric("BP opposite start", validation.get("opposite_at_episode_start", 0))
+            rows = []
+            for item in review.get("non_overlapping_episodes", []):
+                activity = item.get("big_player_at_start") or {}
+                rows.append({
+                    "Start": str(item.get("start") or "")[:16].replace("T", " "),
+                    "15m move": item.get("observed_move"),
+                    "Observed": item.get("observed_direction"),
+                    "AI at start": item.get("background_action_at_start"),
+                    "Review": "WAIT ke dauran move" if item.get("label") == "MOVE WHILE WAIT" else "Signal ke baad move",
+                    "BP start": activity.get("direction", "—"),
+                    "BP score": activity.get("score"),
+                    "BP state": activity.get("state", "—"),
+                    "Same-dir BP lag min": item.get("big_player_observation_lag_minutes"),
+                })
+            if rows:
+                st.dataframe(rows, hide_index=True, use_container_width=True)
+            else:
+                st.info("Selected 15m/30-point rule par complete observed move episode nahi mila.")
+            st.caption(str(review.get("warning") or ""))
+
         analytics = snapshot.metadata.get("history_analytics", {})
         st.write("**OI history — pehle aur ab**")
         st.caption("Extra vote 0: existing OI engine already uses rolling history. Labels inference hain, trader counts nahi.")
