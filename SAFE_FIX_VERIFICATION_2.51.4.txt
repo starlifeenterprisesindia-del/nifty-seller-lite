@@ -1,0 +1,26 @@
+Nifty Seller Lite 2.51.4_INTEGRATED_COLOR_CHART verification
+
+Changed surface
+- ui/live_barrier_chart.py: display-only integrated colorful chart.
+- config.py: version label only.
+- tests/test_v2514_integrated_color_chart.py: payload regression coverage.
+
+Golden Rule verification
+- No Dhan/Railway/API request added by chart code.
+- No journal/history read added to live path.
+- No One-Brain/barrier/OI/Big Player recomputation added.
+- Existing snapshot objects are read only.
+- 5m remains browser-derived from already-loaded 1m candles.
+- Fullscreen is browser-side UI only.
+
+Tests in this environment
+- 46/46 chart + simple brain + architecture + performance + barriers + option intelligence + big player tests PASS.
+- 106/108 broader core/audit/snapshot/execution/decision/history tests PASS.
+- The remaining 2 tests could not start because Streamlit is not installed in this container; both fail on `import streamlit`, not on app logic.
+- Python compile check PASS for ui/live_barrier_chart.py and config.py.
+
+Unchanged
+- v2.51.2 Break Room Guard.
+- One Brain weights and final-action logic.
+- Execution Guard / Position Guardian / risk budget.
+- 15:15+ reference/freeze policy.

@@ -1,0 +1,22 @@
+Nifty Seller Lite v2.51.4_INTEGRATED_COLOR_CHART
+
+Added to the existing display-only broker-style chart
+- Colorful integrated chart shell with distinct R1/R2/S1/S2 colors.
+- CE Money Wall and PE Money Wall from already-computed Option Intelligence.
+- OI wall labels show strike, OI, relative strength versus the already-recorded full-chain max OI when available, and LOW/MEDIUM/HIGH/VERY HIGH tag.
+- Big Player Activity compact strip with direction, score, confirmation count and existing futures-volume ratio.
+- Big Player marker on the latest visible candle (display only).
+- Small floating MINI AI BRAIN showing final action, direction, readiness, one main reason and next trigger.
+- Full-screen button using the browser Fullscreen API; normal chart remains usable if a browser/iframe blocks fullscreen permission.
+- Snapshot ID + time shown as Review-ready metadata so the chart can be matched to the app's existing recorded journal later without loading history in the live path.
+
+Golden Rule / performance
+- No additional Dhan call.
+- No additional Railway market-data call.
+- No journal/history read in live rendering.
+- No duplicate One-Brain, barrier, OI, Big Player, indicator or risk calculation.
+- Money-wall display reads existing OptionIntelligence + snapshot metadata only.
+- 5m candles remain browser-derived from already-loaded 1m candles.
+- Rendering and fullscreen interactions are browser-side.
+- Existing One-Brain weights, signals, execution guards, risk controls and v2.51.2 Break Room Guard are unchanged.
+- 15:15+ reference/freeze handling is untouched.

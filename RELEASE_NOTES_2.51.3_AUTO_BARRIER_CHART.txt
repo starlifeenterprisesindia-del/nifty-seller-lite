@@ -1,0 +1,22 @@
+Nifty Seller Lite v2.51.3_AUTO_BARRIER_CHART
+
+Added
+- Broker-style NIFTY candlestick chart directly inside One Brain.
+- 1m / 3m / 5m / 15m timeframe buttons; 5m is derived in the browser from the already-loaded 1m candles.
+- R1/R2/S1/S2 barriers are drawn automatically from the canonical BarrierMap and refresh with each new snapshot.
+- Barrier labels include zone, strength and break pressure.
+- Current NIFTY reference line, crosshair, zoom, drag and pinch interaction.
+
+Golden Rule / performance
+- Display-only feature.
+- No additional Dhan call.
+- No additional Railway market-data call.
+- No extra option-chain/history/news request.
+- No One-Brain score, trigger, risk, or decision calculation changed.
+- Candle payload is bounded to current-session recent rows.
+- Rendering runs in the browser iframe; 5m aggregation is client-side.
+
+Unchanged
+- v2.51.2 Break Room Guard remains active.
+- 15:15+ broker/index reference/freeze policy is untouched.
+- Entry/exit windows, risk budget, option intelligence and canonical decision path are untouched.

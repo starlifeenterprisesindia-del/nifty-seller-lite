@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.51.1_SAFE_AUDIT_FIXES"
+    version: str = "2.51.4_INTEGRATED_COLOR_CHART"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -180,6 +180,11 @@ class AppConfig:
     # actually cross it.  Without this memory the nearest barrier can move with
     # price and the app can keep saying WAIT after the original trigger broke.
     simple_armed_trigger_minutes: int = 20
+    # After an armed barrier breaks, require usable room to the newly detected
+    # next barrier.  This prevents a valid old-level break from becoming a chase
+    # entry directly into fresh support/resistance.  Uses existing snapshot data only.
+    simple_break_room_min_points: float = 8.0
+    simple_break_room_atr_multiple: float = 0.60
     # A directional entry normally needs Trend plus at least one live confirmation
     # block (Options or Participation).  A completed 3m break of an already armed
     # barrier can release the setup even while one confirmation lane is warming.
