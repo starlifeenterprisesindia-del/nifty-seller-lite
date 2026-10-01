@@ -89,7 +89,6 @@ from ui.rsi_reversal_setup import render_rsi_reversal_setup
 from ui.presentation_helpers import public_mode_enabled
 from ui.performance_diagnostics import render_performance_diagnostics
 from ui.help_guide import render_help_guide
-from ui.live_barrier_chart import render_live_barrier_chart
 
 
 @contextmanager
@@ -949,11 +948,6 @@ render_main_ai_market_view(
     previous_view_snapshot,
     decision_reason_renderer=render_market_decision_reason_panel,
 )
-
-# Display-only broker-style chart. It reuses the completed candles and BarrierMap
-# already present in the canonical snapshot, so it adds no broker/API call and no
-# One-Brain calculation to the critical path.
-render_live_barrier_chart(view_snapshot)
 
 # Lightweight price-only validation of the latest canonical UP/DOWN thesis.
 # It polls only Railway's existing WebSocket cache every 3 minutes; no new Dhan,
