@@ -233,11 +233,55 @@ def _barrier_state(
     break_pad = max(0.75, atr * 0.08)
     invalidate_pad = max(2.0, atr * 0.35)
 
+    # A frozen/armed trigger must not turn into an immediate entry straight into
+    # a newly detected barrier.  The old level can be genuinely broken while a
+    # fresh support/resistance zone has already formed only a few points away.
+    # That exact pattern produced the 29-Sep 13:39 false CE SELL: the old
+    # 22,646 support broke, but the live map already had fresh support around
+    # 22,620-22,632.  Re-use the existing barrier map only; no API call, history
+    # read or heavy computation is added to the critical path.
+    min_break_room = max(
+        float(CONFIG.simple_break_room_min_points),
+        atr * float(CONFIG.simple_break_room_atr_multiple),
+    )
+
     if armed_valid and direction == "DOWN":
         armed_level_f = _num(armed_level)
         upper_f = _num(armed_upper, armed_level_f)
         if completed_3m_close < armed_level_f - break_pad:
             current_support = getattr(barrier_map, "nearest_support", None) if barrier_map is not None else None
+            current_room = None
+            if current_support is not None:
+                support_upper = _num(getattr(current_support, "upper", None), 0.0)
+                if support_upper > 0:
+                    current_room = max(0.0, completed_3m_close - support_upper)
+                else:
+                    distance = getattr(current_support, "distance_points", None)
+                    if distance is not None:
+                        current_room = max(0.0, _num(distance))
+            if current_room is not None and current_room < min_break_room:
+                return {
+                    "state": "HOLDING / NEAR",
+                    "score": 46.0,
+                    "trigger": (
+                        f"Armed support {armed_level_f:,.0f} break confirmed, "
+                        f"par next support bahut paas — room ka wait"
+                    ),
+                    "next_level": _num(getattr(current_support, "midpoint", None), 0.0) or None,
+                    "distance": round(current_room, 2),
+                    "required_room": round(min_break_room, 2),
+                    "note": (
+                        f"Old support {armed_level_f:,.0f} broken; fresh support only "
+                        f"{current_room:.1f} pts away (< {min_break_room:.1f})"
+                    ),
+                    "armed_direction": "DOWN",
+                    "armed_level": armed_level_f,
+                    "armed_lower": _num(armed_lower, armed_level_f),
+                    "armed_upper": upper_f,
+                    "armed_at": armed_at,
+                    "armed_from_previous": True,
+                    "break_confirmed_no_room": True,
+                }
             return {
                 "state": "BROKEN",
                 "score": 94.0,
@@ -271,6 +315,38 @@ def _barrier_state(
         lower_f = _num(armed_lower, armed_level_f)
         if completed_3m_close > armed_level_f + break_pad:
             current_resistance = getattr(barrier_map, "nearest_resistance", None) if barrier_map is not None else None
+            current_room = None
+            if current_resistance is not None:
+                resistance_lower = _num(getattr(current_resistance, "lower", None), 0.0)
+                if resistance_lower > 0:
+                    current_room = max(0.0, resistance_lower - completed_3m_close)
+                else:
+                    distance = getattr(current_resistance, "distance_points", None)
+                    if distance is not None:
+                        current_room = max(0.0, _num(distance))
+            if current_room is not None and current_room < min_break_room:
+                return {
+                    "state": "HOLDING / NEAR",
+                    "score": 46.0,
+                    "trigger": (
+                        f"Armed resistance {armed_level_f:,.0f} break confirmed, "
+                        f"par next resistance bahut paas — room ka wait"
+                    ),
+                    "next_level": _num(getattr(current_resistance, "midpoint", None), 0.0) or None,
+                    "distance": round(current_room, 2),
+                    "required_room": round(min_break_room, 2),
+                    "note": (
+                        f"Old resistance {armed_level_f:,.0f} broken; fresh resistance only "
+                        f"{current_room:.1f} pts away (< {min_break_room:.1f})"
+                    ),
+                    "armed_direction": "UP",
+                    "armed_level": armed_level_f,
+                    "armed_lower": lower_f,
+                    "armed_upper": _num(armed_upper, armed_level_f),
+                    "armed_at": armed_at,
+                    "armed_from_previous": True,
+                    "break_confirmed_no_room": True,
+                }
             return {
                 "state": "BROKEN",
                 "score": 94.0,
