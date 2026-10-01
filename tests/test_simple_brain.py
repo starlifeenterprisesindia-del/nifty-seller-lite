@@ -180,3 +180,103 @@ def test_top9_session_change_does_not_create_fake_neutral_participation():
     result = calculate_simple_brain(snapshot, future)
     assert result["blocks"]["participation"]["available"] is False
     assert result["blocks"]["participation"]["neutral"] == 0.0
+
+
+def test_armed_break_waits_when_new_support_has_no_room_regression_20260929():
+    """29-Sep 13:39: old support broke but fresh support was only ~0.3 pt away."""
+    from datetime import datetime, timedelta, timezone
+
+    first, future = _snapshot(
+        rsi=34.0,
+        support_state="APPROACHING",
+        support_strength=54.0,
+        support_break=71.0,
+        support_distance=0.5,
+    )
+    first.created_at = datetime(2026, 9, 29, 8, 6, tzinfo=timezone.utc)  # 13:36 IST
+    first.indicators.three_minute.close = 23450.0
+    first.price_action.three_minute.atr14 = 15.8
+    armed = calculate_simple_brain(first, future)
+    assert armed["blocks"]["barrier_entry"]["state"] == "UNDER ATTACK"
+    assert armed["blocks"]["barrier_entry"]["armed_level"] == 23447.0
+
+    second, future = _snapshot(
+        rsi=33.7,
+        support_state="APPROACHING",
+        support_strength=54.3,
+        support_break=70.8,
+        support_distance=0.3,
+    )
+    second.created_at = first.created_at + timedelta(minutes=3)
+    second.price_action.three_minute.atr14 = 15.8
+    second.barrier_map.current_price = 23432.3
+    second.nifty_quote["last_price"] = 23432.3
+    second.indicators.three_minute.close = 23432.3
+    # The armed 23,447 support really broke, but a fresh support zone appeared
+    # immediately below price (the live 29-Sep failure mode).
+    second.barrier_map.nearest_support = NS(
+        lower=23419.7,
+        upper=23432.0,
+        midpoint=23426.07,
+        distance_points=0.3,
+        strength=54.3,
+        break_pressure=70.8,
+        state="APPROACHING",
+    )
+    second.barrier_map.next_support = NS(midpoint=23400.0)
+
+    result = calculate_simple_brain(second, future, previous_simple=armed)
+    barrier = result["blocks"]["barrier_entry"]
+    assert barrier["armed_from_previous"] is True
+    assert barrier["break_confirmed_no_room"] is True
+    assert barrier["state"] == "HOLDING / NEAR"
+    assert barrier["distance"] < barrier["required_room"]
+    assert result["entry_state"] == "WAIT FOR BREAK / PULLBACK"
+    assert result["final_action"] == "WAIT"
+
+
+def test_armed_up_break_waits_when_new_resistance_has_no_room():
+    from datetime import datetime, timedelta, timezone
+
+    first, future = _snapshot(rsi=55.0)
+    first.created_at = datetime(2026, 9, 29, 8, 6, tzinfo=timezone.utc)
+    first.price_action.three_minute = NS(event="BULLISH CONTINUATION", structure="BULLISH HH/HL", atr14=15.0)
+    first.price_action.fifteen_minute = NS(event="BREAKOUT CONFIRMED", structure="RANGE", atr14=30.0)
+    first.core_evidence = NS(bullish_score=68.0, bearish_score=12.0, range_score=38.0, confidence=90.0)
+    first.option_intelligence = NS(bullish_score=72.0, bearish_score=18.0, range_score=10.0, confidence=84.0, status="READY")
+    first.volume = NS(
+        three_minute=NS(status="READY", confidence=82.0, move_support="BULLISH MOVE CONFIRMED", price_direction="UP"),
+        fifteen_minute=NS(status="READY", confidence=84.0, move_support="BULLISH MOVE CONFIRMED", price_direction="UP"),
+    )
+    first.big_player_activity = NS(direction="BUYING", score=70.0)
+    first.barrier_map.nearest_resistance = NS(
+        lower=23466.0, upper=23481.0, midpoint=23473.5,
+        distance_points=4.0, strength=58.0, break_pressure=62.0, state="APPROACHING",
+    )
+    first.indicators.three_minute.close = 23476.0
+    armed = calculate_simple_brain(first, future)
+    assert armed["blocks"]["barrier_entry"]["state"] == "UNDER ATTACK"
+    assert armed["blocks"]["barrier_entry"]["armed_level"] == 23481.0
+
+    second, future = _snapshot(rsi=56.0)
+    second.created_at = first.created_at + timedelta(minutes=3)
+    second.price_action.three_minute = NS(event="BULLISH CONTINUATION", structure="BULLISH HH/HL", atr14=15.0)
+    second.price_action.fifteen_minute = NS(event="BREAKOUT CONFIRMED", structure="RANGE", atr14=30.0)
+    second.core_evidence = first.core_evidence
+    second.option_intelligence = first.option_intelligence
+    second.volume = first.volume
+    second.big_player_activity = first.big_player_activity
+    second.barrier_map.current_price = 23494.8
+    second.nifty_quote["last_price"] = 23494.8
+    second.indicators.three_minute.close = 23494.8
+    second.barrier_map.nearest_resistance = NS(
+        lower=23495.0, upper=23505.0, midpoint=23500.0,
+        distance_points=0.2, strength=64.0, break_pressure=52.0, state="APPROACHING",
+    )
+    second.barrier_map.next_resistance = NS(midpoint=23530.0)
+
+    result = calculate_simple_brain(second, future, previous_simple=armed)
+    barrier = result["blocks"]["barrier_entry"]
+    assert barrier["break_confirmed_no_room"] is True
+    assert barrier["state"] == "HOLDING / NEAR"
+    assert result["final_action"] == "WAIT"
