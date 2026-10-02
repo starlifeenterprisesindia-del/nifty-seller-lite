@@ -515,6 +515,7 @@ def render_live_barrier_chart(snapshot: Any) -> None:
     <div class="left"><span class="title">🧠 NIFTY · ONE BRAIN LIVE CHART</span><span class="spot" id="spot"></span><span class="live" id="liveBadge">SNAPSHOT</span></div>
     <div class="buttons">
       <button data-tf="1m">1m</button><button data-tf="3m">3m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button>
+      <button id="modeBtn" class="active" title="Simple/Advanced chart mode">Mode: Simple</button>
       <button id="emaBtn" class="active" title="EMA20/50 show-hide">EMA</button>
       <button id="fullBtn" title="Full screen / focus mode">⛶</button>
     </div>
@@ -534,7 +535,7 @@ def render_live_barrier_chart(snapshot: Any) -> None:
     </div>
   </div>
   <div class="foot">
-    <div class="legend"><span><i class="dot r1"></i>R1</span><span><i class="dot r2"></i>R2</span><span><i class="dot s1"></i>S1</span><span><i class="dot s2"></i>S2</span><span><i class="dot ce"></i>CE Wall</span><span><i class="dot pe"></i>PE Wall</span><span><i class="dot bp"></i>Big Player</span><span><i class="dot e20"></i>EMA20</span><span><i class="dot e50"></i>EMA50</span></div>
+    <div class="legend"><span><i class="dot r1"></i>Resistance</span><span><i class="dot s1"></i>Support</span><span><i class="dot ce"></i>CE Wall</span><span><i class="dot pe"></i>PE Wall</span><span><i class="dot bp"></i>Big Player</span><span><i class="dot e20"></i>EMA20</span><span><i class="dot e50"></i>EMA50</span></div>
     <div class="review" id="reviewInfo"></div>
   </div>
 </div>
@@ -606,28 +607,52 @@ function actionStyle(action) {{
   if(a.includes('BUY')) return ['#18d3ff','rgba(24,211,255,.16)'];
   return ['#ffd166','rgba(255,209,102,.14)'];
 }}
-function addLine(opts) {{ try {{ candles.createPriceLine(opts); }} catch(e) {{}} }}
-(P.barriers || []).forEach(b => {{
-  const color = lineColor(b.label,b.side);
-  const money = b.moneyAligned && b.moneyScore!=null ? ` · ${{b.moneySide}} ${{Number(b.moneyScore).toFixed(0)}}` : '';
-  addLine({{price:b.lower,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:''}});
-  addLine({{price:b.upper,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:''}});
-  addLine({{price:b.midpoint,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Solid,axisLabelVisible:true,
-    title:`${{b.label}} ${{fmt(b.lower)}}–${{fmt(b.upper)}} · STR ${{b.strength}} · BRK ${{b.pressure}}${{money}}`}});
-}});
-(P.moneyWalls || []).forEach(w => {{
-  const ce = String(w.side).toUpperCase()==='CE';
-  const color = ce ? '#ffbf69' : '#51f0ba';
-  const mig = w.migrationPoints==null ? '' : ` · Δ${{Number(w.migrationPoints)>0?'+':''}}${{fmt(w.migrationPoints)}}`;
-  addLine({{price:w.strike,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Dotted,axisLabelVisible:true,
-    title:`${{w.side}} WALL · ${{w.moneyTag||w.tag}} · M ${{w.moneyScore==null?'—':Number(w.moneyScore).toFixed(0)}} · ${{w.behavior}}${{mig}}`}});
-  if(w.cluster != null && Math.abs(Number(w.cluster)-Number(w.strike)) >= 1) {{
-    addLine({{price:w.cluster,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:`${{w.side}} CLUSTER`}});
+let advancedMode=false;
+const createdPriceLines=[];
+function addLine(opts) {{
+  try {{ const line=candles.createPriceLine(opts); createdPriceLines.push(line); return line; }} catch(e) {{ return null; }}
+}}
+function clearLines() {{
+  while(createdPriceLines.length) {{
+    const line=createdPriceLines.pop();
+    try {{ candles.removePriceLine(line); }} catch(e) {{}}
   }}
-}});
-if (P.spot != null) {{
-  document.getElementById('spot').textContent = Number(P.spot).toLocaleString('en-IN',{{minimumFractionDigits:2,maximumFractionDigits:2}});
-  addLine({{price:P.spot,color:'#cbd5e1',lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dotted,axisLabelVisible:true,title:'NIFTY'}});
+}}
+function visibleBarriers() {{
+  const all=P.barriers||[];
+  if(advancedMode) return all;
+  return all.filter(b => ['R1','S1'].includes(String(b.label||'').toUpperCase()));
+}}
+function renderLevels() {{
+  clearLines();
+  visibleBarriers().forEach(b => {{
+    const color=lineColor(b.label,b.side);
+    const side=String(b.side||'').toUpperCase().includes('RESIST')?'RESISTANCE':'SUPPORT';
+    if(advancedMode) {{
+      const money=b.moneyAligned && b.moneyScore!=null ? ` · ${{b.moneySide}} ${{Number(b.moneyScore).toFixed(0)}}` : '';
+      addLine({{price:b.lower,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:''}});
+      addLine({{price:b.upper,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:''}});
+      addLine({{price:b.midpoint,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Solid,axisLabelVisible:true,
+        title:`${{b.label}} · STR ${{b.strength}} · BRK ${{b.pressure}}${{money}}`}});
+    }} else {{
+      addLine({{price:b.midpoint,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Solid,axisLabelVisible:true,title:side}});
+    }}
+  }});
+  (P.moneyWalls||[]).forEach(w => {{
+    const ce=String(w.side).toUpperCase()==='CE';
+    const color=ce?'#ffbf69':'#51f0ba';
+    const title=advancedMode
+      ? `${{w.side}} WALL · M ${{w.moneyScore==null?'—':Number(w.moneyScore).toFixed(0)}} · ${{w.behavior||'ACTIVITY'}}`
+      : `${{w.side}} WALL`;
+    addLine({{price:w.strike,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Dotted,axisLabelVisible:true,title}});
+    if(advancedMode && w.cluster != null && Math.abs(Number(w.cluster)-Number(w.strike)) >= 1) {{
+      addLine({{price:w.cluster,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:`${{w.side}} CLUSTER`}});
+    }}
+  }});
+  if(P.spot!=null) {{
+    document.getElementById('spot').textContent=Number(P.spot).toLocaleString('en-IN',{{minimumFractionDigits:2,maximumFractionDigits:2}});
+    addLine({{price:P.spot,color:'#e2e8f0',lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dotted,axisLabelVisible:true,title:'NIFTY'}});
+  }}
 }}
 
 const session=P.session||{{}}; const badge=document.getElementById('liveBadge');
@@ -666,12 +691,17 @@ function applyBigPlayerMarker(data) {{
 }}
 function renderBands() {{
   bands.innerHTML='';
-  (P.barriers||[]).forEach(b=>{{
+  visibleBarriers().forEach(b=>{{
     const y1=candles.priceToCoordinate(Number(b.upper)); const y2=candles.priceToCoordinate(Number(b.lower));
-    if(y1==null || y2==null) return; const top=Math.min(y1,y2), height=Math.max(3,Math.abs(y2-y1)); const color=lineColor(b.label,b.side);
-    const el=document.createElement('div'); el.className='barrierBand'; el.style.top=`${{top}}px`; el.style.height=`${{height}}px`; el.style.background=rgba(color,.10); el.style.borderColor=rgba(color,.38);
-    const money=b.moneyAligned && b.moneyScore!=null?` · ${{b.moneySide}} ${{Number(b.moneyScore).toFixed(0)}}`:'';
-    el.innerHTML=`<span style="color:${{color}}">${{b.label}} · STR ${{b.strength}}${{money}}</span>`; bands.appendChild(el);
+    if(y1==null || y2==null) return;
+    const top=Math.min(y1,y2), height=Math.max(3,Math.abs(y2-y1)), color=lineColor(b.label,b.side);
+    const el=document.createElement('div'); el.className='barrierBand'; el.style.top=`${{top}}px`; el.style.height=`${{height}}px`;
+    el.style.background=rgba(color,advancedMode ? 0.10 : 0.075); el.style.borderColor=rgba(color,advancedMode ? 0.38 : 0.28);
+    const side=String(b.side||'').toUpperCase().includes('RESIST')?'Resistance':'Support';
+    const label=advancedMode
+      ? `${{b.label}} · STR ${{b.strength}} · BRK ${{b.pressure}}`
+      : `${{side}} ${{fmt(b.lower)}}–${{fmt(b.upper)}}`;
+    el.innerHTML=`<span style="color:${{color}}">${{label}}</span>`; bands.appendChild(el);
   }});
 }}
 function setTf(tf) {{
@@ -680,9 +710,16 @@ function setTf(tf) {{
   currentTf=tf; candles.setData(data); applyBigPlayerMarker(data);
   const ema=P.ema?.[tf]||{{}}; ema20.setData(emaEnabled?(ema['20']||[]):[]); ema50.setData(emaEnabled?(ema['50']||[]):[]);
   document.querySelectorAll('button[data-tf]').forEach(btn => btn.classList.toggle('active', btn.dataset.tf===tf));
-  chart.timeScale().fitContent(); setTimeout(renderBands,40);
+  chart.timeScale().fitContent(); renderLevels(); setTimeout(renderBands,40);
 }}
 document.querySelectorAll('button[data-tf]').forEach(btn => btn.addEventListener('click',()=>setTf(btn.dataset.tf)));
+const modeBtn=document.getElementById('modeBtn');
+modeBtn.addEventListener('click',()=>{{
+  advancedMode=!advancedMode;
+  modeBtn.textContent=advancedMode?'Mode: Advanced':'Mode: Simple';
+  modeBtn.classList.toggle('active',!advancedMode);
+  renderLevels(); renderBands();
+}});
 const emaBtn=document.getElementById('emaBtn'); emaBtn.addEventListener('click',()=>{{emaEnabled=!emaEnabled; emaBtn.classList.toggle('active',emaEnabled); setTf(currentTf);}});
 
 function setFrameHeight(height) {{ try {{ window.parent.postMessage({{isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:height}},'*'); }} catch(e) {{}} }}

@@ -5,6 +5,7 @@ import time
 import gc
 from dataclasses import replace
 from contextlib import contextmanager
+from html import escape
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -106,6 +107,117 @@ def persistent_panel(label: str, key: str):
             yield True
     else:
         yield False
+
+
+def _fmt_compact_oi(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "OI —"
+    if abs(number) >= 10_000_000:
+        return f"OI {number / 10_000_000:.2f}Cr"
+    if abs(number) >= 100_000:
+        return f"OI {number / 100_000:.1f}L"
+    if abs(number) >= 1_000:
+        return f"OI {number / 1_000:.1f}K"
+    return f"OI {number:.0f}"
+
+
+def render_market_pulse_strip(snapshot) -> None:
+    """Compact Big Player, Heavy Money and Option Flow cards for the main screen."""
+
+    activity = getattr(snapshot, "big_player_activity", None)
+    if activity is None:
+        bp_value, bp_note = "UNAVAILABLE", "Fresh participation ka wait"
+    else:
+        direction = str(getattr(activity, "direction", "MIXED") or "MIXED")
+        score = float(getattr(activity, "score", 0.0) or 0.0)
+        confirm = int(getattr(activity, "confirmation_count", 0) or 0)
+        total = int(getattr(activity, "confirmation_total", 0) or 0)
+        bp_value = f"{direction} {score:.0f}/100"
+        bp_note = f"Confirm {confirm}/{total} · {str(getattr(activity, 'state', '') or 'NORMAL')}"
+
+    options = getattr(snapshot, "option_intelligence", None)
+    ce_wall = getattr(options, "ce_wall", None) if options is not None else None
+    pe_wall = getattr(options, "pe_wall", None) if options is not None else None
+    if ce_wall is None and pe_wall is None:
+        money_value, money_note = "UNAVAILABLE", "OI walls ka wait"
+    else:
+        ce_strike = getattr(ce_wall, "strike", None)
+        pe_strike = getattr(pe_wall, "strike", None)
+        ce_text = f"CE {float(ce_strike):,.0f}" if ce_strike is not None else "CE —"
+        pe_text = f"PE {float(pe_strike):,.0f}" if pe_strike is not None else "PE —"
+        money_value = f"{ce_text} · {pe_text}"
+        notes = []
+        if ce_wall is not None:
+            notes.append(_fmt_compact_oi(getattr(ce_wall, "oi", None)))
+        if pe_wall is not None:
+            notes.append(_fmt_compact_oi(getattr(pe_wall, "oi", None)))
+        money_note = " / ".join(notes) if notes else "Heavy Money / OI"
+
+    if options is None:
+        flow_value, flow_note = "UNAVAILABLE", "Option flow ka wait"
+    else:
+        flow_value = str(getattr(options, "market_bias", "") or "MIXED")
+        confidence = float(getattr(options, "confidence", 0.0) or 0.0)
+        persistence = str(getattr(options, "persistence", "") or "WARMING UP")
+        flow_note = f"Conf {confidence:.0f}/100 · {persistence}"
+
+    def card(css_name: str, label: str, value: str, note: str) -> str:
+        return (
+            f'<div class="pulse-card {css_name}">'
+            f'<div class="pulse-label">{escape(label)}</div>'
+            f'<div class="pulse-value">{escape(value)}</div>'
+            f'<div class="pulse-note">{escape(note)}</div></div>'
+        )
+
+    html = (
+        '<style>'
+        '.pulse-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:7px 0 12px}'
+        '.pulse-card{padding:10px 12px;border-radius:13px;border:1px solid rgba(127,127,127,.22);background:rgba(127,127,127,.04);min-width:0}'
+        '.pulse-label{font-size:.72rem;font-weight:850;letter-spacing:.045em;opacity:.72;text-transform:uppercase}'
+        '.pulse-value{font-size:1.02rem;font-weight:900;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+        '.pulse-note{font-size:.72rem;opacity:.70;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+        '.pulse-card.bp{border-color:rgba(59,130,246,.38);background:rgba(59,130,246,.07)}'
+        '.pulse-card.money{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.07)}'
+        '.pulse-card.flow{border-color:rgba(34,197,94,.38);background:rgba(34,197,94,.07)}'
+        '@media(max-width:760px){.pulse-grid{grid-template-columns:1fr}.pulse-card{padding:9px 10px}}'
+        '</style><div class="pulse-grid">'
+        + card("bp", "Big Player", bp_value, bp_note)
+        + card("money", "Heavy Money / OI", money_value, money_note)
+        + card("flow", "Option Flow", flow_value, flow_note)
+        + '</div>'
+    )
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+
+
+def render_compact_strategy_summary(snapshot) -> None:
+    """Show one protected candidate summary without the full ranking table."""
+
+    common = (getattr(snapshot, "metadata", {}) or {}).get("common_decision") or {}
+    strategy = str(common.get("best_strategy") or "WAIT")
+    status = (
+        "ENTRY READY"
+        if bool(common.get("entry_allowed"))
+        else "REFERENCE ONLY"
+        if not getattr(snapshot.market_session, "is_live", False)
+        else str(common.get("entry_state") or "WAIT")
+    )
+    quality = common.get("plan_quality")
+    risk = common.get("risk_per_lot_rupees")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Best Protected Setup", strategy)
+    c2.metric("Status", status)
+    c3.metric("Plan Quality", f"{float(quality):.0f}/100" if quality is not None else "—")
+    c4.metric("Risk / lot", f"₹{float(risk):,.0f}" if risk is not None else "—")
+    instruction = str(common.get("instruction") or "").strip()
+    trigger = str(common.get("trigger") or "").strip()
+    note = " · ".join(part for part in (instruction, f"Next: {trigger}" if trigger else "") if part)
+    if note:
+        st.caption("🛡️ " + note)
 
 
 # Backward-compatible compact-level renderer. Older deployed ui/components.py files
@@ -963,124 +1075,168 @@ render_main_ai_market_view(
     decision_reason_renderer=render_market_decision_reason_panel,
 )
 
-# Display-only broker-style chart. It reuses the completed candles and BarrierMap
-# already present in the canonical snapshot, so it adds no broker/API call and no
-# One-Brain calculation to the critical path.
-render_live_barrier_chart(view_snapshot)
-
-with persistent_panel("🎞️ One Brain Replay + Review", "panel_phase3_replay_open") as panel_open:
-    if panel_open:
-        render_phase3_replay(view_snapshot, live_server_url, live_server_api_key)
-
-# Lightweight price-only validation of the latest canonical UP/DOWN thesis.
-# It polls only Railway's existing WebSocket cache every 3 minutes; no new Dhan,
-# option-chain, indicator, Top-9 or news calculation is triggered.
-render_ai_move_tracker(view_snapshot, live_server_url, live_server_api_key)
+# PRE-LIVE MAIN SCREEN (v2.64): keep only the highest-value live evidence visible.
+# W/M + special candle remain prominent inside this compact nearest-level block.
 render_compact_barrier_map(view_snapshot, previous_view_snapshot)
-render_protected_candidates(view_snapshot)
-with persistent_panel("🧪 Strategy Lab — Payoff + Greeks + What-If", "panel_phase4_strategy_lab_open") as panel_open:
+render_market_pulse_strip(view_snapshot)
+render_compact_strategy_summary(view_snapshot)
+
+# The chart is intentionally optional.  Keeping the iframe closed during ordinary
+# auto-refresh removes the largest layout-shift source while the Brain keeps running.
+with persistent_panel("📊 Show Live Chart — Simple / Advanced", "panel_live_chart_open") as panel_open:
     if panel_open:
-        render_phase4_strategy_lab(view_snapshot)
-with persistent_panel("🛠️ Strategy Repair + Advanced Risk", "panel_phase7_strategy_repair_open") as panel_open:
-    if panel_open:
-        render_phase7_strategy_repair(view_snapshot)
-with persistent_panel("📊 Robustness Backtest — Actions + Walk-Forward", "panel_phase5_validation_lab_open") as panel_open:
-    if panel_open:
-        render_phase5_validation_lab(view_snapshot, live_server_url, live_server_api_key)
-render_options_live_board(view_snapshot, state_store)
-with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
-    if panel_open:
-        render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
-with persistent_panel(
-    "🎯 RSI Top–Bottom Setup — Alag Strategy",
-    "panel_rsi_reversal_setup_open",
-) as panel_open:
-    if panel_open:
-        render_rsi_reversal_setup(snapshot, previous_snapshot, record_trade=discipline_store.mark_trade)
-render_shadow_journal_status(shadow_entries, shadow_journal_store)
-with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
-    if panel_open:
-        render_auto_shadow_journal(
-            shadow_entries, view_snapshot.created_at.date().isoformat(), shadow_journal_store
+        render_live_barrier_chart(view_snapshot)
+
+# Alerts remain the same calculation/delivery lanes.  Automatic combined-alert
+# processing runs above regardless of whether this visual hub is open.
+with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
+    if alerts_open:
+        st.caption(
+            "Automatic W/M + Candle + Big Player delivery background me same rahegi; "
+            "neeche ke controls sirf view/configuration hain."
         )
-with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
-    if panel_open:
-        render_spot_premium_calculator(view_snapshot, state_store)
-with persistent_panel("🔔 Strong Candle / W-M / Big Player Alerts", "panel_pattern_alerts_open") as panel_open:
-    if panel_open:
-        render_pattern_alerts(snapshot, live_server_url, live_server_api_key)
-
-with persistent_panel(
-    "🔔 Manual CE/PE Premium Alert",
-    "panel_market_alerts_open",
-) as panel_open:
-    if panel_open:
-        render_market_alerts(
-            view_snapshot,
-            live_server_url=live_server_url,
-            live_server_api_key=live_server_api_key,
-        )
-
-with persistent_panel(
-    "Compact Evidence — Diagnostic",
-    "panel_compact_evidence_open",
-) as panel_open:
-    if panel_open:
-        render_evidence_matrix(view_snapshot, previous_view_snapshot)
-
-with persistent_panel(
-    "Advanced Options Evidence",
-    "panel_advanced_options_open",
-) as panel_open:
-    if panel_open:
-        render_option_intelligence(view_snapshot)
-        render_phase2_options_intelligence(view_snapshot, state_store)
-        option_tabs = st.tabs(
-            [
-                "Premium + OI + Volume Flow",
-                "1m / 3m / 5m Movement",
-                "OI Walls, Clusters & PCR",
-                "Top-9 Weighted Contribution",
-                "VIX Context",
-                "FII/DII & Event Risk",
-                "Live Market News",
-            ]
-        )
-        with option_tabs[0]:
-            render_option_flow_matrix(view_snapshot)
-        with option_tabs[1]:
-            render_option_windows(view_snapshot)
-        with option_tabs[2]:
-            render_walls_and_pcr(view_snapshot)
-        with option_tabs[3]:
-            render_heavyweight_intelligence(view_snapshot)
-        with option_tabs[4]:
-            render_vix_context(view_snapshot)
-        with option_tabs[5]:
-            render_market_context(view_snapshot)
-        with option_tabs[6]:
-            render_news_context(view_snapshot)
-
-render_detailed_evidence(view_snapshot)
-with persistent_panel("⚙️ Performance Diagnostics", "panel_performance_diagnostics_open") as panel_open:
-    if panel_open:
-        render_performance_diagnostics(
-            snapshot,
-            refresh_interval_seconds=float(
-                st.session_state.get(
-                    "auto_snapshot_interval_seconds",
-                    CONFIG.full_snapshot_default_seconds,
+        with persistent_panel(
+            "Strong Candle / W-M / Big Player Alerts",
+            "panel_pattern_alerts_open",
+        ) as panel_open:
+            if panel_open:
+                render_pattern_alerts(snapshot, live_server_url, live_server_api_key)
+        with persistent_panel(
+            "Manual CE/PE Premium Alert",
+            "panel_market_alerts_open",
+        ) as panel_open:
+            if panel_open:
+                render_market_alerts(
+                    view_snapshot,
+                    live_server_url=live_server_url,
+                    live_server_api_key=live_server_api_key,
                 )
-            ),
-            snapshot_built_now=snapshot_built_now,
-            pipeline_history=list(st.session_state.get("pipeline_latency_history", [])),
-        )
-with persistent_panel("❓ One Brain Quick Guide", "panel_help_guide_open") as panel_open:
-    if panel_open:
-        render_help_guide()
-with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
-    if panel_open:
-        render_day_memory(snapshot, live_server_url, live_server_api_key)
+
+# Everything below is optional analysis/review.  The outer persistent toggle keeps
+# its state across 15/30s reruns and makes the default live page short and stable.
+with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") as more_open:
+    if more_open:
+        with persistent_panel("🎯 AI Move Tracker", "panel_ai_move_tracker_open") as panel_open:
+            if panel_open:
+                render_ai_move_tracker(view_snapshot, live_server_url, live_server_api_key)
+
+        with persistent_panel("🛡️ Strategy & Strike Detail", "panel_strategy_detail_open") as panel_open:
+            if panel_open:
+                render_protected_candidates(view_snapshot)
+
+        with persistent_panel("🎞️ One Brain Replay + Review", "panel_phase3_replay_open") as panel_open:
+            if panel_open:
+                render_phase3_replay(view_snapshot, live_server_url, live_server_api_key)
+
+        with persistent_panel("🧪 Strategy Lab — Payoff + Greeks + What-If", "panel_phase4_strategy_lab_open") as panel_open:
+            if panel_open:
+                render_phase4_strategy_lab(view_snapshot)
+
+        with persistent_panel("🛠️ Strategy Repair + Advanced Risk", "panel_phase7_strategy_repair_open") as panel_open:
+            if panel_open:
+                render_phase7_strategy_repair(view_snapshot)
+
+        with persistent_panel("📊 Robustness Backtest — Actions + Walk-Forward", "panel_phase5_validation_lab_open") as panel_open:
+            if panel_open:
+                render_phase5_validation_lab(view_snapshot, live_server_url, live_server_api_key)
+
+        with persistent_panel("📈 Options Live Board", "panel_options_live_board_open") as panel_open:
+            if panel_open:
+                render_options_live_board(view_snapshot, state_store)
+
+        with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
+            if panel_open:
+                render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
+
+        with persistent_panel(
+            "🎯 RSI Top–Bottom Setup — Alag Strategy",
+            "panel_rsi_reversal_setup_open",
+        ) as panel_open:
+            if panel_open:
+                render_rsi_reversal_setup(
+                    snapshot,
+                    previous_snapshot,
+                    record_trade=discipline_store.mark_trade,
+                )
+
+        with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
+            if panel_open:
+                render_shadow_journal_status(shadow_entries, shadow_journal_store)
+                render_auto_shadow_journal(
+                    shadow_entries,
+                    view_snapshot.created_at.date().isoformat(),
+                    shadow_journal_store,
+                )
+
+        with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
+            if panel_open:
+                render_spot_premium_calculator(view_snapshot, state_store)
+
+        with persistent_panel(
+            "Compact Evidence — Diagnostic",
+            "panel_compact_evidence_open",
+        ) as panel_open:
+            if panel_open:
+                render_evidence_matrix(view_snapshot, previous_view_snapshot)
+
+        with persistent_panel(
+            "Advanced Options Evidence",
+            "panel_advanced_options_open",
+        ) as panel_open:
+            if panel_open:
+                render_option_intelligence(view_snapshot)
+                render_phase2_options_intelligence(view_snapshot, state_store)
+                option_tabs = st.tabs(
+                    [
+                        "Premium + OI + Volume Flow",
+                        "1m / 3m / 5m Movement",
+                        "OI Walls, Clusters & PCR",
+                        "Top-9 Weighted Contribution",
+                        "VIX Context",
+                        "FII/DII & Event Risk",
+                        "Live Market News",
+                    ]
+                )
+                with option_tabs[0]:
+                    render_option_flow_matrix(view_snapshot)
+                with option_tabs[1]:
+                    render_option_windows(view_snapshot)
+                with option_tabs[2]:
+                    render_walls_and_pcr(view_snapshot)
+                with option_tabs[3]:
+                    render_heavyweight_intelligence(view_snapshot)
+                with option_tabs[4]:
+                    render_vix_context(view_snapshot)
+                with option_tabs[5]:
+                    render_market_context(view_snapshot)
+                with option_tabs[6]:
+                    render_news_context(view_snapshot)
+
+        with persistent_panel("🔬 Detailed Evidence", "panel_detailed_evidence_open") as panel_open:
+            if panel_open:
+                render_detailed_evidence(view_snapshot)
+
+        with persistent_panel("⚙️ Performance Diagnostics", "panel_performance_diagnostics_open") as panel_open:
+            if panel_open:
+                render_performance_diagnostics(
+                    snapshot,
+                    refresh_interval_seconds=float(
+                        st.session_state.get(
+                            "auto_snapshot_interval_seconds",
+                            CONFIG.full_snapshot_default_seconds,
+                        )
+                    ),
+                    snapshot_built_now=snapshot_built_now,
+                    pipeline_history=list(st.session_state.get("pipeline_latency_history", [])),
+                )
+
+        with persistent_panel("❓ One Brain Quick Guide", "panel_help_guide_open") as panel_open:
+            if panel_open:
+                render_help_guide()
+
+        with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
+            if panel_open:
+                render_day_memory(snapshot, live_server_url, live_server_api_key)
 
 with st.expander("🧰 Checks & Downloads Centre", expanded=False):
 
