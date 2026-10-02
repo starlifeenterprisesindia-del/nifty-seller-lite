@@ -47,7 +47,7 @@ def _history_inputs(snapshot: Any, option_state_store: Any | None) -> tuple[list
 
 
 def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | None = None) -> None:
-    """Phase-8 volatility + Phase-2 options intelligence, display-only and on-open."""
+    """Phase-10 advanced options intelligence, display-only and on-open."""
     historical_iv, intraday_history = _history_inputs(snapshot, option_state_store)
     payload = build_phase9_payload(
         snapshot,
@@ -55,7 +55,7 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
         intraday_history=intraday_history,
     )
     st.caption(
-        "⚡ Advanced Options + Phase-9 Straddle/Strangle Intelligence · on-open/display-only · "
+        "⚡ Advanced Options + Phase-10 Activity/Liquidity Intelligence · on-open/display-only · "
         "existing snapshot + saved option-state · no extra Dhan/broker call"
     )
 
@@ -84,31 +84,62 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
     )
     with tab1:
         rows = payload["unusual_activity"]
+        clusters = payload.get("activity_clusters") or []
+        if clusters:
+            st.markdown("**Clustered activity zones**")
+            cview = pd.DataFrame(clusters).rename(columns={
+                "bias": "Bias", "strike_from": "From", "strike_to": "To",
+                "contracts": "Contracts", "sides": "Sides", "avg_score": "Avg Score",
+                "peak_score": "Peak Score", "state": "State",
+            })
+            st.dataframe(cview, use_container_width=True, hide_index=True)
         if rows:
+            st.markdown("**Contract-level unusual activity**")
             view = pd.DataFrame(rows).rename(columns={
                 "strike": "Strike", "side": "Side", "classification": "Flow",
                 "bias": "Bias", "oi_delta": "OI Δ", "volume_delta": "Volume Δ",
-                "premium_delta": "Premium Δ", "score": "Activity Score", "tag": "Tag",
+                "premium_delta": "Premium Δ", "iv": "IV", "iv_rank_chain": "IV Rank*",
+                "window_confirm": "Window Confirm", "confirmation": "Confirmation",
+                "reason": "Why", "score": "Activity Score", "tag": "Tag",
             })
             st.dataframe(view, use_container_width=True, hide_index=True)
             st.caption(
-                "Relative anomaly score = OI + volume + premium movement + existing flow strength + ATM proximity. "
-                "It is context, not an independent trade signal."
+                "Phase-10 relative anomaly score = OI + volume + premium movement + current-IV richness + existing flow strength + "
+                "ATM proximity + 1m/3m/5m bias confirmation. *IV Rank here is within the current fetched chain, not historical IV Rank. "
+                "It is context, not an independent trade signal or proof of institutional identity."
             )
         else:
             st.caption("Unusual activity warming up — matched intraday option-flow rows abhi enough nahi hain.")
 
     with tab2:
         rows = payload["liquidity"]
+        summary = payload.get("liquidity_summary") or {}
+        if summary.get("status") == "READY":
+            a, b, c, d = st.columns(4)
+            a.metric("Liquidity state", str(summary.get("market_state") or "—"))
+            b.metric("Entry-friendly", f"{summary.get('friendly_contracts', 0)}/{summary.get('contracts_checked', 0)}")
+            c.metric("Median spread", _fmt(summary.get("median_spread_pct"), 2, "%"))
+            d.metric("Avg liquidity", _fmt(summary.get("average_score"), 1))
+            best_ce = summary.get("best_ce") or {}
+            best_pe = summary.get("best_pe") or {}
+            if best_ce or best_pe:
+                st.caption(
+                    f"Best current CE: {best_ce.get('strike', '—')} {best_ce.get('grade', '—')} ({best_ce.get('state', '—')}) · "
+                    f"Best current PE: {best_pe.get('strike', '—')} {best_pe.get('grade', '—')} ({best_pe.get('state', '—')})."
+                )
         if rows:
             view = pd.DataFrame(rows).rename(columns={
-                "strike": "Strike", "side": "Side", "ltp": "LTP", "bid": "Bid", "ask": "Ask",
-                "spread_pct": "Spread %", "oi": "OI", "volume": "Volume", "distance": "ATM Dist",
-                "score": "Liquidity", "grade": "Grade",
+                "strike": "Strike", "side": "Side", "ltp": "LTP", "bid": "Bid", "ask": "Ask", "mid": "Mid",
+                "spread_points": "Spread pts", "spread_pct": "Spread %", "oi": "OI", "volume": "Volume",
+                "oi_rank": "OI Rank", "volume_rank": "Vol Rank", "distance": "ATM Dist",
+                "score": "Liquidity", "grade": "Grade", "state": "Execution State",
+                "half_spread_rupees_per_lot": "½-Spread ₹/lot",
             })
             st.dataframe(view, use_container_width=True, hide_index=True)
             st.caption(
-                "Grade uses current bid-ask spread + relative OI + relative volume. Existing TradePlan liquidity logic is unchanged."
+                "Phase-10 grade uses bid-ask spread + relative OI + relative volume + ATM proximity. "
+                "½-Spread ₹/lot is only a friction proxy using configured lot size; it is not a guaranteed slippage/fill estimate. "
+                "Existing TradePlan liquidity logic is unchanged."
             )
         else:
             st.caption("Liquidity board unavailable because option-chain rows are missing/reference-only.")
@@ -220,4 +251,5 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
         else:
             st.caption("Decay analytics warming up — same-day option-state snapshots abhi enough nahi hain.")
         st.caption(payload.get("phase9_note") or "")
+        st.caption(payload.get("phase10_note") or "")
 

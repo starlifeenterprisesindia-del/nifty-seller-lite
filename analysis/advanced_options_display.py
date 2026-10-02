@@ -1,4 +1,4 @@
-"""Display-only advanced options analytics for Phase-2.
+"""Display-only advanced options analytics for Phase-10.
 
 Golden-rule constraints:
 - No broker/API calls.
@@ -18,6 +18,8 @@ from statistics import median
 from typing import Any
 
 import pandas as pd
+
+from config import CONFIG
 
 
 def _finite(value: Any) -> float | None:
@@ -102,10 +104,11 @@ def nearest_atm_strike(frame: pd.DataFrame | None, spot: float | None) -> float 
 
 
 def liquidity_board(frame: pd.DataFrame | None, spot: float | None, *, max_rows: int = 12) -> list[dict[str, Any]]:
-    """Rank near-ATM contracts with an execution-quality proxy.
+    """Rank near-ATM contracts with a display-only execution-quality proxy.
 
-    Score = spread quality 50% + relative OI 30% + relative volume 20%.
-    This is display/selection context only and does not alter TradePlan scoring.
+    Phase-10 score = spread quality 45% + relative OI 25% + relative volume 20%
+    + ATM proximity 10%.  The result is an execution context only; it does not
+    alter TradePlan scoring or One-Brain decisions.
     """
     data = _clean_frame(frame)
     spot_value = _finite(spot)
@@ -113,51 +116,155 @@ def liquidity_board(frame: pd.DataFrame | None, spot: float | None, *, max_rows:
         return []
     data = data[data["side"].isin(["CE", "PE"])].copy()
     data["distance"] = (data["strike"] - spot_value).abs()
-    data = data.sort_values(["distance", "strike", "side"]).head(max(20, max_rows * 2))
+    data = data.sort_values(["distance", "strike", "side"]).head(max(24, max_rows * 3))
     oi_pop = [max(0.0, _finite(v) or 0.0) for v in data.get("oi", pd.Series(dtype=float)).tolist()]
     vol_pop = [max(0.0, _finite(v) or 0.0) for v in data.get("volume", pd.Series(dtype=float)).tolist()]
+    max_distance = max([float(v) for v in data["distance"].dropna().tolist()] or [1.0])
+    lot_size = max(1, int(getattr(CONFIG, "risk_default_lot_size", 65) or 65))
     rows: list[dict[str, Any]] = []
     for raw in data.to_dict("records"):
         bid, ask, ltp = (_finite(raw.get(k)) for k in ("top_bid_price", "top_ask_price", "last_price"))
         midpoint = (bid + ask) / 2.0 if bid is not None and ask is not None and bid > 0 and ask >= bid else None
+        spread_points = (ask - bid) if bid is not None and ask is not None and ask >= bid else None
         spread_pct = ((ask - bid) / midpoint * 100.0) if midpoint and midpoint > 0 else None
         oi = max(0.0, _finite(raw.get("oi")) or 0.0)
         volume = max(0.0, _finite(raw.get("volume")) or 0.0)
-        score = 0.50 * _spread_score(spread_pct) + 0.30 * _pct_rank(oi, oi_pop) + 0.20 * _pct_rank(volume, vol_pop)
+        distance = float(raw.get("distance") or 0.0)
+        proximity = max(0.0, 100.0 - 100.0 * distance / max(max_distance, 1.0))
+        oi_rank = _pct_rank(oi, oi_pop)
+        vol_rank = _pct_rank(volume, vol_pop)
+        score = (
+            0.45 * _spread_score(spread_pct)
+            + 0.25 * oi_rank
+            + 0.20 * vol_rank
+            + 0.10 * proximity
+        )
+        executable = bool(
+            midpoint is not None
+            and spread_pct is not None
+            and spread_pct <= 5.0
+            and oi > 0
+            and volume > 0
+        )
+        if score >= 75 and executable:
+            state = "ENTRY FRIENDLY"
+        elif score >= 55 and midpoint is not None:
+            state = "CAUTION"
+        else:
+            state = "AVOID / THIN"
+        # Half-spread is only a friction proxy, not a guaranteed fill/slippage estimate.
+        half_spread_rupees_per_lot = (spread_points / 2.0 * lot_size) if spread_points is not None else None
         rows.append({
             "strike": round(float(raw["strike"]), 2),
             "side": str(raw["side"]),
             "ltp": round(ltp, 2) if ltp is not None else None,
             "bid": round(bid, 2) if bid is not None else None,
             "ask": round(ask, 2) if ask is not None else None,
+            "mid": round(midpoint, 2) if midpoint is not None else None,
+            "spread_points": round(spread_points, 2) if spread_points is not None else None,
             "spread_pct": round(spread_pct, 2) if spread_pct is not None else None,
             "oi": int(round(oi)),
             "volume": int(round(volume)),
-            "distance": round(float(raw["distance"]), 1),
+            "oi_rank": round(oi_rank, 1),
+            "volume_rank": round(vol_rank, 1),
+            "distance": round(distance, 1),
             "score": round(score, 1),
             "grade": _grade(score),
+            "state": state,
+            "executable": executable,
+            "half_spread_rupees_per_lot": round(half_spread_rupees_per_lot, 2) if half_spread_rupees_per_lot is not None else None,
         })
     return sorted(rows, key=lambda row: (-row["score"], row["distance"]))[:max_rows]
 
 
-def unusual_activity(flow_rows: Any, spot: float | None, *, top_n: int = 8) -> list[dict[str, Any]]:
-    """Find relative intraday anomalies from already-computed matched flow rows."""
+def liquidity_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compact market-quality summary from the already-built liquidity rows."""
+    if not rows:
+        return {"status": "UNAVAILABLE"}
+    spreads = [float(r["spread_pct"]) for r in rows if r.get("spread_pct") is not None]
+    scores = [float(r.get("score") or 0.0) for r in rows]
+    friendly = [r for r in rows if r.get("state") == "ENTRY FRIENDLY"]
+    best_ce = next((r for r in rows if r.get("side") == "CE"), None)
+    best_pe = next((r for r in rows if r.get("side") == "PE"), None)
+    median_spread = float(median(spreads)) if spreads else None
+    average_score = sum(scores) / len(scores) if scores else 0.0
+    if len(friendly) >= 4 and average_score >= 70:
+        market_state = "DEEP / HEALTHY"
+    elif len(friendly) >= 2 and average_score >= 55:
+        market_state = "USABLE"
+    else:
+        market_state = "THIN / CAUTION"
+    return {
+        "status": "READY",
+        "market_state": market_state,
+        "friendly_contracts": len(friendly),
+        "contracts_checked": len(rows),
+        "median_spread_pct": round(median_spread, 2) if median_spread is not None else None,
+        "average_score": round(average_score, 1),
+        "best_ce": best_ce,
+        "best_pe": best_pe,
+    }
+
+
+def _window_alignment(options: Any, bias: str) -> tuple[int, int, str]:
+    windows = list(getattr(options, "windows", ()) or ()) if options is not None else []
+    ready = [w for w in windows if str(getattr(w, "status", "")).upper() == "READY"]
+    if not ready or bias not in {"BULLISH", "BEARISH"}:
+        return 0, len(ready), "UNCONFIRMED"
+    aligned = sum(str(getattr(w, "bias", "")).upper() == bias for w in ready)
+    if aligned >= 2:
+        state = "MULTI-WINDOW CONFIRMED"
+    elif aligned == 1:
+        state = "PARTIAL CONFIRM"
+    else:
+        state = "NOT CONFIRMED"
+    return aligned, len(ready), state
+
+
+def unusual_activity(
+    flow_rows: Any,
+    spot: float | None,
+    *,
+    frame: pd.DataFrame | None = None,
+    options: Any | None = None,
+    top_n: int = 10,
+) -> list[dict[str, Any]]:
+    """Find relative intraday anomalies from already-computed matched flow rows.
+
+    Phase-10 adds current-IV richness and multi-window confirmation without any
+    new broker call. Scores remain relative anomaly proxies, not institutional
+    identity or calibrated trade probabilities.
+    """
     rows = list(flow_rows or [])
     spot_value = _finite(spot) or 0.0
+    chain = _clean_frame(frame)
+    iv_map: dict[tuple[float, str], float] = {}
+    iv_pop: list[float] = []
+    if not chain.empty and {"strike", "side", "implied_volatility"}.issubset(chain.columns):
+        for r in chain.to_dict("records"):
+            strike = _finite(r.get("strike"))
+            iv = _finite(r.get("implied_volatility"))
+            side = str(r.get("side") or "").upper()
+            if strike is not None and iv is not None and iv > 0 and side in {"CE", "PE"}:
+                iv_map[(strike, side)] = iv
+                iv_pop.append(iv)
     cleaned: list[dict[str, Any]] = []
     for raw in rows:
         if str(raw.get("integrity_status", "")).upper() != "READY":
             continue
         strike = _finite(raw.get("strike"))
-        if strike is None:
+        side = str(raw.get("side") or "").upper()
+        if strike is None or side not in {"CE", "PE"}:
             continue
         cleaned.append({
             **raw,
             "strike_num": strike,
+            "side_norm": side,
             "oi_abs": abs(_finite(raw.get("oi_delta")) or 0.0),
             "vol_abs": abs(_finite(raw.get("volume_delta")) or 0.0),
             "premium_abs": abs(_finite(raw.get("price_delta")) or 0.0),
             "flow_abs": abs(_finite(raw.get("flow_strength")) or 0.0),
+            "iv": iv_map.get((strike, side)),
         })
     if not cleaned:
         return []
@@ -169,28 +276,87 @@ def unusual_activity(flow_rows: Any, spot: float | None, *, top_n: int = 8) -> l
     for raw in cleaned:
         distance = abs(raw["strike_num"] - spot_value)
         proximity = max(0.0, 100.0 - min(100.0, distance / 4.0))
+        oi_rank = _pct_rank(raw["oi_abs"], oi_pop)
+        vol_rank = _pct_rank(raw["vol_abs"], vol_pop)
+        prem_rank = _pct_rank(raw["premium_abs"], prem_pop)
+        flow_rank = _pct_rank(raw["flow_abs"], flow_pop)
+        iv_rank = _pct_rank(raw["iv"], iv_pop) if raw.get("iv") is not None and iv_pop else 0.0
+        bias = str(raw.get("directional_bias") or "NEUTRAL").upper()
+        aligned, ready_windows, confirmation = _window_alignment(options, bias)
+        window_score = (100.0 * aligned / ready_windows) if ready_windows else 0.0
         score = (
-            0.35 * _pct_rank(raw["oi_abs"], oi_pop)
-            + 0.30 * _pct_rank(raw["vol_abs"], vol_pop)
-            + 0.20 * _pct_rank(raw["premium_abs"], prem_pop)
-            + 0.10 * _pct_rank(raw["flow_abs"], flow_pop)
-            + 0.05 * proximity
+            0.28 * oi_rank
+            + 0.24 * vol_rank
+            + 0.18 * prem_rank
+            + 0.10 * flow_rank
+            + 0.08 * iv_rank
+            + 0.07 * proximity
+            + 0.05 * window_score
         )
         if raw["oi_abs"] <= 0 and raw["vol_abs"] <= 0:
             continue
+        top_factors = sorted(
+            [("OI", oi_rank), ("VOL", vol_rank), ("PREM", prem_rank), ("IV", iv_rank), ("FLOW", flow_rank)],
+            key=lambda x: x[1], reverse=True,
+        )[:2]
+        reason = " + ".join(name for name, val in top_factors if val >= 50) or "relative flow anomaly"
         result.append({
             "strike": round(raw["strike_num"], 2),
-            "side": str(raw.get("side") or ""),
+            "side": raw["side_norm"],
             "classification": str(raw.get("classification") or "ACTIVITY"),
-            "bias": str(raw.get("directional_bias") or "NEUTRAL"),
+            "bias": bias,
             "oi_delta": round(_finite(raw.get("oi_delta")) or 0.0),
             "volume_delta": round(_finite(raw.get("volume_delta")) or 0.0),
             "premium_delta": round(_finite(raw.get("price_delta")) or 0.0, 2),
+            "iv": round(raw["iv"], 2) if raw.get("iv") is not None else None,
+            "iv_rank_chain": round(iv_rank, 1) if raw.get("iv") is not None else None,
+            "window_confirm": f"{aligned}/{ready_windows}" if ready_windows else "0/0",
+            "confirmation": confirmation,
+            "reason": reason,
             "score": round(score, 1),
             "tag": _tag(score),
         })
     return sorted(result, key=lambda row: row["score"], reverse=True)[:top_n]
 
+
+def activity_clusters(rows: list[dict[str, Any]], frame: pd.DataFrame | None = None) -> list[dict[str, Any]]:
+    """Group nearby same-bias anomalies into display-only strike clusters."""
+    if not rows:
+        return []
+    data = _clean_frame(frame)
+    step = _strike_step(data) if not data.empty else None
+    threshold = max(50.0, float(step or 50.0) * 1.05)
+    ordered = sorted(rows, key=lambda r: (str(r.get("bias")), float(r.get("strike") or 0.0)))
+    clusters: list[list[dict[str, Any]]] = []
+    for row in ordered:
+        if not clusters:
+            clusters.append([row])
+            continue
+        prev = clusters[-1][-1]
+        same_bias = str(prev.get("bias")) == str(row.get("bias")) and str(row.get("bias")) in {"BULLISH", "BEARISH"}
+        near = abs(float(row.get("strike") or 0.0) - float(prev.get("strike") or 0.0)) <= threshold
+        if same_bias and near:
+            clusters[-1].append(row)
+        else:
+            clusters.append([row])
+    out: list[dict[str, Any]] = []
+    for group in clusters:
+        if len(group) < 2:
+            continue
+        scores = [float(r.get("score") or 0.0) for r in group]
+        strikes = [float(r.get("strike") or 0.0) for r in group]
+        sides = sorted(set(str(r.get("side") or "") for r in group))
+        out.append({
+            "bias": str(group[0].get("bias") or "NEUTRAL"),
+            "strike_from": round(min(strikes), 2),
+            "strike_to": round(max(strikes), 2),
+            "contracts": len(group),
+            "sides": "/".join(sides),
+            "avg_score": round(sum(scores) / len(scores), 1),
+            "peak_score": round(max(scores), 1),
+            "state": "CLUSTERED ACTIVITY",
+        })
+    return sorted(out, key=lambda r: (r["peak_score"], r["contracts"]), reverse=True)[:6]
 
 def straddle_context(frame: pd.DataFrame | None, spot: float | None) -> dict[str, Any]:
     data = _clean_frame(frame)
@@ -696,10 +862,23 @@ def build_phase2_payload(snapshot: Any, historical_atm_iv: list[float] | None = 
     spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
     frame = getattr(snapshot, "option_chain", None)
     options = getattr(snapshot, "option_intelligence", None)
+    liquidity = liquidity_board(frame, spot)
+    unusual = unusual_activity(
+        getattr(options, "flow_rows", ()),
+        spot,
+        frame=frame,
+        options=options,
+    )
     return {
-        "liquidity": liquidity_board(frame, spot),
-        "unusual_activity": unusual_activity(getattr(options, "flow_rows", ()), spot),
+        "liquidity": liquidity,
+        "liquidity_summary": liquidity_summary(liquidity),
+        "unusual_activity": unusual,
+        "activity_clusters": activity_clusters(unusual, frame),
         "straddle": straddle_context(frame, spot),
         "iv": iv_context(frame, spot, historical_atm_iv=historical_atm_iv),
         "note": "Display-only; existing snapshot only; zero broker/API calls and zero One-Brain weight.",
+        "phase10_note": (
+            "Advanced unusual-activity confirmation and liquidity/execution-quality context use only the already-fetched "
+            "option chain + OptionIntelligence windows. Scores are relative diagnostics, not order-flow identity or fill guarantees."
+        ),
     }
