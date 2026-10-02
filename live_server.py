@@ -339,6 +339,22 @@ def day_memory_review(payload: dict[str, Any] = Body(default={}), x_live_key: st
     return {"ok": True, "data": review}
 
 
+@app.post("/day-memory-replay")
+def day_memory_replay(payload: dict[str, Any] = Body(default={}), x_live_key: str = Header(default="")):
+    """Explicit read-only replay payload from persisted Railway evidence only."""
+    if not os.getenv("LIVE_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="LIVE_API_KEY required for history")
+    _authorise("", x_live_key)
+    if not DAY_RECORDER.store:
+        raise HTTPException(status_code=503, detail="Persistent recorder unavailable")
+    try:
+        max_rows = max(30, min(390, int(payload.get("max_rows", 390))))
+        bundle = DAY_RECORDER.store.replay_bundle(max_rows=max_rows)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "data": bundle}
+
+
 @app.post("/day-memory-export")
 def day_memory_export(x_live_key: str = Header(default="")):
     import base64

@@ -1,0 +1,21 @@
+PHASE-3 REPLAY / REVIEW VERIFICATION
+
+Version: 2.55.0_PHASE3_REPLAY_REVIEW
+
+Verification completed:
+- Python compile: PASS for replay_review.py, day_memory.py, live_server.py, replay_review UI, app.py and config.py.
+- New replay tests: PASS.
+- Affected recording/replay tests: PASS.
+- Critical One Brain / option / barrier / Big Player / trade-plan / snapshot regression selection: 144 PASS.
+- Synthetic 390-sample + 390-candle replay payload build: ~7 ms in the test container.
+- Core calculation files checked byte-for-byte against 2.54.0: UNCHANGED.
+- Dhan gateway and snapshot service: UNCHANGED.
+
+UI limitation of this verification environment:
+- Streamlit is not installed in the local test container, so Streamlit AppTest/UI smoke tests could not be executed here.
+- UI files were syntax-compiled successfully; deployment smoke test remains required.
+
+Safety properties:
+- Replay endpoint makes zero broker/market-data calls.
+- No live Brain weights, thresholds, strategy scores or execution gates are modified.
+- Future outcomes remain labels only and never reconstruct earlier signals.

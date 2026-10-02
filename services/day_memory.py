@@ -598,6 +598,71 @@ class DayMemory:
             )]
         return audit_samples(rows, horizon_minutes=horizon_minutes, move_points=move_points)
 
+    def replay_bundle(self, max_rows=390):
+        """Build an explicit read-only One Brain replay payload from SQLite only.
+
+        No broker request is made here.  SQL projects only fields needed for the
+        replay screen so the large saved option-row arrays are not copied into RAM.
+        """
+        from analysis.replay_review import build_replay_bundle
+
+        limit = max(30, min(390, int(max_rows)))
+        with self.connect() as db:
+            meta = dict(db.execute("SELECT key,value FROM meta"))
+            day = str(meta.get("day") or "")
+            if not day:
+                return build_replay_bundle([], [], [], [])
+
+            sample_rows = db.execute(
+                "SELECT json_object("
+                "'at',json_extract(body,'$.at'),"
+                "'spot',json_extract(body,'$.spot'),"
+                "'version',json_extract(body,'$.version'),"
+                "'direction',json_extract(body,'$.direction'),"
+                "'background_action',json_extract(body,'$.background_action'),"
+                "'barriers',json_extract(body,'$.barriers'),"
+                "'activity',json_extract(body,'$.activity'),"
+                "'evidence',json_object('option_intelligence',json_extract(body,'$.evidence.option_intelligence'))"
+                ") FROM samples WHERE at LIKE ? ORDER BY at DESC LIMIT ?",
+                (day + "%", limit),
+            ).fetchall()
+            samples = [json.loads(raw) for (raw,) in reversed(sample_rows)]
+
+            decision_rows = db.execute(
+                "SELECT body FROM app_decisions WHERE substr(at,1,10)=? ORDER BY at DESC LIMIT ?",
+                (day, limit),
+            ).fetchall()
+            decisions = [json.loads(raw) for (raw,) in reversed(decision_rows)]
+
+            event_rows = db.execute(
+                "SELECT at,kind,identity,body FROM events "
+                "WHERE substr(at,1,10)=? AND kind IN ('BARRIER','3m REACTION','APP AI','AI TRACKER') "
+                "ORDER BY at DESC LIMIT 800",
+                (day,),
+            ).fetchall()
+            events = []
+            for at, kind, identity, raw in reversed(event_rows):
+                try:
+                    body = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    body = {}
+                events.append({"at": at, "kind": kind, "identity": identity, **body})
+
+            candle_rows = db.execute(
+                "SELECT at,body FROM candles WHERE instrument='NIFTY' AND substr(at,1,10)=? "
+                "ORDER BY at DESC LIMIT 390",
+                (day,),
+            ).fetchall()
+            candles = []
+            for at, raw in reversed(candle_rows):
+                try:
+                    body = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                candles.append({"at": at, **body})
+
+        return build_replay_bundle(samples, decisions, events, candles)
+
     def report(self):
         with self.connect() as db:
             meta = dict(db.execute("SELECT key,value FROM meta"))

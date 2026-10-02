@@ -91,6 +91,7 @@ from ui.performance_diagnostics import render_performance_diagnostics
 from ui.help_guide import render_help_guide
 from ui.live_barrier_chart import render_live_barrier_chart
 from ui.advanced_options_intelligence import render_phase2_options_intelligence
+from ui.replay_review import render_phase3_replay
 
 
 @contextmanager
@@ -955,6 +956,10 @@ render_main_ai_market_view(
 # already present in the canonical snapshot, so it adds no broker/API call and no
 # One-Brain calculation to the critical path.
 render_live_barrier_chart(view_snapshot)
+
+with persistent_panel("🎞️ One Brain Replay + Review", "panel_phase3_replay_open") as panel_open:
+    if panel_open:
+        render_phase3_replay(view_snapshot, live_server_url, live_server_api_key)
 
 # Lightweight price-only validation of the latest canonical UP/DOWN thesis.
 # It polls only Railway's existing WebSocket cache every 3 minutes; no new Dhan,
