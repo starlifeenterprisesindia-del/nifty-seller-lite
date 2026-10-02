@@ -1,0 +1,41 @@
+PHASE 1 VISUAL INTELLIGENCE VERIFICATION
+Version: 2.53.0_PHASE1_VISUAL_INTELLIGENCE
+Base: 2.52.0_PHASE0_STABILITY_CHART
+
+Scope
+- Integrated chart/display layer only.
+- Phase-0 Dhan gateway/rate-limit protections remain unchanged.
+- One Brain, decision, trade-plan, barrier, option-intelligence, Big Player and snapshot engines remain unchanged.
+
+Added
+- R1/R2/S1/S2 shaded barrier zones.
+- Barrier labels include aligned CE/PE Heavy Money score when nearby.
+- CE/PE Heavy Money score: display-only proxy using already-computed wall/cluster OI and ready flow-window OI/volume activity.
+- OI behavior and wall migration display.
+- EMA20/EMA50 overlays with toggle on 1m/3m/5m/15m.
+- Richer Big Player strip.
+- Compact Mini AI Brain retained.
+- Correct LIVE vs REFERENCE badge.
+- Full-screen + Streamlit focus-mode fallback.
+
+Golden Rule checks
+PASS - no new Dhan/Railway/API call
+PASS - no live history/journal read
+PASS - no One Brain/core model mutation
+PASS - Phase-0 gateway code byte-identical to 2.52.0 base
+PASS - canonical simple_brain/decision/trade_plan/barrier/option/big-player/snapshot files byte-identical to 2.52.0 base
+
+Tests
+- Chart phase tests: 4 passed.
+- Critical regression selection: 110 passed; 2 Streamlit UI tests could not run because Streamlit is not installed in the local test container (environment limitation, not an assertion failure).
+- Signal-safety non-UI remainder: 15 passed, 2 UI tests deselected for the same environment limitation.
+- Python compile: PASS.
+- Synthetic chart-payload benchmark (1900 x 1m, 640 x 3m, 130 x 15m frames): ~27 ms average on this container. This is display-payload work after the canonical snapshot; it is not One Brain decision latency.
+
+Live deployment tests still required
+- Browser chart render / CDN availability
+- mobile full-screen/focus mode
+- live barrier band scaling while zooming
+- Auto Snapshot while chart is open
+- phone + laptop simultaneous session
+- Phase-0 429 diagnostics under live Dhan traffic

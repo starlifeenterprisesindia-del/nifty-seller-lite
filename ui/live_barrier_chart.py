@@ -7,6 +7,7 @@ import pandas as pd
 
 
 _MAX_POINTS = {"1m": 240, "3m": 180, "15m": 120}
+_FLOW_WEIGHTS = {60: 0.20, 180: 0.35, 300: 0.45}
 
 
 def _num(value: Any) -> float | None:
@@ -75,6 +76,43 @@ def _candle_records(frame: pd.DataFrame, *, session_date: Any, limit: int) -> li
     return [unique[key] for key in sorted(unique)]
 
 
+def _ema_records(
+    frame: pd.DataFrame,
+    *,
+    session_date: Any,
+    span: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Build chart-only EMA points from candles already present in the snapshot.
+
+    This never fetches data and never feeds back into One Brain.  The EMA is
+    calculated over the full in-memory lookback first, so the visible current-day
+    values have the same warm-up convention as the canonical indicator engine.
+    """
+
+    if frame is None or frame.empty or "timestamp" not in frame.columns or "close" not in frame.columns:
+        return []
+    data = frame[["timestamp", "close"]].copy()
+    data["timestamp"] = pd.to_datetime(data["timestamp"], errors="coerce")
+    data["close"] = pd.to_numeric(data["close"], errors="coerce")
+    data = data.dropna(subset=["timestamp", "close"]).sort_values("timestamp")
+    if data.empty:
+        return []
+    data["ema"] = data["close"].ewm(span=int(span), adjust=False).mean()
+    current = data.loc[data["timestamp"].dt.date == session_date]
+    if not current.empty:
+        data = current
+    rows: list[dict[str, Any]] = []
+    for item in data.tail(max(30, int(limit))).to_dict("records"):
+        stamp = _epoch_seconds(item.get("timestamp"))
+        value = _num(item.get("ema"))
+        if stamp is None or value is None:
+            continue
+        rows.append({"time": stamp, "value": round(value, 2)})
+    unique = {row["time"]: row for row in rows}
+    return [unique[key] for key in sorted(unique)]
+
+
 def _barrier_payload(snapshot: Any) -> list[dict[str, Any]]:
     barrier_map = getattr(snapshot, "barrier_map", None)
     if barrier_map is None:
@@ -109,37 +147,104 @@ def _barrier_payload(snapshot: Any) -> list[dict[str, Any]]:
     return output
 
 
-def _money_tag(relative_pct: float | None) -> str:
-    if relative_pct is None:
+def _money_tag(score: float | None) -> str:
+    if score is None:
         return "ACTIVE"
-    if relative_pct >= 80:
+    if score >= 80:
         return "VERY HIGH"
-    if relative_pct >= 60:
+    if score >= 60:
         return "HIGH"
-    if relative_pct >= 35:
+    if score >= 35:
         return "MEDIUM"
     return "LOW"
 
 
-def _money_wall_payload(snapshot: Any) -> list[dict[str, Any]]:
-    """Display-only OI wall context from already-computed option intelligence.
+def _weighted_share(options: Any, side: str, field_suffix: str) -> float | None:
+    windows = tuple(getattr(options, "windows", ()) or ())
+    weighted = 0.0
+    used = 0.0
+    side = side.lower()
+    other = "pe" if side == "ce" else "ce"
+    for item in windows:
+        if str(getattr(item, "status", "")).upper() != "READY":
+            continue
+        target = int(getattr(item, "target_seconds", 0) or 0)
+        weight = _FLOW_WEIGHTS.get(target, 0.25)
+        own = _num(getattr(item, f"{side}_{field_suffix}", None))
+        opp = _num(getattr(item, f"{other}_{field_suffix}", None))
+        if own is None or opp is None:
+            continue
+        own_abs, opp_abs = abs(own), abs(opp)
+        total = own_abs + opp_abs
+        if total <= 0:
+            continue
+        weighted += (own_abs / total * 100.0) * weight
+        used += weight
+    if used <= 0:
+        return None
+    return max(0.0, min(100.0, weighted / used))
 
-    No chain scan or market request is made here. Relative strength uses the
-    full-chain max OI values already stored in snapshot.metadata when available.
+
+def _side_behavior(options: Any, side: str) -> str:
+    """Classify the most mature ready OI/premium pair for display only."""
+
+    windows = [
+        item
+        for item in tuple(getattr(options, "windows", ()) or ())
+        if str(getattr(item, "status", "")).upper() == "READY"
+    ]
+    if not windows:
+        return "NO FRESH FLOW"
+    item = max(windows, key=lambda value: int(getattr(value, "target_seconds", 0) or 0))
+    prefix = side.lower()
+    oi_delta = _num(getattr(item, f"{prefix}_oi_delta", None))
+    premium_delta = _num(getattr(item, f"{prefix}_premium_delta", None))
+    if oi_delta is None or premium_delta is None:
+        return "ACTIVITY"
+    if oi_delta > 0 and premium_delta < 0:
+        return "WRITING"
+    if oi_delta > 0 and premium_delta > 0:
+        return "BUYING"
+    if oi_delta < 0 and premium_delta > 0:
+        return "SHORT COVERING"
+    if oi_delta < 0 and premium_delta < 0:
+        return "LONG UNWINDING"
+    return "MIXED"
+
+
+def _money_wall_payload(snapshot: Any) -> list[dict[str, Any]]:
+    """Display-only Heavy Money/OI context from already-computed evidence.
+
+    Money Score is a visualization proxy, not rupee capital and not a new One-Brain
+    vote. It combines existing wall OI, cluster OI, fresh OI activity and option
+    volume activity. No option-chain scan, history read or market request occurs.
     """
 
     options = getattr(snapshot, "option_intelligence", None)
     if options is None:
         return []
     global_walls = (getattr(snapshot, "metadata", {}) or {}).get("global_oi_walls") or {}
+    walls = {
+        "CE": getattr(options, "ce_wall", None),
+        "PE": getattr(options, "pe_wall", None),
+    }
+    wall_oi = {key: _num(getattr(value, "oi", None)) if value is not None else None for key, value in walls.items()}
+    cluster_oi = {
+        key: _num(getattr(value, "cluster_oi", None)) if value is not None else None
+        for key, value in walls.items()
+    }
+    wall_total = sum(value for value in wall_oi.values() if value is not None and value > 0)
+    cluster_total = sum(value for value in cluster_oi.values() if value is not None and value > 0)
+
     output: list[dict[str, Any]] = []
-    for side, wall in (("CE", getattr(options, "ce_wall", None)), ("PE", getattr(options, "pe_wall", None))):
+    for side in ("CE", "PE"):
+        wall = walls[side]
         if wall is None:
             continue
         strike = _num(getattr(wall, "strike", None))
-        oi = _num(getattr(wall, "oi", None))
+        oi = wall_oi[side]
         cluster = _num(getattr(wall, "cluster_center", None))
-        cluster_oi = _num(getattr(wall, "cluster_oi", None))
+        cluster_value = cluster_oi[side]
         if strike is None:
             continue
         global_info = global_walls.get(side) or global_walls.get(side.lower()) or {}
@@ -147,18 +252,80 @@ def _money_wall_payload(snapshot: Any) -> list[dict[str, Any]]:
         relative = None
         if oi is not None and global_oi not in (None, 0):
             relative = max(0.0, min(100.0, oi / global_oi * 100.0))
+
+        wall_share = (oi / wall_total * 100.0) if oi is not None and wall_total > 0 else relative
+        cluster_share = (
+            cluster_value / cluster_total * 100.0
+            if cluster_value is not None and cluster_total > 0
+            else None
+        )
+        oi_activity = _weighted_share(options, side, "oi_delta")
+        volume_activity = _weighted_share(options, side, "volume_delta")
+        components: list[tuple[float, float]] = []
+        if wall_share is not None:
+            components.append((wall_share, 0.45))
+        if cluster_share is not None:
+            components.append((cluster_share, 0.20))
+        if oi_activity is not None:
+            components.append((oi_activity, 0.20))
+        if volume_activity is not None:
+            components.append((volume_activity, 0.15))
+        denom = sum(weight for _, weight in components)
+        money_score = (
+            max(0.0, min(100.0, sum(value * weight for value, weight in components) / denom))
+            if denom > 0
+            else relative
+        )
+        previous_strike = _num(getattr(wall, "previous_strike", None))
+        migration = _num(getattr(wall, "migration_points", None))
         output.append(
             {
                 "side": side,
                 "strike": round(strike, 2),
                 "oi": round(oi, 2) if oi is not None else None,
                 "cluster": round(cluster, 2) if cluster is not None else None,
-                "clusterOi": round(cluster_oi, 2) if cluster_oi is not None else None,
+                "clusterOi": round(cluster_value, 2) if cluster_value is not None else None,
                 "relativePct": round(relative, 1) if relative is not None else None,
+                "moneyScore": round(money_score, 1) if money_score is not None else None,
                 "tag": _money_tag(relative),
+                "moneyTag": _money_tag(money_score if money_score is not None else relative),
+                "behavior": _side_behavior(options, side),
+                "oiActivityShare": round(oi_activity, 1) if oi_activity is not None else None,
+                "volumeActivityShare": round(volume_activity, 1) if volume_activity is not None else None,
+                "previousStrike": round(previous_strike, 2) if previous_strike is not None else None,
+                "migrationPoints": round(migration, 2) if migration is not None else None,
                 "status": str(getattr(wall, "status", "")),
             }
         )
+    return output
+
+
+def _attach_money_to_barriers(
+    barriers: list[dict[str, Any]], money_walls: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    by_side = {str(item.get("side", "")).upper(): item for item in money_walls}
+    output: list[dict[str, Any]] = []
+    for raw in barriers:
+        item = dict(raw)
+        wall_side = "CE" if "RESIST" in str(item.get("side", "")).upper() else "PE"
+        wall = by_side.get(wall_side)
+        if wall and wall.get("strike") is not None:
+            strike = float(wall["strike"])
+            lower, upper = float(item["lower"]), float(item["upper"])
+            distance = 0.0 if lower <= strike <= upper else min(abs(strike - lower), abs(strike - upper))
+            proximity_limit = max(25.0, abs(upper - lower) * 1.5)
+            aligned = distance <= proximity_limit
+            item.update(
+                {
+                    "moneySide": wall_side,
+                    "moneyScore": wall.get("moneyScore"),
+                    "moneyTag": wall.get("moneyTag") or wall.get("tag"),
+                    "moneyBehavior": wall.get("behavior"),
+                    "moneyDistance": round(distance, 1),
+                    "moneyAligned": bool(aligned),
+                }
+            )
+        output.append(item)
     return output
 
 
@@ -166,6 +333,7 @@ def _big_player_payload(snapshot: Any) -> dict[str, Any]:
     item = getattr(snapshot, "big_player_activity", None)
     if item is None:
         return {"status": "UNAVAILABLE"}
+    created_at = getattr(snapshot, "created_at", None)
     return {
         "direction": str(getattr(item, "direction", "MIXED")),
         "state": str(getattr(item, "state", "")),
@@ -179,6 +347,11 @@ def _big_player_payload(snapshot: Any) -> dict[str, Any]:
         "setup": str(getattr(item, "futures_setup", "")),
         "optionConfirmation": str(getattr(item, "option_confirmation", "")),
         "levelReaction": str(getattr(item, "level_reaction", "")),
+        "activityType": str(getattr(item, "activity_type", "")),
+        "moveState": str(getattr(item, "move_state", "")),
+        "priceShockState": str(getattr(item, "price_shock_state", "")),
+        "nextConfirmation": str(getattr(item, "next_confirmation", "")),
+        "asOf": created_at.isoformat() if created_at is not None else "",
         "status": str(getattr(item, "status", "")),
     }
 
@@ -195,7 +368,6 @@ def _ai_brain_payload(snapshot: Any) -> dict[str, Any]:
     if isinstance(reasons, str):
         reasons = (reasons,)
     reason = str(next((x for x in reasons if str(x).strip()), "Market evidence ko confirm hone do"))
-    # Keep the floating brain deliberately compact.
     if len(reason) > 96:
         reason = reason[:93].rstrip() + "..."
     if len(trigger) > 88:
@@ -217,18 +389,43 @@ def build_live_barrier_chart_payload(snapshot: Any) -> dict[str, Any]:
     if spot is None:
         spot = _num((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
     options = getattr(snapshot, "option_intelligence", None)
+    money_walls = _money_wall_payload(snapshot)
+    barriers = _attach_money_to_barriers(_barrier_payload(snapshot), money_walls)
+    candles_1m = getattr(snapshot, "candles_1m", pd.DataFrame())
+    candles_3m = getattr(snapshot, "candles_3m", pd.DataFrame())
+    candles_15m = getattr(snapshot, "candles_15m", pd.DataFrame())
+    market_session = getattr(snapshot, "market_session", None)
     return {
         "snapshotId": str(getattr(snapshot, "snapshot_id", "")),
         "createdAt": created_at.isoformat() if created_at is not None else "",
         "spot": round(spot, 2) if spot is not None else None,
         "defaultTf": "15m",
-        "candles": {
-            "1m": _candle_records(getattr(snapshot, "candles_1m", pd.DataFrame()), session_date=session_date, limit=_MAX_POINTS["1m"]),
-            "3m": _candle_records(getattr(snapshot, "candles_3m", pd.DataFrame()), session_date=session_date, limit=_MAX_POINTS["3m"]),
-            "15m": _candle_records(getattr(snapshot, "candles_15m", pd.DataFrame()), session_date=session_date, limit=_MAX_POINTS["15m"]),
+        "session": {
+            "code": str(getattr(market_session, "code", "")),
+            "label": str(getattr(market_session, "label", "")),
+            "isLive": bool(getattr(market_session, "is_live", False)),
         },
-        "barriers": _barrier_payload(snapshot),
-        "moneyWalls": _money_wall_payload(snapshot),
+        "candles": {
+            "1m": _candle_records(candles_1m, session_date=session_date, limit=_MAX_POINTS["1m"]),
+            "3m": _candle_records(candles_3m, session_date=session_date, limit=_MAX_POINTS["3m"]),
+            "15m": _candle_records(candles_15m, session_date=session_date, limit=_MAX_POINTS["15m"]),
+        },
+        "ema": {
+            "1m": {
+                "20": _ema_records(candles_1m, session_date=session_date, span=20, limit=_MAX_POINTS["1m"]),
+                "50": _ema_records(candles_1m, session_date=session_date, span=50, limit=_MAX_POINTS["1m"]),
+            },
+            "3m": {
+                "20": _ema_records(candles_3m, session_date=session_date, span=20, limit=_MAX_POINTS["3m"]),
+                "50": _ema_records(candles_3m, session_date=session_date, span=50, limit=_MAX_POINTS["3m"]),
+            },
+            "15m": {
+                "20": _ema_records(candles_15m, session_date=session_date, span=20, limit=_MAX_POINTS["15m"]),
+                "50": _ema_records(candles_15m, session_date=session_date, span=50, limit=_MAX_POINTS["15m"]),
+            },
+        },
+        "barriers": barriers,
+        "moneyWalls": money_walls,
         "bigPlayer": _big_player_payload(snapshot),
         "aiBrain": _ai_brain_payload(snapshot),
         "optionFlow": {
@@ -242,9 +439,9 @@ def build_live_barrier_chart_payload(snapshot: Any) -> dict[str, Any]:
 def render_live_barrier_chart(snapshot: Any) -> None:
     """Render the integrated One-Brain broker-style chart.
 
-    Golden Rule: this is display-only. It makes no Dhan/Railway/API call, reads no
-    journal/history, performs no One-Brain calculation, and mutates no canonical
-    object. It only renders already-computed snapshot evidence in the browser.
+    Golden Rule: no Dhan/Railway/API request, no journal/history read, no canonical
+    mutation and no new One-Brain vote. Small display-only EMA/money calculations
+    use only the snapshot already in memory; browser rendering handles the chart.
     """
 
     import streamlit as st
@@ -273,6 +470,7 @@ def render_live_barrier_chart(snapshot: Any) -> None:
   .title{{font-size:14px;font-weight:850;white-space:nowrap;letter-spacing:.1px}}
   .spot{{font-size:13px;font-weight:850;white-space:nowrap;color:#fff}}
   .live{{font-size:10px;font-weight:850;padding:3px 6px;border-radius:999px;background:rgba(37,217,138,.15);color:#65f7b6;border:1px solid rgba(37,217,138,.32)}}
+  .live.ref{{background:rgba(255,209,102,.13);color:#ffe08a;border-color:rgba(255,209,102,.34)}}
   .buttons{{display:flex;gap:5px;align-items:center;flex-wrap:wrap}}
   button{{border:1px solid rgba(148,163,184,.30);background:#101c2e;color:#c9d6e7;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;transition:.15s}}
   button:hover{{transform:translateY(-1px);border-color:rgba(24,211,255,.55)}}
@@ -282,12 +480,16 @@ def render_live_barrier_chart(snapshot: Any) -> None:
   .pill{{min-width:0;padding:7px 9px;border-radius:10px;border:1px solid rgba(148,163,184,.16);background:rgba(255,255,255,.035);font-size:11px;line-height:1.3}}
   .pill b{{display:block;font-size:10px;color:var(--muted);margin-bottom:2px;text-transform:uppercase;letter-spacing:.35px}}
   .pill strong{{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}}
+  .pill small{{display:block;margin-top:2px;color:#9fb0c7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
   .moneyCE{{border-color:rgba(255,159,67,.34);background:linear-gradient(135deg,rgba(255,159,67,.10),rgba(255,77,109,.05))}}
   .moneyPE{{border-color:rgba(37,217,138,.34);background:linear-gradient(135deg,rgba(37,217,138,.10),rgba(0,201,167,.05))}}
   .big{{border-color:rgba(24,211,255,.32);background:linear-gradient(135deg,rgba(24,211,255,.09),rgba(168,108,255,.08))}}
-  .chartWrap{{position:relative}}
-  #chart{{width:100%;height:455px}}
-  .brain{{position:absolute;left:12px;top:11px;z-index:5;width:min(310px,calc(100% - 24px));border:1px solid rgba(168,108,255,.48);border-radius:12px;padding:8px 10px;background:linear-gradient(135deg,rgba(11,18,35,.91),rgba(39,20,67,.88));backdrop-filter:blur(7px);box-shadow:0 8px 25px rgba(0,0,0,.28);pointer-events:none}}
+  .chartWrap{{position:relative;background:#07101d}}
+  #chart{{position:relative;z-index:2;width:100%;height:455px}}
+  #bands{{position:absolute;z-index:3;left:0;right:58px;top:0;bottom:0;pointer-events:none;overflow:hidden}}
+  .barrierBand{{position:absolute;left:0;right:0;border-top:1px solid;border-bottom:1px solid;opacity:.72}}
+  .barrierBand span{{position:absolute;left:4px;top:1px;padding:1px 5px;border-radius:5px;font-size:9px;font-weight:900;letter-spacing:.2px;background:rgba(5,10,18,.76);white-space:nowrap}}
+  .brain{{position:absolute;left:12px;top:11px;z-index:6;width:min(310px,calc(100% - 24px));border:1px solid rgba(168,108,255,.48);border-radius:12px;padding:8px 10px;background:linear-gradient(135deg,rgba(11,18,35,.91),rgba(39,20,67,.88));backdrop-filter:blur(7px);box-shadow:0 8px 25px rgba(0,0,0,.28);pointer-events:none}}
   .brainTop{{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-bottom:3px}}
   .brainTitle{{font-size:10px;font-weight:900;color:#d5bdff;letter-spacing:.55px}}
   .brainAction{{font-size:13px;font-weight:950;padding:2px 7px;border-radius:999px}}
@@ -297,31 +499,33 @@ def render_live_barrier_chart(snapshot: Any) -> None:
   .foot{{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 10px 8px;font-size:10.5px;color:#8fa2ba;border-top:1px solid var(--line);flex-wrap:wrap;background:rgba(5,10,19,.62)}}
   .legend{{display:flex;gap:10px;flex-wrap:wrap}}
   .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;box-shadow:0 0 8px currentColor}}
-  .r1{{background:var(--orange)}} .r2{{background:var(--red)}} .s1{{background:var(--green)}} .s2{{background:var(--teal)}} .ce{{background:#ffbf69}} .pe{{background:#51f0ba}} .bp{{background:var(--cyan)}}
+  .r1{{background:var(--orange)}} .r2{{background:var(--red)}} .s1{{background:var(--green)}} .s2{{background:var(--teal)}} .ce{{background:#ffbf69}} .pe{{background:#51f0ba}} .bp{{background:var(--cyan)}} .e20{{background:#ffd166}} .e50{{background:#a86cff}}
   .review{{color:#aebbd0}}
   .wrap:fullscreen{{border-radius:0;border:none;background:#050b14;width:100vw;height:100vh}}
-  .wrap:fullscreen #chart{{height:calc(100vh - 154px)}}
-  .wrap:fullscreen .brain{{top:14px;left:14px}}
-  @media(max-width:760px){{#chart{{height:390px}}.statusRow{{grid-template-columns:1fr 1fr}}.big{{grid-column:1/-1}}.head{{padding:7px 8px}}.title{{font-size:13px}}button{{padding:5px 7px}}.brain{{width:min(280px,calc(100% - 18px));left:9px;top:9px}}}}
+  .wrap:fullscreen #chart{{height:calc(100vh - 168px)}}
+  .wrap.focusMode{{border-radius:10px}}
+  .wrap.focusMode #chart{{height:78vh;min-height:620px}}
+  @media(max-width:760px){{#chart{{height:390px}}.statusRow{{grid-template-columns:1fr 1fr}}.big{{grid-column:1/-1}}.head{{padding:7px 8px}}.title{{font-size:13px}}button{{padding:5px 7px}}.brain{{width:min(280px,calc(100% - 18px));left:9px;top:9px}}.wrap.focusMode #chart{{height:72vh;min-height:500px}}}}
   @media(max-width:430px){{.statusRow{{grid-template-columns:1fr 1fr;padding:6px}}.pill{{padding:6px 7px}}#chart{{height:370px}}.brainReason{{font-size:11px}}.legend{{gap:7px}}}}
 </style>
 </head>
 <body>
 <div class="wrap" id="wrap">
   <div class="head">
-    <div class="left"><span class="title">🧠 NIFTY · ONE BRAIN LIVE CHART</span><span class="spot" id="spot"></span><span class="live">LIVE SNAPSHOT</span></div>
+    <div class="left"><span class="title">🧠 NIFTY · ONE BRAIN LIVE CHART</span><span class="spot" id="spot"></span><span class="live" id="liveBadge">SNAPSHOT</span></div>
     <div class="buttons">
       <button data-tf="1m">1m</button><button data-tf="3m">3m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button>
-      <button id="fullBtn" title="Full screen">⛶</button>
+      <button id="emaBtn" class="active" title="EMA20/50 show-hide">EMA</button>
+      <button id="fullBtn" title="Full screen / focus mode">⛶</button>
     </div>
   </div>
   <div class="statusRow">
-    <div class="pill moneyCE"><b>🔥 CE Money Wall</b><strong id="ceWall">—</strong></div>
-    <div class="pill moneyPE"><b>💰 PE Money Wall</b><strong id="peWall">—</strong></div>
-    <div class="pill big"><b>⚡ Big Player Activity</b><strong id="bigPlayer">—</strong></div>
+    <div class="pill moneyCE"><b>🔥 CE Heavy Money / OI</b><strong id="ceWall">—</strong><small id="ceFlow"></small></div>
+    <div class="pill moneyPE"><b>💰 PE Heavy Money / OI</b><strong id="peWall">—</strong><small id="peFlow"></small></div>
+    <div class="pill big"><b>⚡ Big Player Activity</b><strong id="bigPlayer">—</strong><small id="bigDetail"></small></div>
   </div>
   <div class="chartWrap">
-    <div id="chart"></div>
+    <div id="chart"></div><div id="bands"></div>
     <div class="brain" id="brain">
       <div class="brainTop"><span class="brainTitle">✨ MINI AI BRAIN</span><span class="brainAction" id="brainAction">WAIT</span></div>
       <div class="brainMeta" id="brainMeta">MIXED</div>
@@ -330,7 +534,7 @@ def render_live_barrier_chart(snapshot: Any) -> None:
     </div>
   </div>
   <div class="foot">
-    <div class="legend"><span><i class="dot r1"></i>R1</span><span><i class="dot r2"></i>R2</span><span><i class="dot s1"></i>S1</span><span><i class="dot s2"></i>S2</span><span><i class="dot ce"></i>CE Wall</span><span><i class="dot pe"></i>PE Wall</span><span><i class="dot bp"></i>Big Player</span></div>
+    <div class="legend"><span><i class="dot r1"></i>R1</span><span><i class="dot r2"></i>R2</span><span><i class="dot s1"></i>S1</span><span><i class="dot s2"></i>S2</span><span><i class="dot ce"></i>CE Wall</span><span><i class="dot pe"></i>PE Wall</span><span><i class="dot bp"></i>Big Player</span><span><i class="dot e20"></i>EMA20</span><span><i class="dot e50"></i>EMA50</span></div>
     <div class="review" id="reviewInfo"></div>
   </div>
 </div>
@@ -338,6 +542,7 @@ def render_live_barrier_chart(snapshot: Any) -> None:
 const P = {safe_json};
 const container = document.getElementById('chart');
 const wrap = document.getElementById('wrap');
+const bands = document.getElementById('bands');
 const chart = LightweightCharts.createChart(container, {{
   autoSize: true,
   layout: {{background: {{color:'#07101d'}}, textColor:'#b9c8dc'}},
@@ -354,6 +559,8 @@ const candles = chart.addCandlestickSeries({{
   wickUpColor:'#25d98a', wickDownColor:'#ff4d6d', priceLineVisible:false,
   lastValueVisible:true
 }});
+const ema20 = chart.addLineSeries({{color:'#ffd166',lineWidth:2,lastValueVisible:false,priceLineVisible:false,crosshairMarkerVisible:false}});
+const ema50 = chart.addLineSeries({{color:'#a86cff',lineWidth:2,lastValueVisible:false,priceLineVisible:false,crosshairMarkerVisible:false}});
 
 function build5m(src) {{
   const buckets = new Map();
@@ -365,7 +572,14 @@ function build5m(src) {{
   }});
   return Array.from(buckets.values()).sort((a,b)=>a.time-b.time);
 }}
+function buildEma(src, span) {{
+  const data=(src||[]).slice().sort((a,b)=>a.time-b.time); if(!data.length) return [];
+  const alpha=2/(span+1); let value=Number(data[0].close); const out=[];
+  data.forEach((x,i)=>{{ const close=Number(x.close); value=i===0?close:(close*alpha+value*(1-alpha)); out.push({{time:x.time,value:Number(value.toFixed(2))}}); }});
+  return out;
+}}
 P.candles['5m'] = build5m(P.candles['1m']);
+P.ema['5m'] = {{'20':buildEma(P.candles['5m'],20),'50':buildEma(P.candles['5m'],50)}};
 
 function compactOi(v) {{
   if (v == null || !Number.isFinite(Number(v))) return 'OI —';
@@ -381,6 +595,10 @@ function lineColor(label, side) {{
   if(l==='R1') return '#ff9f43'; if(l==='R2') return '#ff4d6d'; if(l==='S1') return '#25d98a'; if(l==='S2') return '#00c9a7';
   return String(side||'').toUpperCase().includes('RESIST') ? '#ff6b6b' : '#33d69f';
 }}
+function rgba(hex,alpha) {{
+  const h=hex.replace('#',''); const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  return `rgba(${{r}},${{g}},${{b}},${{alpha}})`;
+}}
 function actionStyle(action) {{
   const a=String(action||'').toUpperCase();
   if(a.includes('CE SELL') || a.includes('DOWN')) return ['#ff4d6d','rgba(255,77,109,.16)'];
@@ -388,20 +606,21 @@ function actionStyle(action) {{
   if(a.includes('BUY')) return ['#18d3ff','rgba(24,211,255,.16)'];
   return ['#ffd166','rgba(255,209,102,.14)'];
 }}
-
 function addLine(opts) {{ try {{ candles.createPriceLine(opts); }} catch(e) {{}} }}
 (P.barriers || []).forEach(b => {{
   const color = lineColor(b.label,b.side);
+  const money = b.moneyAligned && b.moneyScore!=null ? ` · ${{b.moneySide}} ${{Number(b.moneyScore).toFixed(0)}}` : '';
   addLine({{price:b.lower,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:''}});
   addLine({{price:b.upper,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:''}});
   addLine({{price:b.midpoint,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Solid,axisLabelVisible:true,
-    title:`${{b.label}} ${{fmt(b.lower)}}–${{fmt(b.upper)}} · STR ${{b.strength}} · BRK ${{b.pressure}}`}});
+    title:`${{b.label}} ${{fmt(b.lower)}}–${{fmt(b.upper)}} · STR ${{b.strength}} · BRK ${{b.pressure}}${{money}}`}});
 }});
 (P.moneyWalls || []).forEach(w => {{
   const ce = String(w.side).toUpperCase()==='CE';
   const color = ce ? '#ffbf69' : '#51f0ba';
+  const mig = w.migrationPoints==null ? '' : ` · Δ${{Number(w.migrationPoints)>0?'+':''}}${{fmt(w.migrationPoints)}}`;
   addLine({{price:w.strike,color,lineWidth:2,lineStyle:LightweightCharts.LineStyle.Dotted,axisLabelVisible:true,
-    title:`${{w.side}} WALL · ${{w.tag}} · ${{compactOi(w.oi)}}`}});
+    title:`${{w.side}} WALL · ${{w.moneyTag||w.tag}} · M ${{w.moneyScore==null?'—':Number(w.moneyScore).toFixed(0)}} · ${{w.behavior}}${{mig}}`}});
   if(w.cluster != null && Math.abs(Number(w.cluster)-Number(w.strike)) >= 1) {{
     addLine({{price:w.cluster,color,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:false,title:`${{w.side}} CLUSTER`}});
   }}
@@ -411,17 +630,24 @@ if (P.spot != null) {{
   addLine({{price:P.spot,color:'#cbd5e1',lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dotted,axisLabelVisible:true,title:'NIFTY'}});
 }}
 
+const session=P.session||{{}}; const badge=document.getElementById('liveBadge');
+badge.textContent=session.isLive?'LIVE':'REFERENCE'; if(!session.isLive) badge.classList.add('ref');
 const walls = Object.fromEntries((P.moneyWalls||[]).map(w=>[String(w.side).toUpperCase(),w]));
+function migrationText(w) {{ if(w?.migrationPoints==null) return ''; const n=Number(w.migrationPoints); return ` · Wall Δ ${{n>0?'+':''}}${{fmt(n)}}`; }}
 function wallText(side) {{
   const w=walls[side]; if(!w) return 'Unavailable';
-  const rel=w.relativePct==null?'':` · ${{w.relativePct.toFixed(0)}}% max`;
-  return `${{fmt(w.strike)}} · ${{w.tag}} · ${{compactOi(w.oi)}}${{rel}}`;
+  return `${{fmt(w.strike)}} · Money ${{w.moneyScore==null?'—':Number(w.moneyScore).toFixed(0)}}/100 · ${{w.moneyTag||w.tag}}`;
 }}
-document.getElementById('ceWall').textContent = wallText('CE');
-document.getElementById('peWall').textContent = wallText('PE');
+function flowText(side) {{
+  const w=walls[side]; if(!w) return '';
+  return `${{w.behavior||'ACTIVITY'}} · ${{compactOi(w.oi)}}${{migrationText(w)}}`;
+}}
+document.getElementById('ceWall').textContent = wallText('CE'); document.getElementById('ceFlow').textContent=flowText('CE');
+document.getElementById('peWall').textContent = wallText('PE'); document.getElementById('peFlow').textContent=flowText('PE');
 const bp=P.bigPlayer||{{}};
-const bpText = bp.status==='UNAVAILABLE' ? 'Unavailable' : `${{bp.direction||'MIXED'}} ${{Number(bp.score||0).toFixed(0)}}/100 · Confirm ${{bp.confirm||0}}/${{bp.confirmTotal||0}}${{bp.volumeRatio!=null?` · Vol ${{Number(bp.volumeRatio).toFixed(2)}}x`:''}}`;
+const bpText = bp.status==='UNAVAILABLE' ? 'Unavailable' : `${{bp.direction||'MIXED'}} ${{Number(bp.score||0).toFixed(0)}}/100 · Confirm ${{bp.confirm||0}}/${{bp.confirmTotal||0}}`;
 document.getElementById('bigPlayer').textContent=bpText;
+document.getElementById('bigDetail').textContent=bp.status==='UNAVAILABLE'?'':`${{bp.setup||bp.activityType||'ACTIVITY'}}${{bp.volumeRatio!=null?` · Vol ${{Number(bp.volumeRatio).toFixed(2)}}x`:''}}${{bp.levelReaction?` · ${{bp.levelReaction}}`:''}}`;
 
 const ai=P.aiBrain||{{}};
 const [ac,abg]=actionStyle(ai.action);
@@ -430,6 +656,7 @@ document.getElementById('brainMeta').textContent=`${{ai.direction||'MIXED'}}${{a
 document.getElementById('brainReason').textContent=ai.reason||'Market evidence ko confirm hone do';
 document.getElementById('brainTrigger').textContent=`Next: ${{ai.trigger||'confirmation ka wait'}}`;
 
+let currentTf=P.defaultTf||'15m'; let emaEnabled=true;
 function applyBigPlayerMarker(data) {{
   if(!data.length || !bp || bp.status==='UNAVAILABLE') {{ try{{candles.setMarkers([])}}catch(e){{}}; return; }}
   const d=String(bp.direction||'').toUpperCase();
@@ -437,31 +664,44 @@ function applyBigPlayerMarker(data) {{
   const last=data[data.length-1]; const buy=d.includes('BUY');
   try {{ candles.setMarkers([{{time:last.time,position:buy?'belowBar':'aboveBar',color:buy?'#18d3ff':'#ff6bb5',shape:buy?'arrowUp':'arrowDown',text:`BIG ${{buy?'BUY':'SELL'}} ${{Number(bp.score||0).toFixed(0)}}`}}]); }} catch(e) {{}}
 }}
+function renderBands() {{
+  bands.innerHTML='';
+  (P.barriers||[]).forEach(b=>{{
+    const y1=candles.priceToCoordinate(Number(b.upper)); const y2=candles.priceToCoordinate(Number(b.lower));
+    if(y1==null || y2==null) return; const top=Math.min(y1,y2), height=Math.max(3,Math.abs(y2-y1)); const color=lineColor(b.label,b.side);
+    const el=document.createElement('div'); el.className='barrierBand'; el.style.top=`${{top}}px`; el.style.height=`${{height}}px`; el.style.background=rgba(color,.10); el.style.borderColor=rgba(color,.38);
+    const money=b.moneyAligned && b.moneyScore!=null?` · ${{b.moneySide}} ${{Number(b.moneyScore).toFixed(0)}}`:'';
+    el.innerHTML=`<span style="color:${{color}}">${{b.label}} · STR ${{b.strength}}${{money}}</span>`; bands.appendChild(el);
+  }});
+}}
 function setTf(tf) {{
   let data = P.candles[tf] || [];
   if (!data.length) {{ const fallback = ['15m','3m','1m'].find(k => (P.candles[k]||[]).length) || '1m'; tf=fallback; data=P.candles[fallback]||[]; }}
-  candles.setData(data); applyBigPlayerMarker(data);
+  currentTf=tf; candles.setData(data); applyBigPlayerMarker(data);
+  const ema=P.ema?.[tf]||{{}}; ema20.setData(emaEnabled?(ema['20']||[]):[]); ema50.setData(emaEnabled?(ema['50']||[]):[]);
   document.querySelectorAll('button[data-tf]').forEach(btn => btn.classList.toggle('active', btn.dataset.tf===tf));
-  chart.timeScale().fitContent();
+  chart.timeScale().fitContent(); setTimeout(renderBands,40);
 }}
 document.querySelectorAll('button[data-tf]').forEach(btn => btn.addEventListener('click',()=>setTf(btn.dataset.tf)));
+const emaBtn=document.getElementById('emaBtn'); emaBtn.addEventListener('click',()=>{{emaEnabled=!emaEnabled; emaBtn.classList.toggle('active',emaEnabled); setTf(currentTf);}});
 
-const fullBtn=document.getElementById('fullBtn');
+function setFrameHeight(height) {{ try {{ window.parent.postMessage({{isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:height}},'*'); }} catch(e) {{}} }}
+let focusMode=false; const fullBtn=document.getElementById('fullBtn');
 fullBtn.addEventListener('click', async()=>{{
   try {{
-    if(!document.fullscreenElement) {{ await wrap.requestFullscreen(); }} else {{ await document.exitFullscreen(); }}
-  }} catch(e) {{
-    // Browser/iframe may deny fullscreen; keep the chart fully usable in normal mode.
-    fullBtn.textContent='⛶';
-  }}
+    if(document.fullscreenEnabled) {{ if(!document.fullscreenElement) await wrap.requestFullscreen(); else await document.exitFullscreen(); return; }}
+  }} catch(e) {{}}
+  focusMode=!focusMode; wrap.classList.toggle('focusMode',focusMode); fullBtn.textContent=focusMode?'✕':'⛶'; setFrameHeight(focusMode?Math.max(760,window.screen.height-80):650); setTimeout(()=>{{chart.timeScale().fitContent();renderBands();}},120);
 }});
-document.addEventListener('fullscreenchange',()=>{{ fullBtn.textContent=document.fullscreenElement?'✕':'⛶'; setTimeout(()=>{{chart.timeScale().fitContent();}},80); }});
+document.addEventListener('fullscreenchange',()=>{{ fullBtn.textContent=document.fullscreenElement?'✕':'⛶'; setTimeout(()=>{{chart.timeScale().fitContent();renderBands();}},80); }});
+window.addEventListener('resize',()=>setTimeout(renderBands,50));
+try {{ chart.timeScale().subscribeVisibleLogicalRangeChange(()=>setTimeout(renderBands,0)); }} catch(e) {{}}
 const stamp = P.createdAt ? new Date(P.createdAt).toLocaleTimeString('en-IN',{{hour:'2-digit',minute:'2-digit'}}) : '';
-document.getElementById('reviewInfo').textContent=`Review-ready · ${{stamp}} · ${{P.snapshotId||''}}`;
+document.getElementById('reviewInfo').textContent=`Display-only · ${{stamp}} · ${{P.snapshotId||''}}`;
 setTf(P.defaultTf || '15m');
 </script>
 </body>
 </html>
 """
     with st.container(border=False):
-        components.html(html, height=590, scrolling=False)
+        components.html(html, height=650, scrolling=False)
