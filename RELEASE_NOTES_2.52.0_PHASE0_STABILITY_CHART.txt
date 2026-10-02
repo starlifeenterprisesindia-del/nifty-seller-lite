@@ -1,0 +1,18 @@
+Nifty Seller Lite 2.52.0_PHASE0_STABILITY_CHART
+
+Base
+- Includes the existing 2.51.4 integrated colorful chart package.
+- Phase-0 changes are stability/rate-limit only; One-Brain scores, weights, barriers, strategy logic and chart calculations are unchanged.
+
+Stability changes
+- Shared Dhan option-family limiter: expiry-list and option-chain now share one 3.15s gateway cadence.
+- Legacy direct-Dhan client also shares a 3.05s expiry-list/option-chain cadence.
+- HTTP 429 backoff is progressive (20s, 40s, 80s, capped at 120s by default) instead of repeated fixed 15s hammering.
+- Premium-alert quote polling is low priority and yields to recent foreground snapshot activity.
+- Expiry-list has a bounded six-hour fallback; live option-chain itself is never silently served stale.
+- Gateway /health exposes cache/upstream/wait/429 counters for diagnosis.
+
+Golden Rule
+- No additional Dhan/API request.
+- No One-Brain calculation, weight, entry threshold or strategy selection changed.
+- Integrated chart remains display-only and uses the existing snapshot.

@@ -1,0 +1,31 @@
+Nifty Seller Lite 2.52.0_PHASE0_STABILITY_CHART
+Phase 0 verification
+
+Purpose
+- Stabilise Dhan request scheduling and HTTP 429 behaviour before the remaining FINAL MASTER TESTING feature phases.
+- Preserve the existing 2.51.4 integrated colorful chart package.
+- Do not change One-Brain calculations, weights, thresholds, strategies or broker-order behaviour.
+
+Production changes
+1. Shared option-family rate limiter: expiry-list + option-chain share the same 3.15s gateway slot.
+2. Direct Dhan client has the same expiry-list + option-chain family protection (3.05s).
+3. Progressive 429 cooldown: 20s -> 40s -> 80s -> max 120s by default.
+4. Premium-alert background quotes yield to recent foreground snapshot activity.
+5. Expiry-list can use a bounded 6-hour fallback; live option-chain is never silently served stale.
+6. /health diagnostics expose upstream calls, cache hits, fallback hits, spacing wait and 429 source/cooldown.
+7. No new Dhan/API call added.
+
+Verification in this build environment
+- 180 tests passed, 1 skipped in the A-M test group (app smoke excluded because Streamlit is not installed here).
+- 203 tests passed in the N-Z non-UI/core group.
+- Focused release/architecture/performance/chart verification: 21 tests passed.
+- Python compileall: PASS.
+- Streamlit UI test execution is not claimed in this container because Streamlit is not installed here; deployment must still receive a short live UI smoke test.
+
+Live acceptance after deploy
+- One browser tab first; Auto Snapshot OFF.
+- First fresh snapshot must complete without 429.
+- /health should show option_family_shared_limiter=true.
+- Repeat snapshots at normal cadence; consecutive_429 should stay 0.
+- Then test Auto Snapshot 30s and Fast Monitor 5s.
+- Then test phone + laptop together.

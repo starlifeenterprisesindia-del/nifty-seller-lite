@@ -272,7 +272,7 @@ async def lifespan(_: FastAPI):
     try:
         PREMIUM_MONITOR = PremiumAlertMonitor(
             PREMIUM_STORE,
-            _gateway().market_quote,
+            _gateway().background_market_quote,
             ALERTS.notifier.send,
             interval_seconds=float(os.getenv("PREMIUM_ALERT_POLL_SECONDS", "5") or 5),
         )
