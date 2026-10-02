@@ -13,6 +13,7 @@ activity proxies, not rupee capital or calibrated trade probabilities.
 from __future__ import annotations
 
 import math
+from datetime import datetime, time as dt_time
 from statistics import median
 from typing import Any
 
@@ -420,6 +421,252 @@ def volatility_regime(iv: dict[str, Any], skew: dict[str, Any]) -> dict[str, Any
         "skew_state": skew.get("skew_state"),
         "smile_state": skew.get("smile_state"),
     }
+
+
+
+
+def _strike_step(data: pd.DataFrame) -> float | None:
+    if data.empty or "strike" not in data:
+        return None
+    strikes = sorted({float(v) for v in data["strike"].dropna().tolist()})
+    diffs = [b - a for a, b in zip(strikes, strikes[1:]) if b > a]
+    return float(median(diffs)) if diffs else None
+
+
+def _pair_for_strike(data: pd.DataFrame, strike: float) -> dict[str, dict[str, Any]]:
+    pair = data[data["strike"].eq(strike) & data["side"].isin(["CE", "PE"])]
+    return {str(row.get("side")): row for row in pair.to_dict("records")}
+
+
+def _pair_premium(data: pd.DataFrame, strike: float) -> tuple[float | None, float | None, float | None]:
+    by_side = _pair_for_strike(data, strike)
+    ce = _finite((by_side.get("CE") or {}).get("last_price"))
+    pe = _finite((by_side.get("PE") or {}).get("last_price"))
+    if ce is None or pe is None or ce < 0 or pe < 0:
+        return ce, pe, None
+    return ce, pe, ce + pe
+
+
+def _expiry_fraction_years(snapshot: Any) -> tuple[float | None, float | None]:
+    """Return calendar days and time-to-expiry in years without any network lookup."""
+    raw_expiry = getattr(snapshot, "expiry", None)
+    created_at = getattr(snapshot, "created_at", None)
+    if raw_expiry is None or created_at is None:
+        return None, None
+    try:
+        expiry_date = raw_expiry if hasattr(raw_expiry, "year") else datetime.fromisoformat(str(raw_expiry)).date()
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        expiry_close = datetime.combine(expiry_date, dt_time(15, 30), tzinfo=getattr(created_at, "tzinfo", None))
+        seconds = max(0.0, (expiry_close - created_at).total_seconds())
+        return max(0.0, seconds / 86400.0), max(seconds / (365.0 * 86400.0), 1.0 / (365.0 * 24.0 * 60.0))
+    except Exception:
+        return None, None
+
+
+def expected_move_context(snapshot: Any, straddle: dict[str, Any], iv: dict[str, Any]) -> dict[str, Any]:
+    """Premium- and IV-based expected-move context; display-only, not a forecast probability."""
+    spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
+    if spot is None or spot <= 0:
+        return {"status": "UNAVAILABLE"}
+    premium = _finite(straddle.get("combined_premium"))
+    atm_iv = _finite(iv.get("atm_iv"))
+    days, years = _expiry_fraction_years(snapshot)
+    iv_move = spot * (atm_iv / 100.0) * math.sqrt(years) if atm_iv is not None and years is not None else None
+    premium_move = premium if premium is not None and premium >= 0 else None
+    if premium_move is not None and iv_move is not None and iv_move > 0:
+        ratio = premium_move / iv_move
+        state = "PREMIUM RICH" if ratio >= 1.15 else "PREMIUM CHEAP" if ratio <= 0.85 else "BALANCED"
+    else:
+        ratio, state = None, "REFERENCE ONLY"
+    return {
+        "status": "READY" if premium_move is not None or iv_move is not None else "UNAVAILABLE",
+        "spot": round(spot, 2),
+        "days_to_expiry": round(days, 3) if days is not None else None,
+        "premium_move_points": round(premium_move, 2) if premium_move is not None else None,
+        "premium_move_pct": round(premium_move / spot * 100.0, 2) if premium_move is not None else None,
+        "premium_lower": round(spot - premium_move, 2) if premium_move is not None else None,
+        "premium_upper": round(spot + premium_move, 2) if premium_move is not None else None,
+        "iv_1sigma_points": round(iv_move, 2) if iv_move is not None else None,
+        "iv_1sigma_pct": round(iv_move / spot * 100.0, 2) if iv_move is not None else None,
+        "iv_lower": round(spot - iv_move, 2) if iv_move is not None else None,
+        "iv_upper": round(spot + iv_move, 2) if iv_move is not None else None,
+        "premium_vs_iv_ratio": round(ratio, 2) if ratio is not None else None,
+        "state": state,
+        "note": "Premium move = ATM CE+PE cost proxy; IV move = simple 1σ IV-time estimate. Neither is a guaranteed trading range.",
+    }
+
+
+def strangle_context(frame: pd.DataFrame | None, spot: float | None) -> dict[str, Any]:
+    """Build symmetric 1-step and 2-step OTM strangle context from the fetched chain."""
+    data = _clean_frame(frame)
+    spot_value = _finite(spot)
+    atm = nearest_atm_strike(data, spot_value)
+    step = _strike_step(data)
+    if data.empty or spot_value is None or atm is None or step is None or step <= 0:
+        return {"status": "UNAVAILABLE"}
+    strikes = sorted({float(v) for v in data["strike"].dropna().tolist()})
+
+    def nearest(target: float) -> float | None:
+        return min(strikes, key=lambda x: abs(x - target)) if strikes else None
+
+    rows: list[dict[str, Any]] = []
+    for steps in (1, 2):
+        ce_strike = nearest(atm + step * steps)
+        pe_strike = nearest(atm - step * steps)
+        if ce_strike is None or pe_strike is None or ce_strike <= atm or pe_strike >= atm:
+            continue
+        ce_row = (data[data["strike"].eq(ce_strike) & data["side"].eq("CE")].to_dict("records") or [{}])[0]
+        pe_row = (data[data["strike"].eq(pe_strike) & data["side"].eq("PE")].to_dict("records") or [{}])[0]
+        ce_p = _finite(ce_row.get("last_price")); pe_p = _finite(pe_row.get("last_price"))
+        if ce_p is None or pe_p is None or ce_p < 0 or pe_p < 0:
+            continue
+        premium = ce_p + pe_p
+        ce_oi = max(0.0, _finite(ce_row.get("oi")) or 0.0); pe_oi = max(0.0, _finite(pe_row.get("oi")) or 0.0)
+        ce_vol = max(0.0, _finite(ce_row.get("volume")) or 0.0); pe_vol = max(0.0, _finite(pe_row.get("volume")) or 0.0)
+        rows.append({
+            "steps": steps,
+            "label": f"{steps}-step OTM",
+            "pe_strike": round(pe_strike, 2),
+            "ce_strike": round(ce_strike, 2),
+            "pe_premium": round(pe_p, 2),
+            "ce_premium": round(ce_p, 2),
+            "combined_premium": round(premium, 2),
+            "lower_breakeven_proxy": round(pe_strike - premium, 2),
+            "upper_breakeven_proxy": round(ce_strike + premium, 2),
+            "wing_width": round(ce_strike - pe_strike, 2),
+            "combined_oi": int(round(ce_oi + pe_oi)),
+            "combined_volume": int(round(ce_vol + pe_vol)),
+        })
+    return {"status": "READY" if rows else "UNAVAILABLE", "atm": round(atm, 2), "strike_step": round(step, 2), "rows": rows}
+
+
+def _snapshot_frame(snapshot: dict[str, Any]) -> pd.DataFrame:
+    rows = snapshot.get("rows") or [] if isinstance(snapshot, dict) else []
+    if not isinstance(rows, list) or not rows:
+        return pd.DataFrame()
+    return _clean_frame(pd.DataFrame([row for row in rows if isinstance(row, dict)]))
+
+
+def _parse_stamp(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def straddle_decay_series(
+    history: list[dict[str, Any]] | None,
+    current_spot: float | None,
+    *,
+    max_points: int = 90,
+) -> dict[str, Any]:
+    """Same-strike multi-straddle and decay analytics from persisted same-day snapshots."""
+    snaps = [s for s in (history or []) if isinstance(s, dict)]
+    spot = _finite(current_spot)
+    if not snaps or spot is None:
+        return {"status": "UNAVAILABLE", "series": [], "multi": []}
+    latest_frame = _snapshot_frame(snaps[-1])
+    atm = nearest_atm_strike(latest_frame, spot)
+    step = _strike_step(latest_frame)
+    if latest_frame.empty or atm is None:
+        return {"status": "UNAVAILABLE", "series": [], "multi": []}
+    anchors = [atm]
+    if step:
+        for target in (atm - step, atm + step):
+            strikes = sorted({float(v) for v in latest_frame["strike"].dropna().tolist()})
+            if strikes:
+                strike = min(strikes, key=lambda x: abs(x - target))
+                if strike not in anchors:
+                    anchors.append(strike)
+    anchors = sorted(anchors)
+    points: list[dict[str, Any]] = []
+    for snap in snaps:
+        stamp = _parse_stamp(snap.get("captured_at"))
+        frame = _snapshot_frame(snap)
+        if stamp is None or frame.empty:
+            continue
+        row: dict[str, Any] = {"at": stamp.isoformat(), "spot": _finite(snap.get("spot"))}
+        valid_any = False
+        for strike in anchors:
+            ce, pe, prem = _pair_premium(frame, strike)
+            key = f"straddle_{int(round(strike))}"
+            row[key] = round(prem, 2) if prem is not None else None
+            if strike == atm:
+                row["ce"] = round(ce, 2) if ce is not None else None
+                row["pe"] = round(pe, 2) if pe is not None else None
+                row["atm_premium"] = round(prem, 2) if prem is not None else None
+            valid_any = valid_any or prem is not None
+        if valid_any:
+            points.append(row)
+    if not points:
+        return {"status": "UNAVAILABLE", "series": [], "multi": []}
+    if len(points) > max_points:
+        stride = max(1, len(points) // max_points)
+        sampled = points[::stride]
+        if sampled[-1] != points[-1]:
+            sampled.append(points[-1])
+        points = sampled[-max_points:]
+    valid_atm = [p for p in points if _finite(p.get("atm_premium")) is not None]
+    decay: dict[str, Any] = {}
+    if len(valid_atm) >= 2:
+        first, last = valid_atm[0], valid_atm[-1]
+        first_p = _finite(first.get("atm_premium")); last_p = _finite(last.get("atm_premium"))
+        first_t, last_t = _parse_stamp(first.get("at")), _parse_stamp(last.get("at"))
+        minutes = max(0.0, (last_t - first_t).total_seconds() / 60.0) if first_t and last_t else 0.0
+        change = (last_p - first_p) if first_p is not None and last_p is not None else None
+        decay.update({
+            "start_premium": round(first_p, 2) if first_p is not None else None,
+            "current_premium": round(last_p, 2) if last_p is not None else None,
+            "net_change": round(change, 2) if change is not None else None,
+            "decay_points": round(-change, 2) if change is not None else None,
+            "decay_pct": round((-change / first_p) * 100.0, 2) if change is not None and first_p and first_p > 0 else None,
+            "elapsed_minutes": round(minutes, 1),
+            "decay_per_hour": round((-change) / minutes * 60.0, 2) if change is not None and minutes >= 5 else None,
+        })
+        for horizon in (5, 15, 30):
+            cutoff = last_t.timestamp() - horizon * 60 if last_t else None
+            prior = None
+            if cutoff is not None:
+                candidates = [p for p in valid_atm if (_parse_stamp(p.get("at")) or last_t).timestamp() <= cutoff]
+                prior = candidates[-1] if candidates else None
+            pp = _finite((prior or {}).get("atm_premium"))
+            if pp is not None and last_p is not None:
+                decay[f"change_{horizon}m"] = round(last_p - pp, 2)
+    return {
+        "status": "READY",
+        "anchor_atm": round(atm, 2),
+        "strike_step": round(step, 2) if step else None,
+        "series": points,
+        "multi": [{"strike": round(s, 2), "key": f"straddle_{int(round(s))}"} for s in anchors],
+        "decay": decay,
+        "note": "Decay uses the same fixed current-ATM strike through saved snapshots; this avoids rolling-ATM jump distortion.",
+    }
+
+
+def build_phase9_payload(
+    snapshot: Any,
+    historical_atm_iv: list[float] | None = None,
+    intraday_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Phase-9 Straddle/Strangle + Expected Move + Decay Intelligence."""
+    base = build_phase8_payload(
+        snapshot,
+        historical_atm_iv=historical_atm_iv,
+        intraday_history=intraday_history,
+    )
+    spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
+    frame = getattr(snapshot, "option_chain", None)
+    base.update({
+        "strangles": strangle_context(frame, spot),
+        "expected_move": expected_move_context(snapshot, base.get("straddle", {}), base.get("iv", {})),
+        "straddle_decay": straddle_decay_series(intraday_history, spot),
+        "phase9_note": (
+            "Straddle/strangle, expected-move and decay analytics use only the already-fetched current-expiry chain "
+            "plus same-day persisted option-state. No extra expiry fetch, no broker call, no One-Brain weight change."
+        ),
+    })
+    return base
 
 
 def build_phase8_payload(
