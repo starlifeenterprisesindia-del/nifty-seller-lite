@@ -35,12 +35,24 @@ class DhanGateway:
             8, min(64, int(os.getenv("DHAN_GATEWAY_CACHE_MAX_ENTRIES", "32") or 32))
         )
         self._last_call: dict[str, float] = {}
+        # Some Dhan endpoints share one upstream rate-limit family.  In particular
+        # expiry-list and option-chain must not be treated as independent clocks.
+        # Keeping a second map lets unrelated endpoints retain their own cadence.
+        self._last_group_call: dict[str, float] = {}
         self._fallback_cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._fallback_max_entries = 24
         self._blocked_until = 0.0
         self.last_error = ""
         self.last_fallback = ""
         self._last_foreground_at = 0.0
+        # Lightweight diagnostics only; never enter One-Brain calculations.
+        self._upstream_calls = 0
+        self._cache_hits = 0
+        self._fallback_hits = 0
+        self._spacing_wait_seconds = 0.0
+        self._consecutive_429 = 0
+        self._last_429_source = ""
+        self._last_429_cooldown_seconds = 0.0
 
     def mark_foreground(self) -> None:
         with self._lock:
@@ -66,6 +78,7 @@ class DhanGateway:
         min_spacing_seconds: float,
         fallback_key: str | None = None,
         fallback_max_age_seconds: float = 0.0,
+        rate_limit_group: str | None = None,
     ) -> Any:
         key = self._key(name, payload)
         with self._lock:
@@ -88,6 +101,7 @@ class DhanGateway:
                 self._cache.pop(cache_key, None)
             cached = self._cache.get(key)
             if cached and now - cached[0] <= cached[1]:
+                self._cache_hits += 1
                 self._cache.move_to_end(key)
                 return cached[2]
             if now < self._blocked_until:
@@ -95,30 +109,54 @@ class DhanGateway:
                     return cached[2]
                 fallback = fallback_value()
                 if fallback is not None:
+                    self._fallback_hits += 1
                     self.last_fallback = f"{name}:rate-limit"
                     return fallback
                 raise RuntimeError(
                     f"Dhan rate-limit cooldown active; {self._blocked_until - now:.1f}s wait"
                 )
-            wait = min_spacing_seconds - (now - self._last_call.get(name, 0.0))
+            # Use a shared clock for endpoint families that Dhan rate-limits
+            # together. This fixes the cold-start expiry-list -> option-chain burst.
+            spacing_key = str(rate_limit_group or name)
+            last_call_map = self._last_group_call if rate_limit_group else self._last_call
+            wait = min_spacing_seconds - (now - last_call_map.get(spacing_key, 0.0))
             if wait > 0:
+                self._spacing_wait_seconds += wait
                 time.sleep(wait)
-            self._last_call[name] = time.monotonic()
+            attempted_at = time.monotonic()
+            self._last_call[name] = attempted_at
+            if rate_limit_group:
+                self._last_group_call[spacing_key] = attempted_at
+            self._upstream_calls += 1
             try:
                 result = function()
             except Exception as exc:
                 self.last_error = str(exc)[:300]
                 if "429" in self.last_error or "Too many requests" in self.last_error:
-                    self._blocked_until = time.monotonic() + 15.0
+                    self._consecutive_429 += 1
+                    try:
+                        base = max(10.0, float(os.getenv("DHAN_GATEWAY_429_BASE_COOLDOWN_SECONDS", "20") or 20))
+                    except (TypeError, ValueError):
+                        base = 20.0
+                    try:
+                        cap = max(base, float(os.getenv("DHAN_GATEWAY_429_MAX_COOLDOWN_SECONDS", "120") or 120))
+                    except (TypeError, ValueError):
+                        cap = 120.0
+                    cooldown = min(cap, base * (2 ** max(0, self._consecutive_429 - 1)))
+                    self._blocked_until = time.monotonic() + cooldown
+                    self._last_429_source = name
+                    self._last_429_cooldown_seconds = cooldown
                 if cached:
                     return cached[2]
                 fallback = fallback_value()
                 if fallback is not None:
+                    self._fallback_hits += 1
                     self.last_fallback = f"{name}:upstream-error"
                     return fallback
                 raise
             self.last_error = ""
             self.last_fallback = ""
+            self._consecutive_429 = 0
             saved_at = time.monotonic()
             self._cache[key] = (saved_at, cache_seconds, result)
             if fallback_key:
@@ -142,6 +180,20 @@ class DhanGateway:
             fallback_key=fallback_key,
             fallback_max_age_seconds=15.0,
         )
+
+    def background_market_quote(self, instruments: dict[str, list[int]]) -> dict[str, Any]:
+        """Low-priority quote lane for premium alerts.
+
+        It must never compete with a just-arrived foreground snapshot.  The normal
+        market_quote cache is still reused, so this adds no second data model.
+        """
+        try:
+            minimum_idle = max(1.0, float(os.getenv("PREMIUM_ALERT_FOREGROUND_IDLE_SECONDS", "2.5") or 2.5))
+        except (TypeError, ValueError):
+            minimum_idle = 2.5
+        if self.foreground_idle_seconds() < minimum_idle:
+            raise RuntimeError("Foreground request priority")
+        return self.market_quote(instruments)
 
     def intraday(self, payload: dict[str, Any]) -> dict[str, Any]:
         cache_payload = dict(payload)
@@ -203,7 +255,10 @@ class DhanGateway:
             payload,
             lambda: self.client.expiry_list(underlying_security_id, segment),
             cache_seconds=1800.0,
-            min_spacing_seconds=3.1,
+            min_spacing_seconds=3.15,
+            fallback_key=self._key("expiry_list_fallback", payload),
+            fallback_max_age_seconds=6 * 60 * 60.0,
+            rate_limit_group="option_chain_family",
         )
 
     def option_chain(self, expiry: str, underlying_security_id: int, segment: str) -> dict[str, Any]:
@@ -221,7 +276,8 @@ class DhanGateway:
                 segment=segment,
             ),
             cache_seconds=4.0,
-            min_spacing_seconds=3.1,
+            min_spacing_seconds=3.15,
+            rate_limit_group="option_chain_family",
         )
 
     def status(self) -> dict[str, Any]:
@@ -235,4 +291,12 @@ class DhanGateway:
             "fallback_entries": len(self._fallback_cache),
             "last_fallback": self.last_fallback,
             "upstream_timeout_seconds": self.client.timeout,
+            "upstream_calls": self._upstream_calls,
+            "cache_hits": self._cache_hits,
+            "fallback_hits": self._fallback_hits,
+            "spacing_wait_seconds": round(self._spacing_wait_seconds, 3),
+            "consecutive_429": self._consecutive_429,
+            "last_429_source": self._last_429_source,
+            "last_429_cooldown_seconds": round(self._last_429_cooldown_seconds, 1),
+            "option_family_shared_limiter": True,
         }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -20,7 +21,10 @@ class DhanClient:
         self.credentials = credentials
         self.session = session or requests.Session()
         self.timeout = CONFIG.request_timeout_seconds
-        self._last_option_chain_call = 0.0
+        # Expiry-list and option-chain belong to one conservative rate-limit
+        # family. This also protects legacy direct-Dhan mode when Railway is absent.
+        self._option_family_lock = threading.Lock()
+        self._last_option_family_call = 0.0
 
     @property
     def headers(self) -> dict[str, str]:
@@ -113,9 +117,19 @@ class DhanClient:
         }
         return self._post("/charts/intraday", payload)
 
+
+    def _wait_option_family_slot(self) -> None:
+        with self._option_family_lock:
+            elapsed = time.monotonic() - self._last_option_family_call
+            if elapsed < 3.05:
+                time.sleep(3.05 - elapsed)
+            # Record before the request so even a rejected attempt consumes the slot.
+            self._last_option_family_call = time.monotonic()
+
     def expiry_list(
         self, underlying_security_id: int = 13, segment: str = "IDX_I"
     ) -> list[str]:
+        self._wait_option_family_slot()
         payload = {
             "UnderlyingScrip": int(underlying_security_id),
             "UnderlyingSeg": segment,
@@ -133,15 +147,10 @@ class DhanClient:
         underlying_security_id: int = 13,
         segment: str = "IDX_I",
     ) -> dict[str, Any]:
-        elapsed = time.monotonic() - self._last_option_chain_call
-        if elapsed < 3.05:
-            time.sleep(3.05 - elapsed)
+        self._wait_option_family_slot()
         payload = {
             "UnderlyingScrip": int(underlying_security_id),
             "UnderlyingSeg": segment,
             "Expiry": expiry,
         }
-        # Record the attempt time even when Dhan rejects it. This prevents a failed
-        # request from being followed by another immediate request in the same client.
-        self._last_option_chain_call = time.monotonic()
         return self._post("/optionchain", payload)
