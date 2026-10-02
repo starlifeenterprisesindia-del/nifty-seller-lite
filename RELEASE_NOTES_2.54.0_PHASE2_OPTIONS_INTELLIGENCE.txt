@@ -1,0 +1,11 @@
+Nifty Seller Lite 2.54.0_PHASE2_OPTIONS_INTELLIGENCE
+
+Phase-2 display-only options intelligence:
+- Unusual Activity ranking from already-computed matched OI/volume/premium flow rows.
+- Near-ATM Liquidity Grade using bid-ask spread + relative OI + relative volume.
+- ATM Straddle context: CE+PE premium, spot ± premium proxy, IV skew, combined theta when available.
+- Current ATM/chain IV context.
+- True IV Rank / IV Percentile framework refuses to fabricate history; becomes READY only with >=20 real historical ATM-IV observations.
+- New analytics render only when Advanced Options Evidence is opened.
+- Zero new broker/API requests.
+- No change to One-Brain weights, decision logic, TradePlan liquidity score, execution guard or Phase-0 rate-limit protection.

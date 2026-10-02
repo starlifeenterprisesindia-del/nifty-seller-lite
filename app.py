@@ -90,6 +90,7 @@ from ui.presentation_helpers import public_mode_enabled
 from ui.performance_diagnostics import render_performance_diagnostics
 from ui.help_guide import render_help_guide
 from ui.live_barrier_chart import render_live_barrier_chart
+from ui.advanced_options_intelligence import render_phase2_options_intelligence
 
 
 @contextmanager
@@ -1008,6 +1009,7 @@ with persistent_panel(
 ) as panel_open:
     if panel_open:
         render_option_intelligence(view_snapshot)
+        render_phase2_options_intelligence(view_snapshot)
         option_tabs = st.tabs(
             [
                 "Premium + OI + Volume Flow",

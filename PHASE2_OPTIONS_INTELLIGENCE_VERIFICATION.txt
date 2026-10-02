@@ -1,0 +1,6 @@
+PHASE 2 VERIFICATION
+- Module is display-only and receives MarketSnapshot only.
+- No Dhan/Railway client import in analysis/advanced_options_display.py or ui/advanced_options_intelligence.py.
+- One-Brain / decision / trade-plan core files are unchanged by this phase.
+- IVR/IVP is not invented from cross-sectional/current-session IV; it requires >=20 historical session observations.
+- Live-market smoke test still required after deployment.
