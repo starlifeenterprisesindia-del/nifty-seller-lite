@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.59.0_PHASE7_STRATEGY_REPAIR"
+    version: str = "2.60.0_PHASE8_VOLATILITY_INTELLIGENCE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -102,6 +102,10 @@ class AppConfig:
     option_state_path: str = "data/option_state.json"
     option_state_max_snapshots: int = 180
     option_state_dedupe_seconds: int = 20
+    # Phase-8: tiny once-per-session ATM-IV summaries retained inside the same
+    # option-state file. This builds true IV Rank/Percentile history over time
+    # without any extra broker/API call or extra live-path file.
+    iv_history_max_sessions: int = 60
     # Same-session compact activity memory. It stores only direction/score/state,
     # never credentials, orders or trader identity.
     big_player_state_path: str = "data/big_player_state.json"

@@ -1025,7 +1025,7 @@ with persistent_panel(
 ) as panel_open:
     if panel_open:
         render_option_intelligence(view_snapshot)
-        render_phase2_options_intelligence(view_snapshot)
+        render_phase2_options_intelligence(view_snapshot, state_store)
         option_tabs = st.tabs(
             [
                 "Premium + OI + Volume Flow",

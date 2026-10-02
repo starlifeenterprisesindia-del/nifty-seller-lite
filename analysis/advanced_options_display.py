@@ -256,6 +256,195 @@ def iv_context(frame: pd.DataFrame | None, spot: float | None, historical_atm_iv
     }
 
 
+
+def volatility_smile(frame: pd.DataFrame | None, spot: float | None, *, max_strikes: int = 17) -> list[dict[str, Any]]:
+    """Current-expiry IV smile/surface rows from the already-fetched option chain."""
+    data = _clean_frame(frame)
+    spot_value = _finite(spot)
+    if data.empty or spot_value is None or not {"strike", "side", "implied_volatility"}.issubset(data.columns):
+        return []
+    data = data[data["side"].isin(["CE", "PE"])].copy()
+    data["distance"] = (data["strike"] - spot_value).abs()
+    strikes = (
+        data[["strike", "distance"]].drop_duplicates().sort_values(["distance", "strike"]).head(max_strikes)["strike"].tolist()
+    )
+    keep = data[data["strike"].isin(strikes)]
+    rows: list[dict[str, Any]] = []
+    for strike in sorted(strikes):
+        pair = keep[keep["strike"].eq(strike)]
+        by_side = {str(row.get("side")): row for row in pair.to_dict("records")}
+        ce, pe = by_side.get("CE", {}), by_side.get("PE", {})
+        ce_iv, pe_iv = _finite(ce.get("implied_volatility")), _finite(pe.get("implied_volatility"))
+        valid = [v for v in (ce_iv, pe_iv) if v is not None and v > 0]
+        mid = float(median(valid)) if valid else None
+        rows.append({
+            "strike": round(float(strike), 2),
+            "moneyness_pct": round((float(strike) / spot_value - 1.0) * 100.0, 3) if spot_value > 0 else None,
+            "ce_iv": round(ce_iv, 2) if ce_iv is not None and ce_iv > 0 else None,
+            "pe_iv": round(pe_iv, 2) if pe_iv is not None and pe_iv > 0 else None,
+            "mid_iv": round(mid, 2) if mid is not None else None,
+            "ce_delta": round(_finite(ce.get("delta")), 3) if _finite(ce.get("delta")) is not None else None,
+            "pe_delta": round(_finite(pe.get("delta")), 3) if _finite(pe.get("delta")) is not None else None,
+            "ce_oi": int(round(max(0.0, _finite(ce.get("oi")) or 0.0))),
+            "pe_oi": int(round(max(0.0, _finite(pe.get("oi")) or 0.0))),
+            "atm": bool(abs(float(strike) - spot_value) == min(abs(float(x) - spot_value) for x in strikes)),
+        })
+    return rows
+
+
+def _nearest_delta_row(data: pd.DataFrame, side: str, target_abs_delta: float, spot: float) -> dict[str, Any] | None:
+    subset = data[data["side"].eq(side)].copy()
+    if side == "CE":
+        subset = subset[subset["strike"] >= spot]
+    else:
+        subset = subset[subset["strike"] <= spot]
+    if subset.empty or "delta" not in subset:
+        return None
+    subset["delta_abs"] = pd.to_numeric(subset["delta"], errors="coerce").abs()
+    subset = subset.dropna(subset=["delta_abs", "implied_volatility"])
+    subset = subset[subset["implied_volatility"] > 0]
+    if subset.empty:
+        return None
+    idx = (subset["delta_abs"] - target_abs_delta).abs().idxmin()
+    return subset.loc[idx].to_dict()
+
+
+def skew_metrics(frame: pd.DataFrame | None, spot: float | None) -> dict[str, Any]:
+    """25-delta-style skew and smile curvature for the current expiry."""
+    data = _clean_frame(frame)
+    spot_value = _finite(spot)
+    atm = nearest_atm_strike(data, spot_value)
+    if data.empty or spot_value is None or atm is None:
+        return {"status": "UNAVAILABLE"}
+    pair = data[data["strike"].eq(atm) & data["side"].isin(["CE", "PE"])]
+    atm_ivs = [v for v in (_finite(v) for v in pair.get("implied_volatility", pd.Series(dtype=float)).tolist()) if v is not None and v > 0]
+    atm_iv = float(median(atm_ivs)) if atm_ivs else None
+    ce25 = _nearest_delta_row(data, "CE", 0.25, spot_value)
+    pe25 = _nearest_delta_row(data, "PE", 0.25, spot_value)
+    ce25_iv = _finite((ce25 or {}).get("implied_volatility"))
+    pe25_iv = _finite((pe25 or {}).get("implied_volatility"))
+    rr = (pe25_iv - ce25_iv) if ce25_iv is not None and pe25_iv is not None else None
+    butterfly = ((ce25_iv + pe25_iv) / 2.0 - atm_iv) if ce25_iv is not None and pe25_iv is not None and atm_iv is not None else None
+    if rr is None:
+        skew_state = "UNAVAILABLE"
+    elif rr >= 1.0:
+        skew_state = "PUT SKEW"
+    elif rr <= -1.0:
+        skew_state = "CALL SKEW"
+    else:
+        skew_state = "BALANCED"
+    if butterfly is None:
+        smile_state = "UNAVAILABLE"
+    elif butterfly >= 1.0:
+        smile_state = "WINGS RICH"
+    elif butterfly <= -1.0:
+        smile_state = "ATM RICH"
+    else:
+        smile_state = "BALANCED SMILE"
+    return {
+        "status": "READY" if atm_iv is not None else "UNAVAILABLE",
+        "atm": round(atm, 2),
+        "atm_iv": round(atm_iv, 2) if atm_iv is not None else None,
+        "ce25_strike": round(_finite((ce25 or {}).get("strike")), 2) if _finite((ce25 or {}).get("strike")) is not None else None,
+        "ce25_iv": round(ce25_iv, 2) if ce25_iv is not None else None,
+        "pe25_strike": round(_finite((pe25 or {}).get("strike")), 2) if _finite((pe25 or {}).get("strike")) is not None else None,
+        "pe25_iv": round(pe25_iv, 2) if pe25_iv is not None else None,
+        "rr25_put_minus_call": round(rr, 2) if rr is not None else None,
+        "butterfly25": round(butterfly, 2) if butterfly is not None else None,
+        "skew_state": skew_state,
+        "smile_state": smile_state,
+    }
+
+
+def intraday_atm_iv_series(history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Build a small same-day ATM-IV trend from saved option-state snapshots."""
+    result: list[dict[str, Any]] = []
+    for snap in history or []:
+        if not isinstance(snap, dict):
+            continue
+        spot = _finite(snap.get("spot"))
+        rows = snap.get("rows") or []
+        if spot is None or not isinstance(rows, list):
+            continue
+        strikes = sorted({
+            _finite(row.get("strike")) for row in rows
+            if isinstance(row, dict) and _finite(row.get("strike")) is not None
+        })
+        if not strikes:
+            continue
+        atm = min(strikes, key=lambda value: abs(float(value) - spot))
+        ivs = [
+            _finite(row.get("implied_volatility")) for row in rows
+            if isinstance(row, dict)
+            and _finite(row.get("strike")) == atm
+            and str(row.get("side") or "").upper() in {"CE", "PE"}
+            and (_finite(row.get("implied_volatility")) or 0) > 0
+        ]
+        ivs = [v for v in ivs if v is not None]
+        if not ivs:
+            continue
+        result.append({
+            "at": str(snap.get("captured_at") or ""),
+            "atm": round(float(atm), 2),
+            "atm_iv": round(float(sum(ivs) / len(ivs)), 2),
+        })
+    # Bounded display series: enough to see the day without rendering hundreds of points.
+    if len(result) > 90:
+        step = max(1, len(result) // 90)
+        sampled = result[::step]
+        if sampled[-1] != result[-1]:
+            sampled.append(result[-1])
+        return sampled[-90:]
+    return result
+
+
+def volatility_regime(iv: dict[str, Any], skew: dict[str, Any]) -> dict[str, Any]:
+    current = _finite(iv.get("atm_iv"))
+    chain = _finite(iv.get("chain_median_iv"))
+    ivp = _finite(iv.get("iv_percentile"))
+    if current is None:
+        return {"status": "UNAVAILABLE", "regime": "UNAVAILABLE"}
+    if ivp is not None:
+        regime = "HIGH IV" if ivp >= 70 else "LOW IV" if ivp <= 30 else "NORMAL IV"
+        basis = "historical percentile"
+    elif chain is not None and chain > 0:
+        rel = (current / chain - 1.0) * 100.0
+        regime = "RELATIVE HIGH" if rel >= 5 else "RELATIVE LOW" if rel <= -5 else "CHAIN NORMAL"
+        basis = "current chain only — historical IVP warming up"
+    else:
+        regime, basis = "CURRENT IV ONLY", "historical context unavailable"
+    return {
+        "status": "READY",
+        "regime": regime,
+        "basis": basis,
+        "skew_state": skew.get("skew_state"),
+        "smile_state": skew.get("smile_state"),
+    }
+
+
+def build_phase8_payload(
+    snapshot: Any,
+    historical_atm_iv: list[float] | None = None,
+    intraday_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
+    frame = getattr(snapshot, "option_chain", None)
+    base = build_phase2_payload(snapshot, historical_atm_iv=historical_atm_iv)
+    smile = volatility_smile(frame, spot)
+    skew = skew_metrics(frame, spot)
+    base.update({
+        "smile": smile,
+        "surface": smile,  # current-expiry strike x CE/PE IV surface; no extra expiry fetch.
+        "skew": skew,
+        "volatility_regime": volatility_regime(base.get("iv", {}), skew),
+        "intraday_iv": intraday_atm_iv_series(intraday_history),
+        "phase8_note": (
+            "Current-expiry IV smile/surface + 25Δ-style skew use the existing option-chain snapshot. "
+            "True IV Rank/Percentile uses only persisted real ATM-IV session summaries; no synthetic history."
+        ),
+    })
+    return base
+
 def build_phase2_payload(snapshot: Any, historical_atm_iv: list[float] | None = None) -> dict[str, Any]:
     spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
     frame = getattr(snapshot, "option_chain", None)

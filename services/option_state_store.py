@@ -25,7 +25,7 @@ class OptionStateStore:
     order data and arbitrary session data are never written.
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path or CONFIG.option_state_path)
@@ -119,7 +119,7 @@ class OptionStateStore:
         }
 
     def _empty(self) -> dict[str, Any]:
-        return {"schema_version": self.SCHEMA_VERSION, "sessions": {}}
+        return {"schema_version": self.SCHEMA_VERSION, "sessions": {}, "iv_sessions": {}}
 
     def _read_unlocked(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -128,13 +128,19 @@ class OptionStateStore:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return self._empty()
-        if (
-            not isinstance(data, dict)
-            or data.get("schema_version") != self.SCHEMA_VERSION
-        ):
+        if not isinstance(data, dict):
+            return self._empty()
+        # Backward-compatible migration from the Phase-6/7 schema.  Raw same-day
+        # snapshots are preserved; Phase-8 simply starts accumulating compact
+        # daily ATM-IV summaries from this point forward.
+        schema = data.get("schema_version")
+        if schema not in {1, self.SCHEMA_VERSION}:
             return self._empty()
         if not isinstance(data.get("sessions"), dict):
             return self._empty()
+        if not isinstance(data.get("iv_sessions"), dict):
+            data["iv_sessions"] = {}
+        data["schema_version"] = self.SCHEMA_VERSION
         return data
 
     def _write_unlocked(self, data: dict[str, Any]) -> None:
@@ -149,6 +155,45 @@ class OptionStateStore:
     @staticmethod
     def _session_key(captured_at: datetime, expiry: str) -> str:
         return f"{captured_at.date().isoformat()}|{expiry}"
+
+    @classmethod
+    def _snapshot_atm_iv(cls, snapshot: dict[str, Any]) -> float | None:
+        spot = cls._clean_number(snapshot.get("spot"))
+        rows = snapshot.get("rows") or []
+        if spot is None or not isinstance(rows, list):
+            return None
+        strikes = sorted({
+            cls._clean_number(row.get("strike"))
+            for row in rows if isinstance(row, dict) and cls._clean_number(row.get("strike")) is not None
+        })
+        if not strikes:
+            return None
+        atm = min(strikes, key=lambda value: abs(float(value) - spot))
+        ivs = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            strike = cls._clean_number(row.get("strike"))
+            iv = cls._clean_number(row.get("implied_volatility"))
+            side = str(row.get("side") or "").upper()
+            if strike == atm and side in {"CE", "PE"} and iv is not None and iv > 0:
+                ivs.append(iv)
+        if not ivs:
+            return None
+        return float(sum(ivs) / len(ivs))
+
+    def load_iv_history(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return compact daily ATM-IV summaries, oldest -> newest.
+
+        The history is produced by the same option-state append that already runs
+        for option-flow continuity; this method never talks to Dhan.
+        """
+        cap = max(1, int(limit or getattr(CONFIG, "iv_history_max_sessions", 60)))
+        with self._locked():
+            data = self._read_unlocked()
+            rows = [row for row in data.get("iv_sessions", {}).values() if isinstance(row, dict)]
+        rows.sort(key=lambda row: str(row.get("date") or row.get("updated_at") or ""))
+        return rows[-cap:]
 
     def load_session(
         self, *, captured_at: datetime, expiry: str
@@ -186,6 +231,34 @@ class OptionStateStore:
             if appended:
                 history.append(snapshot)
                 del history[: -CONFIG.option_state_max_snapshots]
+
+                # Phase-8 historical IV context. Keep one tiny summary per trading
+                # date (latest selected expiry for that day) in the SAME atomic
+                # write. No extra API request and no second persistence path.
+                atm_iv = self._snapshot_atm_iv(snapshot)
+                if atm_iv is not None:
+                    day = captured_at.date().isoformat()
+                    iv_sessions = data.setdefault("iv_sessions", {})
+                    previous = iv_sessions.get(day) if isinstance(iv_sessions.get(day), dict) else {}
+                    prev_low = self._clean_number(previous.get("low"))
+                    prev_high = self._clean_number(previous.get("high"))
+                    observations = int(previous.get("observations") or 0) + 1
+                    iv_sessions[day] = {
+                        "date": day,
+                        "expiry": expiry,
+                        "open": self._clean_number(previous.get("open")) or atm_iv,
+                        "low": min(prev_low, atm_iv) if prev_low is not None else atm_iv,
+                        "high": max(prev_high, atm_iv) if prev_high is not None else atm_iv,
+                        "last": atm_iv,
+                        "vix": self._clean_number(snapshot.get("vix")),
+                        "observations": observations,
+                        "updated_at": snapshot.get("captured_at"),
+                    }
+                    max_sessions = max(20, int(getattr(CONFIG, "iv_history_max_sessions", 60)))
+                    ordered_days = sorted(iv_sessions)
+                    for old_day in ordered_days[:-max_sessions]:
+                        iv_sessions.pop(old_day, None)
+
                 self._write_unlocked(data)
             return list(history), appended
 
