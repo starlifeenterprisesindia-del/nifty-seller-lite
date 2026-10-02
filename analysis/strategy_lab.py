@@ -368,3 +368,348 @@ def build_strategy_lab_payload(snapshot: Any) -> dict[str, Any]:
         "snapshot_id": getattr(snapshot, "snapshot_id", None),
         "safety": {"broker_calls": 0, "brain_writes": 0, "threshold_tuning": False, "mode": "DISPLAY ONLY / ON DEMAND"},
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase-7: Strategy Repair + Advanced Risk Intelligence
+# ---------------------------------------------------------------------------
+# This is deliberately advisory/display-only.  It never writes to the journal,
+# changes One-Brain scores, moves stops, places an order, or calls the broker.
+
+
+def _record_position_greeks(record: dict[str, Any] | None, frame: pd.DataFrame | None) -> dict[str, Any]:
+    lookup = _chain_lookup(frame)
+    totals = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+    legs = []
+    covered = required = 0
+    for raw in (record or {}).get("legs", []) if isinstance((record or {}).get("legs"), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role") or "").upper()
+        side = str(raw.get("side") or "").upper()
+        strike = _finite(raw.get("strike"))
+        if side not in {"CE", "PE"} or strike is None or role not in {"SHORT", "HEDGE", "LONG"}:
+            continue
+        sign = -1 if role == "SHORT" else 1
+        row = lookup.get((side, float(strike)), {})
+        item = {"role": role, "side": side, "strike": float(strike)}
+        complete = True
+        for greek in totals:
+            required += 1
+            value = _finite(row.get(greek))
+            if value is None:
+                complete = False
+                item[greek] = None
+            else:
+                covered += 1
+                signed = sign * value
+                item[greek] = round(signed, 6)
+                totals[greek] += signed
+        item["status"] = "READY" if complete else "PARTIAL"
+        legs.append(item)
+    coverage = 100.0 * covered / required if required else 0.0
+    return {
+        "status": "READY" if required and covered == required else "PARTIAL" if covered else "UNAVAILABLE",
+        "coverage_pct": round(coverage, 1),
+        **{key: round(value, 6) for key, value in totals.items()},
+        "legs": legs,
+    }
+
+
+def _direction_alignment(action: str, market_direction: str, option_bias: str, big_direction: str) -> dict[str, Any]:
+    action = str(action or "").upper()
+    market = str(market_direction or "MIXED").upper()
+    option = str(option_bias or "MIXED").upper()
+    big = str(big_direction or "MIXED").upper()
+    score = 0.0
+    reasons: list[str] = []
+
+    def directional(expected: str) -> None:
+        nonlocal score
+        opposite = "BEARISH" if expected == "BULLISH" else "BULLISH"
+        if market == expected:
+            score += 2.0; reasons.append(f"One Brain direction {market} trade ke favour me")
+        elif market == opposite:
+            score -= 2.0; reasons.append(f"One Brain direction {market} trade ke against")
+        elif market in {"RANGE", "MIXED"}:
+            score += 0.25
+        if option == expected:
+            score += 1.0; reasons.append(f"Option flow {option} supportive")
+        elif option == opposite:
+            score -= 1.0; reasons.append(f"Option flow {option} opposing")
+        expected_big = "BUYING" if expected == "BULLISH" else "SELLING"
+        opposite_big = "SELLING" if expected_big == "BUYING" else "BUYING"
+        if big == expected_big:
+            score += 1.0; reasons.append(f"Big Player {big} supportive")
+        elif big == opposite_big:
+            score -= 1.0; reasons.append(f"Big Player {big} opposing")
+
+    if action in {"PE SELL", "CE BUY"}:
+        directional("BULLISH")
+    elif action in {"CE SELL", "PE BUY"}:
+        directional("BEARISH")
+    elif action == "IRON CONDOR":
+        if market in {"RANGE", "MIXED"}:
+            score += 2.0; reasons.append(f"One Brain {market} Condor ke favour me")
+        elif market in {"BULLISH", "BEARISH"}:
+            score -= 1.5; reasons.append(f"Directional market {market} Condor ke against")
+        if option in {"RANGE", "MIXED", "NEUTRAL"}:
+            score += 1.0
+        elif option in {"BULLISH", "BEARISH"}:
+            score -= 0.5
+        if big == "MIXED":
+            score += 0.5
+        elif big in {"BUYING", "SELLING"}:
+            score -= 0.5
+    state = "SUPPORTIVE" if score >= 1.5 else "ADVERSE" if score <= -1.5 else "MIXED"
+    return {"score": round(score, 2), "state": state, "reasons": reasons[:5]}
+
+
+def _barrier_risk_context(snapshot: Any, action: str) -> dict[str, Any]:
+    item = getattr(snapshot, "barrier_map", None)
+    if item is None:
+        return {"status": "UNAVAILABLE", "state": "UNKNOWN", "score": 0.0, "reasons": []}
+    action = str(action or "").upper()
+    levels = []
+    if action in {"CE SELL", "PE BUY"}:
+        levels = [getattr(item, "nearest_resistance", None)]
+    elif action in {"PE SELL", "CE BUY"}:
+        levels = [getattr(item, "nearest_support", None)]
+    elif action == "IRON CONDOR":
+        levels = [getattr(item, "nearest_resistance", None), getattr(item, "nearest_support", None)]
+    levels = [x for x in levels if x is not None]
+    if not levels:
+        return {"status": "UNAVAILABLE", "state": "UNKNOWN", "score": 0.0, "reasons": []}
+    scores, reasons = [], []
+    for level in levels:
+        distance = abs(_finite(getattr(level, "distance_points", None)) or 9999.0)
+        pressure = _finite(getattr(level, "break_pressure", None)) or 0.0
+        strength = _finite(getattr(level, "strength", None)) or 0.0
+        state = str(getattr(level, "state", "") or "").upper()
+        proximity = 100.0 if distance <= 5 else 80.0 if distance <= 15 else 60.0 if distance <= 30 else 35.0 if distance <= 60 else 10.0
+        risk = 0.45 * proximity + 0.40 * pressure + 0.15 * max(0.0, 100.0 - strength)
+        if "BROKEN" in state:
+            risk = max(risk, 95.0)
+        elif "TEST" in state:
+            risk = max(risk, 65.0)
+        scores.append(min(100.0, risk))
+        reasons.append(
+            f"{getattr(level, 'label', 'Barrier')} {state or 'ACTIVE'} · distance {distance:.0f} pts · break pressure {pressure:.0f}/100"
+        )
+    score = max(scores) if scores else 0.0
+    state = "HIGH" if score >= 70 else "MEDIUM" if score >= 45 else "LOW"
+    return {"status": "READY", "state": state, "score": round(score, 1), "reasons": reasons[:3]}
+
+
+def _current_short_strikes(record: dict[str, Any] | None) -> dict[str, list[float]]:
+    out = {"CE": [], "PE": []}
+    for raw in (record or {}).get("legs", []) if isinstance((record or {}).get("legs"), list) else []:
+        if not isinstance(raw, dict) or str(raw.get("role") or "").upper() != "SHORT":
+            continue
+        side = str(raw.get("side") or "").upper()
+        strike = _finite(raw.get("strike"))
+        if side in out and strike is not None:
+            out[side].append(float(strike))
+    return out
+
+
+def _candidate_roll_details(action: str, record: dict[str, Any] | None, candidate: SetupPlan | None) -> dict[str, Any]:
+    if candidate is None or not candidate.available:
+        return {"status": "UNAVAILABLE", "outward": False, "changes": []}
+    current = _current_short_strikes(record)
+    proposed = {"CE": [], "PE": []}
+    for leg in candidate.short_legs:
+        side = str(leg.side).upper()
+        if side in proposed:
+            proposed[side].append(float(leg.strike))
+    changes = []
+    outward_flags = []
+    for side in ("CE", "PE"):
+        if not current[side] or not proposed[side]:
+            continue
+        old = max(current[side]) if side == "CE" else min(current[side])
+        new = max(proposed[side]) if side == "CE" else min(proposed[side])
+        outward = new > old if side == "CE" else new < old
+        outward_flags.append(outward)
+        changes.append({"side": side, "current_short": old, "candidate_short": new, "shift_points": round(new-old, 1), "outward": outward})
+    action = str(action or "").upper()
+    if action == "IRON CONDOR":
+        outward = bool(outward_flags) and all(outward_flags)
+    else:
+        outward = any(outward_flags)
+    return {"status": "READY" if changes else "UNAVAILABLE", "outward": outward, "changes": changes}
+
+
+def _current_hedge_execution_quality(snapshot: Any, record: dict[str, Any] | None) -> dict[str, Any]:
+    frame = getattr(snapshot, "option_chain", None)
+    spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
+    try:
+        from analysis.advanced_options_display import liquidity_board
+        board = liquidity_board(frame, spot, max_rows=40)
+    except Exception:
+        board = []
+    lookup = {(str(x.get("side") or "").upper(), float(x.get("strike"))): x for x in board if _finite(x.get("strike")) is not None}
+    rows = []
+    grade_values = {"A+": 5, "A": 4, "B": 3, "C": 2, "D": 1}
+    floor = 99
+    for raw in (record or {}).get("legs", []) if isinstance((record or {}).get("legs"), list) else []:
+        if not isinstance(raw, dict) or str(raw.get("role") or "").upper() != "HEDGE":
+            continue
+        side = str(raw.get("side") or "").upper(); strike = _finite(raw.get("strike"))
+        if strike is None:
+            continue
+        item = lookup.get((side, float(strike)), {})
+        grade = str(item.get("grade") or "UNAVAILABLE")
+        if grade in grade_values:
+            floor = min(floor, grade_values[grade])
+        rows.append({"side": side, "strike": float(strike), "grade": grade, "score": item.get("score"), "spread_pct": item.get("spread_pct"), "oi": item.get("oi"), "volume": item.get("volume")})
+    if not rows:
+        return {"status": "UNAVAILABLE", "state": "NO HEDGE DATA", "rows": []}
+    reverse = {5:"A+",4:"A",3:"B",2:"C",1:"D"}
+    floor_grade = reverse.get(floor, "UNAVAILABLE")
+    state = "STRONG" if floor >= 4 else "OK" if floor == 3 else "WEAK EXECUTION" if floor <= 2 else "UNAVAILABLE"
+    return {"status": "READY", "state": state, "floor_grade": floor_grade, "rows": rows}
+
+
+def build_strategy_repair_payload(snapshot: Any) -> dict[str, Any]:
+    """Build a conservative, advisory repair/risk review from the current snapshot.
+
+    Important: this never recommends adding risk after an existing deterministic exit
+    rule has triggered.  Candidate replacement risk assumes the old position is closed
+    first; it does not pretend a multi-leg roll can be executed at theoretical fills.
+    """
+    guardian = getattr(snapshot, "position_guardian", None)
+    record = getattr(getattr(snapshot, "discipline_state", None), "trade_record", None)
+    if guardian is None or not isinstance(record, dict) or str(record.get("status") or "").upper() != "OPEN":
+        return {"status": "IDLE", "instruction": "NO OPEN TRADE", "safety": {"broker_calls": 0, "brain_writes": 0, "auto_orders": False}}
+
+    action = str(getattr(guardian, "action", "") or record.get("action") or "").upper()
+    market_live = bool(getattr(getattr(snapshot, "market_session", None), "is_live", False))
+    option_intel = getattr(snapshot, "option_intelligence", None)
+    big = getattr(snapshot, "big_player_activity", None)
+    decision = getattr(snapshot, "decision", None)
+    market_direction = str(getattr(decision, "market_direction", "MIXED") or "MIXED").upper()
+    option_bias = str(getattr(option_intel, "market_bias", "MIXED") or "MIXED").upper()
+    big_direction = str(getattr(big, "direction", "MIXED") or "MIXED").upper()
+    alignment = _direction_alignment(action, market_direction, option_bias, big_direction)
+    barrier = _barrier_risk_context(snapshot, action)
+    hedge = _current_hedge_execution_quality(snapshot, record)
+    current_greeks = _record_position_greeks(record, getattr(snapshot, "option_chain", None))
+
+    plans = available_plans(snapshot)
+    candidate = plans.get(action)
+    candidate_summary = None
+    candidate_greeks = None
+    roll = _candidate_roll_details(action, record, candidate)
+    spot = _finite((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
+    risk_profile = getattr(snapshot, "risk_profile", None)
+    candidate_lot_size = int(getattr(risk_profile, "lot_size", 1) or 1)
+    current_lot_size = max(1, int(getattr(guardian, "lot_size", 0) or record.get("lot_size") or candidate_lot_size))
+    lots = max(1, int(getattr(guardian, "lots", 1) or record.get("lots") or 1))
+    if candidate is not None and spot is not None:
+        candidate_summary = plan_summary(candidate, spot, candidate_lot_size, getattr(snapshot, "option_chain", None))
+        candidate_greeks = candidate_summary.get("greeks")
+
+    max_risk_points = _finite(record.get("max_risk_points"))
+    pnl_points = _finite(getattr(guardian, "unrealized_pnl_points", None))
+    pnl_rupees = _finite(getattr(guardian, "unrealized_pnl_rupees", None))
+    remaining_worst_points = None
+    if max_risk_points is not None and pnl_points is not None:
+        remaining_worst_points = max(0.0, max_risk_points + pnl_points)
+    current_risk = {
+        "original_max_loss_points": round(max_risk_points, 2) if max_risk_points is not None else None,
+        "current_pnl_points": round(pnl_points, 2) if pnl_points is not None else None,
+        "current_pnl_rupees": round(pnl_rupees, 2) if pnl_rupees is not None else None,
+        "remaining_to_original_worst_points": round(remaining_worst_points, 2) if remaining_worst_points is not None else None,
+        "remaining_to_original_worst_rupees": round(remaining_worst_points * current_lot_size * lots, 2) if remaining_worst_points is not None else None,
+    }
+    replacement_risk = None
+    if candidate_summary:
+        new_loss = _finite(candidate_summary.get("max_loss_rupees_per_lot"))
+        replacement_risk = {
+            "candidate": action,
+            "candidate_max_loss_rupees": round(new_loss * lots, 2) if new_loss is not None else None,
+            "day_pnl_if_old_closed_now": round(pnl_rupees, 2) if pnl_rupees is not None else None,
+            "day_worst_if_replaced_after_close": round((pnl_rupees or 0.0) - (new_loss or 0.0) * lots, 2) if new_loss is not None and pnl_rupees is not None else None,
+            "assumption": "Old position closed first at current guardian mark; candidate then treated as a fresh protected plan. Slippage/charges excluded.",
+        }
+
+    gstatus = str(getattr(guardian, "status", "") or "").upper()
+    instruction = str(getattr(guardian, "instruction", "") or "").upper()
+    reasons: list[str] = []
+    vetoes: list[str] = []
+    repair_state = "HOLD / MONITOR"
+
+    if not market_live or gstatus == "REFERENCE ONLY":
+        repair_state = "REFERENCE ONLY — NO LIVE REPAIR"
+        vetoes.append("Market/session data is not live")
+    elif gstatus in {"DATA BLOCKED", "EXIT DUE"}:
+        repair_state = "NO REPAIR — DATA BLOCKED"
+        vetoes.append("Fresh executable data is not verified")
+    elif gstatus == "EXIT ALERT" or "EXIT" in instruction or "SL TRIGGERED" in instruction:
+        repair_state = "EXIT / DO NOT REPAIR"
+        vetoes.append("Existing deterministic Position Guardian exit rule has triggered")
+    elif gstatus == "TARGET ALERT" or instruction == "PROTECT PROFIT":
+        repair_state = "PROTECT PROFIT — DO NOT ADD RISK"
+        reasons.append("Position Guardian is already at target/profit-protection state")
+    else:
+        adverse = alignment["state"] == "ADVERSE"
+        high_barrier = barrier.get("state") == "HIGH"
+        risk_rising = instruction == "RISK RISING" or (pnl_points is not None and pnl_points < 0)
+        if adverse and high_barrier:
+            repair_state = "REPAIR VETO — EXIT REVIEW"
+            vetoes.append("Direction/flow and barrier risk are both adverse")
+        elif risk_rising and roll.get("outward") and candidate_summary and float(candidate_summary.get("quality_score") or 0.0) >= 55.0:
+            repair_state = "OUTWARD ROLL CANDIDATE — ADVISORY"
+            reasons.append("Fresh protected plan shifts threatened short strike(s) farther OTM")
+        elif risk_rising and hedge.get("state") == "WEAK EXECUTION":
+            repair_state = "HEDGE / LIQUIDITY REVIEW — NO AUTO CHANGE"
+            reasons.append("Current hedge exists but execution-liquidity quality is weak")
+        elif risk_rising:
+            repair_state = "HOLD / EXIT REVIEW — NO CLEAN REPAIR"
+            reasons.append("Loss is present but no clean outward replacement passed the conservative gate")
+        elif alignment["state"] == "SUPPORTIVE" and barrier.get("state") == "LOW":
+            repair_state = "HOLD / MONITOR — REPAIR NOT NEEDED"
+        else:
+            repair_state = "HOLD / MONITOR — WATCH RISK"
+
+    reasons.extend(alignment.get("reasons") or [])
+    reasons.extend(barrier.get("reasons") or [])
+    if roll.get("status") == "READY" and not roll.get("outward"):
+        vetoes.append("Fresh same-strategy plan does not move threatened short strike(s) outward")
+    if candidate_summary and float(candidate_summary.get("quality_score") or 0.0) < 55.0:
+        vetoes.append("Fresh replacement plan quality is below conservative repair floor 55/100")
+
+    return {
+        "status": "READY",
+        "repair_state": repair_state,
+        "action": action,
+        "guardian_status": gstatus,
+        "guardian_instruction": instruction,
+        "current": {
+            "entry_spot": _finite(getattr(guardian, "entry_spot", None)),
+            "current_spot": _finite(getattr(guardian, "current_spot", None)),
+            "current_value_points": _finite(getattr(guardian, "current_debit_points", None)),
+            "target_progress_pct": _finite(getattr(guardian, "target_progress_pct", None)),
+            "lots": lots,
+            "lot_size": current_lot_size,
+        },
+        "alignment": alignment,
+        "barrier_risk": barrier,
+        "hedge_execution": hedge,
+        "current_greeks": current_greeks,
+        "candidate_summary": candidate_summary,
+        "candidate_greeks": candidate_greeks,
+        "roll": roll,
+        "current_risk": current_risk,
+        "replacement_risk": replacement_risk,
+        "reasons": list(dict.fromkeys(reasons))[:8],
+        "vetoes": list(dict.fromkeys(vetoes))[:8],
+        "safety": {
+            "broker_calls": 0,
+            "brain_writes": 0,
+            "auto_orders": False,
+            "auto_stop_changes": False,
+            "mode": "DISPLAY ONLY / ON DEMAND",
+        },
+    }

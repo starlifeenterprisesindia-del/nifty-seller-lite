@@ -5,7 +5,12 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from analysis.strategy_lab import available_plans, build_strategy_lab_payload, what_if_scenario
+from analysis.strategy_lab import (
+    available_plans,
+    build_strategy_lab_payload,
+    build_strategy_repair_payload,
+    what_if_scenario,
+)
 
 
 def _fmt(value: Any, digits: int = 1, prefix: str = "", suffix: str = "") -> str:
@@ -161,4 +166,114 @@ def render_phase4_strategy_lab(snapshot: Any) -> None:
     st.info(
         "Golden Rule: Strategy Lab on-demand/display-only hai. Is panel ke calculations One Brain, "
         "TradePlan, execution gate, alerts ya broker calls ko modify nahi karte."
+    )
+
+
+
+def render_phase7_strategy_repair(snapshot: Any) -> None:
+    """Advisory-only repair and advanced risk review for an already-open manual trade."""
+    payload = build_strategy_repair_payload(snapshot)
+    st.caption(
+        "🛠️ Phase-7 Strategy Repair + Advanced Risk · open manual trade only · "
+        "no broker/API call · no auto order · no One-Brain/SL mutation"
+    )
+    if payload.get("status") == "IDLE":
+        st.info("Open trade record nahi hai — repair panel tab active hoga jab Position Guardian kisi manual/paper protected trade ko monitor kar raha ho.")
+        return
+    if payload.get("status") != "READY":
+        st.warning("Repair intelligence unavailable hai; current snapshot/position data incomplete hai.")
+        return
+
+    state = str(payload.get("repair_state") or "HOLD / MONITOR")
+    if "EXIT" in state or "VETO" in state or "BLOCKED" in state:
+        st.error(f"**{state}**")
+    elif "ROLL" in state or "HEDGE" in state or "WATCH" in state:
+        st.warning(f"**{state}**")
+    else:
+        st.success(f"**{state}**")
+
+    cur = payload.get("current") or {}
+    align = payload.get("alignment") or {}
+    barrier = payload.get("barrier_risk") or {}
+    hedge = payload.get("hedge_execution") or {}
+    risk = payload.get("current_risk") or {}
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Open strategy", payload.get("action") or "—")
+    c2.metric("Current P&L", _fmt(risk.get("current_pnl_rupees"), 0, prefix="₹"))
+    c3.metric("Direction alignment", str(align.get("state") or "—"), _fmt(align.get("score"), 2))
+    c4.metric("Barrier risk", str(barrier.get("state") or "—"), _fmt(barrier.get("score"), 0, suffix="/100"))
+    c5.metric("Hedge execution", str(hedge.get("state") or "—"), str(hedge.get("floor_grade") or ""))
+
+    tabs = st.tabs(["🧭 Repair Gate", "🛡️ Risk Before / After", "🧬 Greeks Before / After", "🔁 Roll / Hedge Detail"])
+    with tabs[0]:
+        left, right = st.columns(2)
+        with left:
+            st.write("**Why / supportive evidence**")
+            for reason in payload.get("reasons") or ["No extra supportive evidence"]:
+                st.write(f"• {reason}")
+        with right:
+            st.write("**Repair veto / caution**")
+            for reason in payload.get("vetoes") or ["None"]:
+                st.write(f"• {reason}")
+        st.caption(
+            f"Guardian: {payload.get('guardian_instruction')} · entry spot {_fmt(cur.get('entry_spot'),2)} · "
+            f"current spot {_fmt(cur.get('current_spot'),2)} · target progress {_fmt(cur.get('target_progress_pct'),1,suffix='%')}"
+        )
+
+    with tabs[1]:
+        repl = payload.get("replacement_risk") or {}
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Original max loss", _fmt(risk.get("original_max_loss_points"), 2, suffix=" pts"))
+        r2.metric("Remaining to original worst", _fmt(risk.get("remaining_to_original_worst_rupees"), 0, prefix="₹"))
+        r3.metric("Fresh replacement max loss", _fmt(repl.get("candidate_max_loss_rupees"), 0, prefix="₹"))
+        r4.metric("Day worst if close + replace", _fmt(repl.get("day_worst_if_replaced_after_close"), 0, prefix="₹"))
+        if repl:
+            st.caption(repl.get("assumption") or "")
+        candidate = payload.get("candidate_summary") or {}
+        if candidate:
+            st.dataframe(pd.DataFrame([{
+                "Candidate": candidate.get("name"),
+                "Quality": candidate.get("quality_score"),
+                "Max profit / lot ₹": candidate.get("max_profit_rupees_per_lot"),
+                "Max loss / lot ₹": candidate.get("max_loss_rupees_per_lot"),
+                "Liquidity floor": candidate.get("liquidity_floor"),
+                "Breakevens": _be_text(candidate.get("breakevens") or []),
+            }]), use_container_width=True, hide_index=True)
+
+    with tabs[2]:
+        before = payload.get("current_greeks") or {}
+        after = payload.get("candidate_greeks") or {}
+        rows = []
+        for greek in ("delta", "gamma", "theta", "vega"):
+            rows.append({
+                "Greek": greek.upper(),
+                "Current open position": before.get(greek),
+                "Fresh replacement candidate": after.get(greek),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(
+            f"Current Greek coverage {_fmt(before.get('coverage_pct'),0,suffix='%')} · "
+            f"candidate coverage {_fmt(after.get('coverage_pct'),0,suffix='%')}. "
+            "Candidate column assumes old trade is closed first; this is not a combined live roll fill."
+        )
+
+    with tabs[3]:
+        roll = payload.get("roll") or {}
+        changes = pd.DataFrame(roll.get("changes") or [])
+        if not changes.empty:
+            changes = changes.rename(columns={
+                "side":"Side", "current_short":"Current short", "candidate_short":"Candidate short",
+                "shift_points":"Shift pts", "outward":"Farther OTM?",
+            })
+            st.dataframe(changes, use_container_width=True, hide_index=True)
+        else:
+            st.info("Same-strategy outward roll candidate abhi available nahi hai.")
+        hedge_rows = pd.DataFrame((payload.get("hedge_execution") or {}).get("rows") or [])
+        if not hedge_rows.empty:
+            st.write("**Current hedge execution quality**")
+            st.dataframe(hedge_rows, use_container_width=True, hide_index=True)
+
+    st.info(
+        "Repair Golden Rule: existing SL/time/spot exit trigger ko repair override nahi karega. "
+        "Old position ko close kiye bina fresh candidate ka theoretical risk combine karke executable roll claim nahi kiya jata."
     )
