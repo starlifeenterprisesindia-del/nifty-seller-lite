@@ -469,6 +469,68 @@ class SnapshotService:
         for item in CONFIG.top9:
             grouped.setdefault(item.exchange_segment, []).append(int(item.security_id))
 
+        from_date = current - timedelta(days=CONFIG.candle_lookback_days)
+        # Phase-11: Railway can return the raw quote/candle/expiry/chain inputs in
+        # one protected HTTP response. Direct-Dhan/background clients simply skip
+        # this optional transport optimization and retain the exact old call path.
+        transport_prefetch_error = ""
+        prefetch = getattr(self.client, "prepare_snapshot_bundle", None)
+        if callable(prefetch):
+            candle_requests: dict[str, dict[str, Any]] = {
+                "spot_1m": {
+                    "security_id": str(CONFIG.nifty.security_id),
+                    "exchange_segment": CONFIG.nifty.exchange_segment,
+                    "instrument": CONFIG.nifty.instrument,
+                    "interval": 1,
+                    "from_date": from_date.isoformat(),
+                    "to_date": current.isoformat(),
+                    "include_oi": False,
+                },
+                "spot_15m": {
+                    "security_id": str(CONFIG.nifty.security_id),
+                    "exchange_segment": CONFIG.nifty.exchange_segment,
+                    "instrument": CONFIG.nifty.instrument,
+                    "interval": 15,
+                    "from_date": from_date.isoformat(),
+                    "to_date": current.isoformat(),
+                    "include_oi": False,
+                },
+            }
+            if future_ref:
+                candle_requests.update({
+                    "future_1m": {
+                        "security_id": str(future_ref.security_id),
+                        "exchange_segment": future_ref.exchange_segment,
+                        "instrument": future_ref.instrument,
+                        "interval": 1,
+                        "from_date": from_date.isoformat(),
+                        "to_date": current.isoformat(),
+                        "include_oi": True,
+                    },
+                    "future_15m": {
+                        "security_id": str(future_ref.security_id),
+                        "exchange_segment": future_ref.exchange_segment,
+                        "instrument": future_ref.instrument,
+                        "interval": 15,
+                        "from_date": from_date.isoformat(),
+                        "to_date": current.isoformat(),
+                        "include_oi": True,
+                    },
+                })
+            try:
+                prefetch(
+                    instruments=grouped,
+                    candle_requests=candle_requests,
+                    underlying_security_id=int(CONFIG.nifty.security_id),
+                    segment=CONFIG.nifty.exchange_segment,
+                    as_of=current,
+                )
+            except Exception as exc:
+                # Optimization failure must never make a previously-valid snapshot
+                # fail. Subsequent method calls transparently use legacy endpoints.
+                transport_prefetch_error = type(exc).__name__
+        perf_mark("transport_prefetch")
+
         quote_response = self.client.market_quote(grouped)
         perf_mark("grouped_quotes")
         nifty_quote = self._extract_quote(
@@ -513,7 +575,6 @@ class SnapshotService:
                     }
                 )
 
-        from_date = current - timedelta(days=CONFIG.candle_lookback_days)
         candles_1m, candles_3m, candles_15m = self._fetch_candles(
             security_id=CONFIG.nifty.security_id,
             exchange_segment=CONFIG.nifty.exchange_segment,
@@ -1376,6 +1437,14 @@ class SnapshotService:
                 max(perf_stages, key=perf_stages.get) if perf_stages else ""
             ),
         }
+        transport_reader = getattr(self.client, "transport_status", None)
+        if callable(transport_reader):
+            try:
+                performance["transport"] = transport_reader()
+            except Exception:
+                performance["transport"] = {"mode": "DIAGNOSTIC_UNAVAILABLE"}
+        if transport_prefetch_error:
+            performance.setdefault("transport", {})["prefetch_fallback"] = transport_prefetch_error
 
         fingerprint = {
             "created_at": current.replace(microsecond=0).isoformat(),

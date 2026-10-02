@@ -472,6 +472,96 @@ def telegram_test(
     return {"ok": True, "telegram": ALERTS.status()}
 
 
+@app.post("/dhan/snapshot-bundle")
+def dhan_snapshot_bundle(
+    payload: dict[str, Any] = Body(...),
+    key: str = Query(default=""),
+    x_live_key: str = Header(default=""),
+) -> dict[str, Any]:
+    """Return one snapshot's raw Dhan inputs in one Railway HTTP response.
+
+    This endpoint does *not* bypass Dhan spacing/caches: every component still goes
+    through the process-wide DhanGateway.  It only removes repeated Streamlit↔Railway
+    network round trips and gives the foreground snapshot one contiguous priority
+    window. Partial failures are explicit so the client can fall back safely.
+    """
+    _authorise(key, x_live_key)
+    gateway = _gateway()
+    started = time.perf_counter()
+    result: dict[str, Any] = {"candles": {}, "errors": {}}
+
+    def capture(name: str, function: Any) -> Any:
+        gateway.mark_foreground()
+        try:
+            return function()
+        except Exception as exc:
+            result["errors"][name] = type(exc).__name__
+            return None
+
+    instruments = payload.get("instruments") or {}
+    result["market_quote"] = capture(
+        "market_quote", lambda: gateway.market_quote(instruments)
+    )
+
+    candles = payload.get("candles") or {}
+    if isinstance(candles, dict):
+        for label, request_payload in candles.items():
+            if not isinstance(request_payload, dict):
+                result["errors"][str(label)] = "INVALID_REQUEST"
+                continue
+            value = capture(str(label), lambda rp=dict(request_payload): gateway.intraday(rp))
+            if isinstance(value, dict):
+                result["candles"][str(label)] = value
+
+    underlying = int(payload.get("underlying_security_id", 13))
+    segment = str(payload.get("segment", "IDX_I"))
+    expiries = capture(
+        "expiry_list", lambda: gateway.expiry_list(underlying, segment)
+    )
+    if isinstance(expiries, list):
+        result["expiry_list"] = [str(item) for item in expiries]
+        try:
+            raw_as_of = str(payload.get("as_of") or "")
+            as_of = datetime.fromisoformat(raw_as_of.replace("Z", "+00:00")) if raw_as_of else datetime.now(IST)
+            if as_of.tzinfo is None:
+                as_of = as_of.replace(tzinfo=IST)
+            else:
+                as_of = as_of.astimezone(IST)
+            active: list[tuple[Any, str]] = []
+            for item in expiries:
+                try:
+                    parsed = datetime.fromisoformat(str(item)).date()
+                except ValueError:
+                    try:
+                        parsed = datetime.strptime(str(item), "%Y-%m-%d").date()
+                    except ValueError:
+                        continue
+                if parsed >= as_of.date():
+                    active.append((parsed, str(item)))
+            selected = min(active, key=lambda pair: pair[0])[1] if active else ""
+        except Exception:
+            selected = ""
+        result["selected_expiry"] = selected
+        if selected:
+            option = capture(
+                "option_chain",
+                lambda: gateway.option_chain(selected, underlying, segment),
+            )
+            if isinstance(option, dict):
+                result["option_chain"] = option
+
+    result["bundle_seconds"] = round(time.perf_counter() - started, 4)
+    result["gateway"] = {
+        k: v for k, v in gateway.status().items()
+        if k in {
+            "upstream_calls", "cache_hits", "fallback_hits",
+            "spacing_wait_seconds", "consecutive_429",
+            "rate_limit_cooldown_seconds", "option_family_shared_limiter",
+        }
+    }
+    return {"ok": True, "data": result}
+
+
 @app.post("/dhan/market-quote")
 def dhan_market_quote(
     payload: dict[str, Any] = Body(...),

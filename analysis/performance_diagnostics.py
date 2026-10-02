@@ -7,6 +7,7 @@ by the normal snapshot pipeline.
 from __future__ import annotations
 
 from typing import Any
+import math
 
 
 CRITICAL_FEEDS = ("quotes", "candles", "option_chain", "future_volume", "vix")
@@ -17,6 +18,19 @@ def _number(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    clean = sorted(float(v) for v in values if isinstance(v, (int, float)) and math.isfinite(float(v)) and float(v) >= 0)
+    if not clean:
+        return 0.0
+    if len(clean) == 1:
+        return clean[0]
+    position = (len(clean) - 1) * max(0.0, min(1.0, pct))
+    low = int(position)
+    high = min(len(clean) - 1, low + 1)
+    fraction = position - low
+    return clean[low] * (1.0 - fraction) + clean[high] * fraction
 
 
 def _age_seconds(snapshot: Any, item: Any) -> float | None:
@@ -41,6 +55,7 @@ def build_performance_report(
     *,
     refresh_interval_seconds: float = 30.0,
     snapshot_built_now: bool = False,
+    pipeline_history: list[float] | None = None,
 ) -> dict[str, Any]:
     """Return a small diagnostic report without recomputation or I/O."""
     metadata = getattr(snapshot, "metadata", {}) or {}
@@ -89,8 +104,16 @@ def build_performance_report(
         (row["Seconds"] for row in stage_rows if row["Stage"] == slowest),
         0.0,
     )
+    latency_history = list(pipeline_history or [])[-120:]
+    transport = performance.get("transport") if isinstance(performance.get("transport"), dict) else {}
+    async_evidence = metadata.get("evidence_async_status") if isinstance(metadata.get("evidence_async_status"), dict) else {}
     return {
         "pipeline_seconds": round(pipeline_seconds, 4),
+        "p50_pipeline_seconds": round(_percentile(latency_history, 0.50), 4),
+        "p95_pipeline_seconds": round(_percentile(latency_history, 0.95), 4),
+        "latency_samples": len(latency_history),
+        "transport": transport,
+        "async_evidence": async_evidence,
         "build_seconds": round(build_seconds, 4),
         "finalize_seconds": round(finalize_seconds, 4),
         "refresh_interval_seconds": round(interval, 1),

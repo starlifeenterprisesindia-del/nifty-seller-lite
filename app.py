@@ -48,6 +48,7 @@ from ui.day_memory import (
     render_evidence_download,
     sync_day_memory,
     record_final_day_memory,
+    evidence_async_status,
 )
 from ui.components import (
     render_candles,
@@ -771,6 +772,14 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
 
 
 shadow_entries = _finalize_snapshot_once(snapshot, previous_snapshot)
+# Phase-11 latency history is session-local diagnostics only. It never feeds a
+# market score, and keeping 120 points is enough for P50/P95 without unbounded RAM.
+_perf_now = snapshot.metadata.setdefault("performance", {})
+if snapshot_built_now and _perf_now.get("pipeline_seconds") is not None:
+    _latency_history = list(st.session_state.get("pipeline_latency_history", []))
+    _latency_history.append(float(_perf_now["pipeline_seconds"]))
+    st.session_state.pipeline_latency_history = _latency_history[-120:]
+snapshot.metadata["evidence_async_status"] = evidence_async_status()
 # Presentation copy only: scores, strikes, final action and execution readiness remain
 # authoritative. Deep-copy normalization is cached per immutable snapshot so opening a
 # Streamlit panel does not clone all candle/option DataFrames again.
@@ -1064,6 +1073,7 @@ with persistent_panel("⚙️ Performance Diagnostics", "panel_performance_diagn
                 )
             ),
             snapshot_built_now=snapshot_built_now,
+            pipeline_history=list(st.session_state.get("pipeline_latency_history", [])),
         )
 with persistent_panel("❓ One Brain Quick Guide", "panel_help_guide_open") as panel_open:
     if panel_open:

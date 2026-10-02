@@ -1,7 +1,10 @@
 """Expiry-cycle diary and explain-only context; never changes market scores."""
 from datetime import datetime
 from dataclasses import asdict
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import threading
+import time
 
 import streamlit as st
 
@@ -9,6 +12,42 @@ from analysis.history_context import history_context
 from analysis.recent_history import recent_history
 from services.day_memory import clean
 from services.railway_live_client import RailwayDhanClient
+
+
+# Phase-11: final evidence writes are non-critical to the live decision path. Keep
+# one ordered worker so a slow Railway ACK cannot add seconds to every Streamlit
+# snapshot. Payloads are fully materialized before submission; the worker never
+# touches Streamlit session state or the mutable MarketSnapshot.
+_EVIDENCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nsl-evidence")
+_EVIDENCE_LOCK = threading.Lock()
+_EVIDENCE_STATUS = {
+    "queued": 0, "completed": 0, "failed": 0, "pending": 0,
+    "last_seconds": 0.0, "last_error": "",
+}
+
+
+def _post_final_evidence(url: str, key: str, payload: dict):
+    started = time.perf_counter()
+    with _EVIDENCE_LOCK:
+        _EVIDENCE_STATUS["pending"] += 1
+    try:
+        RailwayDhanClient(url, key, timeout_seconds=3)._post("/day-memory", payload)
+        with _EVIDENCE_LOCK:
+            _EVIDENCE_STATUS["completed"] += 1
+            _EVIDENCE_STATUS["last_error"] = ""
+    except Exception as exc:
+        with _EVIDENCE_LOCK:
+            _EVIDENCE_STATUS["failed"] += 1
+            _EVIDENCE_STATUS["last_error"] = type(exc).__name__
+    finally:
+        with _EVIDENCE_LOCK:
+            _EVIDENCE_STATUS["pending"] = max(0, _EVIDENCE_STATUS["pending"] - 1)
+            _EVIDENCE_STATUS["last_seconds"] = round(time.perf_counter() - started, 4)
+
+
+def evidence_async_status() -> dict:
+    with _EVIDENCE_LOCK:
+        return dict(_EVIDENCE_STATUS)
 
 
 def app_observation(snapshot):
@@ -140,11 +179,7 @@ def sync_day_memory(snapshot, url, key, *, record_event: bool = True):
 
 
 def record_final_day_memory(snapshot, url, key):
-    """Record exactly one fully-finalized app observation per snapshot.
-
-    History can be fetched before finalization, but evidence must never be posted
-    until Simple One-Brain, protected plan, Execution Guard and final decision exist.
-    """
+    """Queue one fully-finalized app observation without blocking the Brain UI."""
     if not url or not key or not snapshot.market_session.is_live:
         return
     snapshot_key = str(getattr(snapshot, "snapshot_id", "") or snapshot.created_at.isoformat())
@@ -154,28 +189,27 @@ def record_final_day_memory(snapshot, url, key):
     if not snapshot.metadata.get("simple_brain") or not common or not getattr(snapshot, "execution_guard", None):
         snapshot.metadata["recording_skip_reason"] = "FINAL_CALCULATION_INCOMPLETE"
         return
+
+    # Materialize the compact payload synchronously (CPU-only, no I/O). The actual
+    # Railway network write is queued after the decision is complete.
+    now_ts = datetime.now().timestamp()
+    last_history_push = float(st.session_state.get("market_history_push_at", 0.0))
+    history = market_history_observation(snapshot) if now_ts - last_history_push >= 25.0 else None
+    payload = {"event": app_observation(snapshot), "history": history, "report": False}
     try:
-        client = RailwayDhanClient(url, key, timeout_seconds=3)
-        # Record-only call: the full history report already has a 60-second fetch TTL
-        # in sync_day_memory(). Avoid rebuilding/transferring it every 15-second snapshot.
-        now_ts = datetime.now().timestamp()
-        last_history_push = float(st.session_state.get("market_history_push_at", 0.0))
-        history = (
-            market_history_observation(snapshot)
-            if now_ts - last_history_push >= 25.0
-            else None
-        )
-        client._post(
-            "/day-memory",
-            {"event": app_observation(snapshot), "history": history, "report": False},
-        )
+        _EVIDENCE_EXECUTOR.submit(_post_final_evidence, str(url), str(key), payload)
+        with _EVIDENCE_LOCK:
+            _EVIDENCE_STATUS["queued"] += 1
         if history is not None:
             st.session_state.market_history_push_at = now_ts
+        # As before, one finalized observation is attempted once per immutable snapshot.
         st.session_state.day_memory_final_snapshot = snapshot_key
+        snapshot.metadata.setdefault("performance", {})["evidence_write"] = "ASYNC_QUEUED"
+        snapshot.metadata["evidence_async_status"] = evidence_async_status()
         st.session_state.pop("day_memory_error", None)
     except Exception:
         st.session_state.day_memory_error = (
-            "Final evidence sync pending — calculation safe; Railway connection check karo."
+            "Final evidence queue pending — calculation safe; Railway connection check karo."
         )
 
 

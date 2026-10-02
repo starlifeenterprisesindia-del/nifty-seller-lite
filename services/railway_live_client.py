@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -111,8 +112,21 @@ class RailwayDhanClient:
         self.timeout_seconds = max(1.0, float(timeout_seconds))
         if not self.base_url or not self.api_key:
             raise ValueError("Railway live URL or API key is missing")
+        # Phase-11 transport cache: one Railway HTTP request can prefetch the raw
+        # components needed by a full snapshot.  It changes transport only; every
+        # downstream calculation still consumes the same method contracts below.
+        self._prefetched_market_quote: tuple[str, Any] | None = None
+        self._prefetched_intraday: dict[str, Any] = {}
+        self._prefetched_expiry: tuple[int, str, list[str]] | None = None
+        self._prefetched_option_chain: tuple[str, int, str, Any] | None = None
+        self._transport_http_calls = 0
+        self._transport_bundle_calls = 0
+        self._transport_prefetch_hits = 0
+        self._transport_bundle_seconds = 0.0
+        self._transport_bundle_errors: dict[str, str] = {}
 
     def _post(self, path: str, payload: dict[str, Any]) -> Any:
+        self._transport_http_calls += 1
         try:
             response = _session_for(self.base_url).post(
                 f"{self.base_url}{path}",
@@ -166,7 +180,95 @@ class RailwayDhanClient:
             raise RuntimeError("Evidence export is larger than the safe download limit")
         return data
 
+    @staticmethod
+    def _quote_signature(instruments: dict[str, list[int]]) -> str:
+        normalized = {
+            str(segment): sorted({int(item) for item in ids})
+            for segment, ids in (instruments or {}).items()
+            if ids
+        }
+        return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _intraday_signature(payload: dict[str, Any]) -> str:
+        normalized = {
+            "security_id": str(payload.get("security_id", "")),
+            "exchange_segment": str(payload.get("exchange_segment", "")),
+            "instrument": str(payload.get("instrument", "")),
+            "interval": int(payload.get("interval", 1) or 1),
+            "from_date": str(payload.get("from_date", "")),
+            "to_date": str(payload.get("to_date", "")),
+            "include_oi": bool(payload.get("include_oi", False)),
+        }
+        return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+    def prepare_snapshot_bundle(
+        self,
+        *,
+        instruments: dict[str, list[int]],
+        candle_requests: dict[str, dict[str, Any]],
+        underlying_security_id: int = 13,
+        segment: str = "IDX_I",
+        as_of: Any = None,
+    ) -> dict[str, Any]:
+        """Prefetch one snapshot's raw Railway payload in one HTTP round trip.
+
+        The Railway server still enforces the same Dhan cache/rate-limit gates.
+        Missing partial items simply fall back to the legacy per-endpoint method, so
+        this optimization cannot turn a partial bundle into fabricated market data.
+        """
+        payload = {
+            "instruments": instruments,
+            "candles": candle_requests,
+            "underlying_security_id": int(underlying_security_id),
+            "segment": str(segment),
+            "as_of": as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of or ""),
+        }
+        started = time.perf_counter()
+        data = self._post("/dhan/snapshot-bundle", payload)
+        self._transport_bundle_calls += 1
+        self._transport_bundle_seconds = round(time.perf_counter() - started, 4)
+        if not isinstance(data, dict):
+            return {}
+        self._transport_bundle_errors = {
+            str(k): str(v)[:120] for k, v in (data.get("errors") or {}).items()
+        }
+        quote = data.get("market_quote")
+        if isinstance(quote, dict):
+            self._prefetched_market_quote = (self._quote_signature(instruments), quote)
+        candles = data.get("candles") or {}
+        for label, request_payload in (candle_requests or {}).items():
+            if label in candles and isinstance(candles.get(label), dict):
+                self._prefetched_intraday[self._intraday_signature(request_payload)] = candles[label]
+        expiries = data.get("expiry_list")
+        if isinstance(expiries, list):
+            self._prefetched_expiry = (int(underlying_security_id), str(segment), [str(x) for x in expiries])
+        option = data.get("option_chain")
+        selected_expiry = str(data.get("selected_expiry") or "")
+        if selected_expiry and isinstance(option, dict):
+            self._prefetched_option_chain = (
+                selected_expiry, int(underlying_security_id), str(segment), option
+            )
+        return data
+
+    def transport_status(self) -> dict[str, Any]:
+        saved = max(0, self._transport_prefetch_hits - self._transport_bundle_calls)
+        return {
+            "mode": "COMBINED_RAILWAY_BUNDLE" if self._transport_bundle_calls else "LEGACY_ENDPOINTS",
+            "http_calls": int(self._transport_http_calls),
+            "bundle_calls": int(self._transport_bundle_calls),
+            "prefetch_hits": int(self._transport_prefetch_hits),
+            "estimated_round_trips_saved": int(saved),
+            "bundle_seconds": round(float(self._transport_bundle_seconds), 4),
+            "bundle_errors": dict(self._transport_bundle_errors),
+        }
+
     def market_quote(self, instruments: dict[str, list[int]]) -> dict[str, Any]:
+        if self._prefetched_market_quote is not None:
+            signature, data = self._prefetched_market_quote
+            if signature == self._quote_signature(instruments):
+                self._transport_prefetch_hits += 1
+                return data
         return self._post("/dhan/market-quote", {"instruments": instruments})
 
     def market_history(self, expiry: str) -> dict[str, Any]:
@@ -185,20 +287,27 @@ class RailwayDhanClient:
         to_date: Any,
         include_oi: bool = False,
     ) -> dict[str, Any]:
-        return self._post(
-            "/dhan/intraday",
-            {
-                "security_id": str(security_id),
-                "exchange_segment": exchange_segment,
-                "instrument": instrument,
-                "interval": int(interval),
-                "from_date": from_date.isoformat(),
-                "to_date": to_date.isoformat(),
-                "include_oi": bool(include_oi),
-            },
-        )
+        payload = {
+            "security_id": str(security_id),
+            "exchange_segment": exchange_segment,
+            "instrument": instrument,
+            "interval": int(interval),
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat(),
+            "include_oi": bool(include_oi),
+        }
+        signature = self._intraday_signature(payload)
+        if signature in self._prefetched_intraday:
+            self._transport_prefetch_hits += 1
+            return self._prefetched_intraday[signature]
+        return self._post("/dhan/intraday", payload)
 
     def expiry_list(self, underlying_security_id: int = 13, segment: str = "IDX_I") -> list[str]:
+        if self._prefetched_expiry is not None:
+            sid, seg, data = self._prefetched_expiry
+            if sid == int(underlying_security_id) and seg == str(segment):
+                self._transport_prefetch_hits += 1
+                return list(data)
         data = self._post(
             "/dhan/expiry-list",
             {"underlying_security_id": int(underlying_security_id), "segment": segment},
@@ -212,6 +321,11 @@ class RailwayDhanClient:
         underlying_security_id: int = 13,
         segment: str = "IDX_I",
     ) -> dict[str, Any]:
+        if self._prefetched_option_chain is not None:
+            exp, sid, seg, data = self._prefetched_option_chain
+            if exp == str(expiry) and sid == int(underlying_security_id) and seg == str(segment):
+                self._transport_prefetch_hits += 1
+                return data
         return self._post(
             "/dhan/option-chain",
             {
