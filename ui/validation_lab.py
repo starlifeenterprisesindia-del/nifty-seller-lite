@@ -1,4 +1,4 @@
-"""Phase-5 Validation Lab UI: explicit/on-demand recorded-data analysis only."""
+"""Phase-6 Validation + Robustness Lab UI: explicit/on-demand recorded-data analysis only."""
 from __future__ import annotations
 
 from typing import Any
@@ -35,7 +35,7 @@ def _load_replay(url: str, key: str) -> dict[str, Any] | None:
 
 def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
     st.caption(
-        "🧪 Phase-5 Validation Lab · recorded One Brain decisions vs later NIFTY spot only · "
+        "🧪 Phase-6 Robustness Backtest · recorded One Brain decisions vs later NIFTY spot only · "
         "no broker market-data call · no threshold auto-tuning"
     )
     if not url or not key:
@@ -82,8 +82,8 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         f"flat band ±{report['flat_points']:.1f} pts. Hit-rate denominator excludes FLAT/WAIT/Condor."
     )
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["Walk-forward", "Readiness", "Regime", "Miss review", "WAIT review"]
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+        ["Walk-forward", "Readiness", "Regime", "Action matrix", "Evidence alignment", "Miss review", "WAIT review"]
     )
     with tab1:
         wf = report["walk_forward"]
@@ -114,6 +114,44 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
             st.dataframe(frame, hide_index=True, use_container_width=True)
 
     with tab4:
+        st.markdown("**Directional result by action**")
+        action_frame = pd.DataFrame(report.get("by_action") or [])
+        if action_frame.empty:
+            st.caption("Action-wise scored observations abhi available nahi hain.")
+        else:
+            st.dataframe(action_frame, hide_index=True, use_container_width=True)
+        st.markdown("**Regime × action robustness**")
+        cross = pd.DataFrame(report.get("by_regime_action") or [])
+        if not cross.empty:
+            st.dataframe(cross, hide_index=True, use_container_width=True)
+        st.markdown("**5m / 15m / 30m horizon matrix**")
+        st.dataframe(pd.DataFrame(report.get("horizon_matrix") or []), hide_index=True, use_container_width=True)
+
+    with tab5:
+        align = pd.DataFrame(report.get("evidence_alignment") or [])
+        if align.empty:
+            st.caption("Big Player / option-bias alignment observations abhi available nahi hain.")
+        else:
+            st.dataframe(align, hide_index=True, use_container_width=True)
+        st.caption("Alignment is descriptive only: Big Player + option-bias recorded context vs recorded directional action.")
+        rolling = report.get("rolling_stability") or {}
+        st.markdown("**Rolling stability**")
+        if rolling.get("status") != "READY":
+            st.info(rolling.get("note") or "Insufficient data")
+        else:
+            if rolling.get("hit_rate_spread_pct_points") is not None:
+                st.metric("Rolling hit-rate spread", f"{rolling['hit_rate_spread_pct_points']:.1f} pp")
+            st.dataframe(pd.DataFrame(rolling.get("rows") or []), hide_index=True, use_container_width=True)
+            st.caption(rolling.get("note") or "")
+        mf = report.get("multi_fold_walk_forward") or {}
+        st.markdown("**Multi-fold chronological validation**")
+        if mf.get("status") != "READY":
+            st.info(mf.get("note") or "Insufficient data")
+        else:
+            st.dataframe(pd.DataFrame(mf.get("rows") or []), hide_index=True, use_container_width=True)
+            st.caption(mf.get("note") or "")
+
+    with tab6:
         misses = pd.DataFrame(report["misses"])
         if misses.empty:
             st.success("Selected horizon par recorded directional MISS rows nahi mile.")
@@ -121,7 +159,7 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
             st.dataframe(misses, hide_index=True, use_container_width=True)
         st.caption("MISS = recorded directional action ke opposite NIFTY move; option P&L/fill ka verdict nahi.")
 
-    with tab5:
+    with tab7:
         wait = report["wait_review"]
         x, y, z = st.columns(3)
         x.metric("WAIT outcomes covered", wait.get("covered_waits", 0))
@@ -136,6 +174,6 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         for item in report.get("limitations") or []:
             st.write("• " + str(item))
     st.caption(
-        "Golden Rule: Validation Lab display/research layer hai. Koi One Brain weight, threshold, "
+        "Golden Rule: Robustness Backtest display/research layer hai. Koi One Brain weight, threshold, "
         "strategy selection, execution guard ya broker/API market-data path yahan se change nahi hota."
     )
