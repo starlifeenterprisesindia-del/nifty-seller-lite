@@ -93,6 +93,7 @@ from ui.live_barrier_chart import render_live_barrier_chart
 from ui.advanced_options_intelligence import render_phase2_options_intelligence
 from ui.replay_review import render_phase3_replay
 from ui.strategy_lab import render_phase4_strategy_lab
+from ui.validation_lab import render_phase5_validation_lab
 
 
 @contextmanager
@@ -971,6 +972,9 @@ render_protected_candidates(view_snapshot)
 with persistent_panel("🧪 Strategy Lab — Payoff + Greeks + What-If", "panel_phase4_strategy_lab_open") as panel_open:
     if panel_open:
         render_phase4_strategy_lab(view_snapshot)
+with persistent_panel("📊 Validation Lab — Backtest + Walk-Forward", "panel_phase5_validation_lab_open") as panel_open:
+    if panel_open:
+        render_phase5_validation_lab(view_snapshot, live_server_url, live_server_api_key)
 render_options_live_board(view_snapshot, state_store)
 with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
     if panel_open:

@@ -15,6 +15,7 @@ GLOSSARY = [
     ("IV Δ", "Implied Volatility ka saved-history change. Load IV Δ button par hi 1m/3m/5m compare hota hai; volatility-point change hai, One Brain score ya profit probability nahi."),
     ("Alert Latency", "Alert generate hone aur delivery complete hone ke beech ka time. Diagnostics delivery path ko audit karta hai, trading engine ko nahi."),
     ("Replay / Post-market Review", "Recorded snapshots se baad me dekhta hai ki move signal se pehle/baad aaya aur Big Player confirmation kitni der me hui."),
+    ("Validation Lab", "Recorded One-Brain actions ko 5m/15m/30m NIFTY spot outcomes ke against walk-forward aur regime/readiness buckets me review karta hai; auto tuning nahi karta."),
 ]
 
 
