@@ -513,6 +513,321 @@ def detect_special_candle(candles_3m, levels, volume, timeframe="3M"):
     return current
 
 
+
+def _library_candle_parts(row: pd.Series) -> dict[str, float | bool]:
+    """Small, allocation-light OHLC geometry helper used by the shadow library."""
+    o = float(row["open"])
+    h = float(row["high"])
+    l = float(row["low"])
+    c = float(row["close"])
+    rng = max(h - l, 0.01)
+    body = abs(c - o)
+    upper = max(0.0, h - max(o, c))
+    lower = max(0.0, min(o, c) - l)
+    return {
+        "open": o,
+        "high": h,
+        "low": l,
+        "close": c,
+        "range": rng,
+        "body": body,
+        "upper": upper,
+        "lower": lower,
+        "bull": c > o,
+        "bear": c < o,
+    }
+
+
+def _library_trend(source: pd.DataFrame, end_index: int) -> str:
+    """Context before a pattern; avoids calling a hammer after a rally a hammer."""
+    start = max(0, end_index - 5)
+    prior = source.iloc[start:end_index]
+    if len(prior) < 3:
+        return "FLAT"
+    closes = pd.to_numeric(prior["close"], errors="coerce").dropna()
+    if len(closes) < 3:
+        return "FLAT"
+    ranges = (
+        pd.to_numeric(prior["high"], errors="coerce")
+        - pd.to_numeric(prior["low"], errors="coerce")
+    ).dropna()
+    typical = float(ranges.median()) if not ranges.empty else 1.0
+    delta = float(closes.iloc[-1] - closes.iloc[0])
+    threshold = max(typical * 0.45, 0.01)
+    if delta > threshold:
+        return "UPTREND"
+    if delta < -threshold:
+        return "DOWNTREND"
+    return "FLAT"
+
+
+def _library_matches_at(
+    source: pd.DataFrame,
+    index: int,
+    timeframe: str,
+) -> list[dict[str, object]]:
+    """Detect standard candle geometry at one completed bar.
+
+    This library is intentionally SHADOW/DISPLAY ONLY.  It does not feed the
+    canonical One Brain, alerts, strategy selection or execution gate.
+    """
+    if index < 0 or index >= len(source):
+        return []
+    row = source.iloc[index]
+    cur = _library_candle_parts(row)
+    trend = _library_trend(source, index)
+    timeframe = str(timeframe).upper()
+    ts = str(row.get("timestamp", ""))
+    matches: list[dict[str, object]] = []
+
+    def add(name: str, direction: str, quality: float, note: str) -> None:
+        key = (name, direction)
+        if any((item["name"], item["direction"]) == key for item in matches):
+            return
+        matches.append(
+            {
+                "name": name,
+                "direction": direction,
+                "quality": round(clamp(float(quality), 0.0, 92.0), 1),
+                "context": trend,
+                "timeframe": timeframe,
+                "detected_at": ts,
+                "close": round(float(cur["close"]), 2),
+                "note": note,
+                "mode": "SHADOW ONLY",
+                "decision_weight": 0,
+            }
+        )
+
+    rng = float(cur["range"])
+    body = float(cur["body"])
+    upper = float(cur["upper"])
+    lower = float(cur["lower"])
+    bull = bool(cur["bull"])
+    bear = bool(cur["bear"])
+    body_ratio = body / rng
+    upper_ratio = upper / rng
+    lower_ratio = lower / rng
+
+    # Single-candle families.
+    if body_ratio <= 0.10:
+        if lower_ratio >= 0.60 and upper_ratio <= 0.15:
+            add("DRAGONFLY DOJI", "BULLISH", 62, "Long lower rejection; context confirmation required")
+        elif upper_ratio >= 0.60 and lower_ratio <= 0.15:
+            add("GRAVESTONE DOJI", "BEARISH", 62, "Long upper rejection; context confirmation required")
+        else:
+            add("DOJI", "NEUTRAL", 45, "Indecision candle; next completed candle required")
+
+    if body_ratio >= 0.80 and upper_ratio <= 0.12 and lower_ratio <= 0.12:
+        add(
+            "BULLISH MARUBOZU" if bull else "BEARISH MARUBOZU" if bear else "MARUBOZU",
+            "BULLISH" if bull else "BEARISH" if bear else "NEUTRAL",
+            70,
+            "Large body with very small wicks",
+        )
+
+    lower_rejection = lower >= max(body * 2.0, rng * 0.45) and upper <= max(body * 0.75, rng * 0.18)
+    upper_rejection = upper >= max(body * 2.0, rng * 0.45) and lower <= max(body * 0.75, rng * 0.18)
+    if lower_rejection:
+        if trend == "DOWNTREND":
+            add("HAMMER", "BULLISH", 68, "Lower-wick rejection after decline")
+        elif trend == "UPTREND":
+            add("HANGING MAN", "BEARISH", 58, "Hammer geometry after rally; bearish confirmation needed")
+        else:
+            add("BULLISH PIN BAR", "BULLISH", 56, "Lower-wick rejection in neutral context")
+    if upper_rejection:
+        if trend == "UPTREND":
+            add("SHOOTING STAR", "BEARISH", 68, "Upper-wick rejection after rally")
+        elif trend == "DOWNTREND":
+            add("INVERTED HAMMER", "BULLISH", 58, "Upper-wick rejection after decline; confirmation needed")
+        else:
+            add("BEARISH PIN BAR", "BEARISH", 56, "Upper-wick rejection in neutral context")
+
+    if index >= 1:
+        prev = _library_candle_parts(source.iloc[index - 1])
+        po, pc = float(prev["open"]), float(prev["close"])
+        prev_body = float(prev["body"])
+        prev_rng = float(prev["range"])
+
+        if bool(prev["bear"]) and bull and float(cur["open"]) <= pc and float(cur["close"]) >= po and body >= max(prev_body * 0.90, rng * 0.35):
+            add("BULLISH ENGULFING", "BULLISH", 74, "Bull body engulfs prior bear body")
+        if bool(prev["bull"]) and bear and float(cur["open"]) >= pc and float(cur["close"]) <= po and body >= max(prev_body * 0.90, rng * 0.35):
+            add("BEARISH ENGULFING", "BEARISH", 74, "Bear body engulfs prior bull body")
+
+        midpoint = (po + pc) / 2.0
+        if bool(prev["bear"]) and bull and float(cur["close"]) > midpoint and float(cur["close"]) < po:
+            add("PIERCING LINE", "BULLISH", 64, "Bull recovery closes above prior bear midpoint")
+        if bool(prev["bull"]) and bear and float(cur["close"]) < midpoint and float(cur["close"]) > po:
+            add("DARK CLOUD COVER", "BEARISH", 64, "Bear reversal closes below prior bull midpoint")
+
+        if float(cur["high"]) < float(prev["high"]) and float(cur["low"]) > float(prev["low"]):
+            add("INSIDE BAR", "NEUTRAL", 52, "Compression; breakout direction not confirmed")
+        if float(cur["high"]) > float(prev["high"]) and float(cur["low"]) < float(prev["low"]):
+            direction = "BULLISH" if bull else "BEARISH" if bear else "NEUTRAL"
+            add("OUTSIDE BAR", direction, 60, "Range engulfs prior candle; close sets directional lean")
+
+        tolerance = max(min(prev_rng, rng) * 0.10, 0.01)
+        if abs(float(cur["low"]) - float(prev["low"])) <= tolerance and bool(prev["bear"]) and bull:
+            add("TWEEZER BOTTOM", "BULLISH", 62, "Two-bar low rejection")
+        if abs(float(cur["high"]) - float(prev["high"])) <= tolerance and bool(prev["bull"]) and bear:
+            add("TWEEZER TOP", "BEARISH", 62, "Two-bar high rejection")
+
+    if index >= 2:
+        a = _library_candle_parts(source.iloc[index - 2])
+        b = _library_candle_parts(source.iloc[index - 1])
+        c = cur
+        b_small = float(b["body"]) <= max(float(a["body"]) * 0.45, float(b["range"]) * 0.20)
+        a_mid = (float(a["open"]) + float(a["close"])) / 2.0
+        if bool(a["bear"]) and b_small and bull and float(c["close"]) >= a_mid:
+            add("MORNING STAR", "BULLISH", 76, "Three-candle bullish reversal structure")
+        if bool(a["bull"]) and b_small and bear and float(c["close"]) <= a_mid:
+            add("EVENING STAR", "BEARISH", 76, "Three-candle bearish reversal structure")
+
+        last3 = [_library_candle_parts(source.iloc[j]) for j in range(index - 2, index + 1)]
+        if all(bool(x["bull"]) and float(x["body"]) / float(x["range"]) >= 0.45 for x in last3):
+            higher = float(last3[0]["close"]) < float(last3[1]["close"]) < float(last3[2]["close"])
+            opens_inside = (
+                min(float(last3[0]["open"]), float(last3[0]["close"])) <= float(last3[1]["open"]) <= max(float(last3[0]["open"]), float(last3[0]["close"]))
+                and min(float(last3[1]["open"]), float(last3[1]["close"])) <= float(last3[2]["open"]) <= max(float(last3[1]["open"]), float(last3[1]["close"]))
+            )
+            if higher and opens_inside:
+                add("THREE WHITE SOLDIERS", "BULLISH", 78, "Three strong rising bullish bodies")
+        if all(bool(x["bear"]) and float(x["body"]) / float(x["range"]) >= 0.45 for x in last3):
+            lower_closes = float(last3[0]["close"]) > float(last3[1]["close"]) > float(last3[2]["close"])
+            opens_inside = (
+                min(float(last3[0]["open"]), float(last3[0]["close"])) <= float(last3[1]["open"]) <= max(float(last3[0]["open"]), float(last3[0]["close"]))
+                and min(float(last3[1]["open"]), float(last3[1]["close"])) <= float(last3[2]["open"]) <= max(float(last3[1]["open"]), float(last3[1]["close"]))
+            )
+            if lower_closes and opens_inside:
+                add("THREE BLACK CROWS", "BEARISH", 78, "Three strong falling bearish bodies")
+
+    # User-shared social-media setup, renamed by geometry rather than treating the
+    # label as a textbook pattern: three bullish candles followed by bullish lower-
+    # wick rejection.  It remains shadow-only until live validation proves value.
+    if index >= 3:
+        prior3 = [_library_candle_parts(source.iloc[j]) for j in range(index - 3, index)]
+        three_bull = all(bool(x["bull"]) for x in prior3)
+        rising = float(prior3[0]["close"]) < float(prior3[1]["close"]) < float(prior3[2]["close"])
+        if three_bull and rising and bull and lower_rejection:
+            add(
+                "3-BULL + LOWER-WICK CONTINUATION",
+                "BULLISH",
+                66,
+                "User-shared setup: 3 rising bull candles + lower-wick rejection; same geometry can be Hanging Man after an uptrend, so next-candle confirmation is mandatory",
+            )
+
+    return matches
+
+
+def _library_outcomes(
+    item: dict[str, object],
+    outcome_times: pd.DatetimeIndex,
+    outcome_closes: list[float],
+    timeframe_minutes: int,
+) -> dict[str, object]:
+    """Evaluate 5/15/30m follow-through from prepared completed 1m bars."""
+    result: dict[str, object] = {"5m": "PENDING", "15m": "PENDING", "30m": "PENDING"}
+    if len(outcome_times) == 0 or not outcome_closes:
+        return result
+    try:
+        detected = pd.Timestamp(str(item.get("detected_at") or ""))
+    except Exception:
+        return result
+    completed_at = detected + pd.Timedelta(minutes=timeframe_minutes)
+    baseline = float(item.get("close") or 0.0)
+    if baseline <= 0:
+        return result
+    direction = str(item.get("direction") or "NEUTRAL")
+    for minutes in (5, 15, 30):
+        target = completed_at + pd.Timedelta(minutes=minutes)
+        pos = int(outcome_times.searchsorted(target, side="left"))
+        if pos >= len(outcome_times) or pos >= len(outcome_closes):
+            continue
+        try:
+            close = float(outcome_closes[pos])
+        except Exception:
+            continue
+        move = close - baseline
+        if direction == "BULLISH":
+            verdict = "FOLLOW" if move > 0 else "AGAINST" if move < 0 else "FLAT"
+        elif direction == "BEARISH":
+            verdict = "FOLLOW" if move < 0 else "AGAINST" if move > 0 else "FLAT"
+        else:
+            verdict = "MOVE" if abs(move) > 0 else "FLAT"
+        result[f"{minutes}m"] = f"{verdict} {move:+.1f}pt"
+    return result
+
+
+def build_candle_pattern_library(
+    candles_1m: pd.DataFrame,
+    candles_3m: pd.DataFrame,
+    candles_5m: pd.DataFrame | None = None,
+    candles_15m: pd.DataFrame | None = None,
+    *,
+    history_bars: int = 20,
+    max_recent: int = 18,
+) -> dict[str, object]:
+    """Build a zero-vote candle-pattern shadow library from cached candles only.
+
+    No broker/API request is made here.  The output is stored in snapshot metadata so
+    evidence/replay can inspect it, but it is intentionally excluded from One Brain
+    scoring until live-market validation is complete.
+    """
+    frames: list[tuple[str, int, pd.DataFrame]] = [("3M", 3, candles_3m)]
+    if candles_5m is not None:
+        frames.append(("5M", 5, candles_5m))
+    if candles_15m is not None:
+        frames.append(("15M", 15, candles_15m))
+
+    # Prepare the 1m outcome lookup once.  This keeps the shadow tracker off the
+    # critical path: all detections reuse the same cached arrays.
+    one = _current_session(candles_1m)
+    if one.empty:
+        outcome_times = pd.DatetimeIndex([])
+        outcome_closes: list[float] = []
+    else:
+        outcome_times = pd.DatetimeIndex(pd.to_datetime(one["timestamp"], errors="coerce"))
+        outcome_closes = [float(x) for x in pd.to_numeric(one["close"], errors="coerce").fillna(0.0)]
+
+    current: dict[str, list[dict[str, object]]] = {}
+    recent: list[dict[str, object]] = []
+    for label, minutes, frame in frames:
+        source = _current_session(frame)
+        if source.empty:
+            current[label] = []
+            continue
+        latest = _library_matches_at(source, len(source) - 1, label)
+        current[label] = latest[:6]
+        start = max(0, len(source) - max(8, int(history_bars)))
+        for i in range(start, len(source)):
+            for item in _library_matches_at(source, i, label):
+                enriched = dict(item)
+                enriched["outcomes"] = _library_outcomes(enriched, outcome_times, outcome_closes, minutes)
+                recent.append(enriched)
+
+    recent.sort(key=lambda x: str(x.get("detected_at") or ""), reverse=True)
+    return {
+        "mode": "SHADOW / DISPLAY ONLY",
+        "decision_weight": 0,
+        "extra_api_calls": 0,
+        "current": current,
+        "recent": recent[: max(1, int(max_recent))],
+        "patterns_supported": (
+            "3-Bull + Lower-Wick Continuation",
+            "Bullish/Bearish Engulfing",
+            "Hammer / Hanging Man",
+            "Inverted Hammer / Shooting Star",
+            "Morning / Evening Star",
+            "Three White Soldiers / Three Black Crows",
+            "Piercing Line / Dark Cloud Cover",
+            "Inside / Outside Bar",
+            "Tweezer Top / Bottom",
+            "Marubozu",
+            "Doji / Dragonfly / Gravestone",
+            "Bullish / Bearish Pin Bar",
+        ),
+    }
+
 def calculate_pattern_evidence(
     candles_3m: pd.DataFrame,
     levels: LevelBundle,

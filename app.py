@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+from analysis.candles import aggregate_candles
+from analysis.patterns import build_candle_pattern_library
 from analysis.presentation_safety import (
     install_runtime_presentation_patches,
     prepare_snapshot_for_presentation,
@@ -193,6 +195,89 @@ def render_market_pulse_strip(snapshot) -> None:
     else:
         st.markdown(html, unsafe_allow_html=True)
 
+
+
+def render_candle_pattern_library_shadow(snapshot) -> None:
+    """Render the zero-vote candle library recorded in snapshot metadata."""
+    st.caption(
+        "🕯️ SHADOW / DISPLAY ONLY · One Brain weight 0 · Extra API calls 0 · "
+        "On-demand + cached; panel band ho to core pipeline par zero work. "
+        "Live validation ke baad hi kisi pattern ko score/decision me weight milega."
+    )
+    one = getattr(snapshot, "candles_1m", None)
+    three = getattr(snapshot, "candles_3m", None)
+    fifteen = getattr(snapshot, "candles_15m", None)
+    if one is None or three is None or fifteen is None:
+        st.info("Candle data unavailable.")
+        return
+
+    def _last_stamp(frame) -> str:
+        try:
+            return str(frame.iloc[-1]["timestamp"]) if frame is not None and not frame.empty else ""
+        except Exception:
+            return ""
+
+    cache_key = (_last_stamp(one), _last_stamp(three), _last_stamp(fifteen), len(one), len(three), len(fifteen))
+    if st.session_state.get("candle_library_cache_key") == cache_key:
+        library = st.session_state.get("candle_library_cache") or {}
+    else:
+        five = aggregate_candles(one.drop(columns=["is_complete"], errors="ignore"), 5)
+        library = build_candle_pattern_library(
+            one, three, candles_5m=five, candles_15m=fifteen
+        )
+        st.session_state["candle_library_cache_key"] = cache_key
+        st.session_state["candle_library_cache"] = library
+
+    current = library.get("current") or {}
+    cols = st.columns(3)
+    for col, timeframe in zip(cols, ("3M", "5M", "15M")):
+        items = list(current.get(timeframe) or [])
+        if not items:
+            col.metric(f"{timeframe} Pattern", "NONE")
+            col.caption("Latest completed candle par qualified shadow pattern nahi.")
+            continue
+        top = max(items, key=lambda item: float(item.get("quality") or 0.0))
+        col.metric(
+            f"{timeframe} Pattern",
+            str(top.get("name") or "PATTERN"),
+            f"{str(top.get('direction') or 'NEUTRAL')} · Q {float(top.get('quality') or 0):.0f}/100",
+        )
+        note = str(top.get("note") or "")
+        context = str(top.get("context") or "")
+        if note or context:
+            col.caption(" · ".join(part for part in (context, note) if part))
+
+    recent = list(library.get("recent") or [])
+    if recent:
+        rows = []
+        for item in recent:
+            outcomes = item.get("outcomes") or {}
+            detected = str(item.get("detected_at") or "")
+            # Keep the table compact for laptop/mobile review.
+            rows.append(
+                {
+                    "Time": detected[11:16] if len(detected) >= 16 else detected,
+                    "TF": item.get("timeframe") or "",
+                    "Pattern": item.get("name") or "",
+                    "Dir": item.get("direction") or "",
+                    "Quality": f"{float(item.get('quality') or 0):.0f}/100",
+                    "Context": item.get("context") or "",
+                    "+5m": outcomes.get("5m", "PENDING"),
+                    "+15m": outcomes.get("15m", "PENDING"),
+                    "+30m": outcomes.get("30m", "PENDING"),
+                }
+            )
+        st.markdown("**Recent shadow detections + follow-through**")
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("Current session me abhi koi library pattern record nahi hua.")
+
+    with st.expander("Supported candle patterns", expanded=False):
+        st.write(" · ".join(str(x) for x in (library.get("patterns_supported") or ())))
+        st.caption(
+            "Social-media pattern names ko textbook truth nahi maana gaya. "
+            "3-bull + lower-wick setup ko geometry-based continuation setup ke roop me track kiya gaya hai."
+        )
 
 def render_compact_strategy_summary(snapshot) -> None:
     """Show one protected candidate summary without the full ranking table."""
@@ -1116,6 +1201,10 @@ with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
 # its state across 15/30s reruns and makes the default live page short and stable.
 with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") as more_open:
     if more_open:
+        with persistent_panel("🕯️ Candle Pattern Library — Shadow", "panel_candle_library_shadow_open") as panel_open:
+            if panel_open:
+                render_candle_pattern_library_shadow(view_snapshot)
+
         with persistent_panel("🎯 AI Move Tracker", "panel_ai_move_tracker_open") as panel_open:
             if panel_open:
                 render_ai_move_tracker(view_snapshot, live_server_url, live_server_api_key)
