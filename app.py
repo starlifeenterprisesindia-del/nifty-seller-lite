@@ -1300,6 +1300,30 @@ with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
                     live_server_api_key=live_server_api_key,
                 )
 
+
+# PRE-LIVE MAIN ROUTE TOOLS (v2.64.6): these five high-use live panels stay
+# directly accessible on the main page.  Their calculations/renderers are unchanged;
+# only the navigation level moved out of More Tools & Advanced.
+with persistent_panel("🛡️ Strategy & Strike Detail", "panel_strategy_detail_open") as panel_open:
+    if panel_open:
+        render_protected_candidates(view_snapshot)
+
+with persistent_panel("📈 Options Live Board", "panel_options_live_board_open") as panel_open:
+    if panel_open:
+        render_options_live_board(view_snapshot, state_store)
+
+with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
+    if panel_open:
+        render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
+
+with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
+    if panel_open:
+        render_spot_premium_calculator(view_snapshot, state_store)
+
+with persistent_panel("Compact Evidence — Diagnostic", "panel_compact_evidence_open") as panel_open:
+    if panel_open:
+        render_evidence_matrix(view_snapshot, previous_view_snapshot)
+
 # Everything below is optional analysis/review.  The outer persistent toggle keeps
 # its state across 15/30s reruns and makes the default live page short and stable.
 with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") as more_open:
@@ -1311,10 +1335,6 @@ with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") a
         with persistent_panel("🎯 AI Move Tracker", "panel_ai_move_tracker_open") as panel_open:
             if panel_open:
                 render_ai_move_tracker(view_snapshot, live_server_url, live_server_api_key)
-
-        with persistent_panel("🛡️ Strategy & Strike Detail", "panel_strategy_detail_open") as panel_open:
-            if panel_open:
-                render_protected_candidates(view_snapshot)
 
         with persistent_panel("🎞️ One Brain Replay + Review", "panel_phase3_replay_open") as panel_open:
             if panel_open:
@@ -1331,14 +1351,6 @@ with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") a
         with persistent_panel("📊 Robustness Backtest — Actions + Walk-Forward", "panel_phase5_validation_lab_open") as panel_open:
             if panel_open:
                 render_phase5_validation_lab(view_snapshot, live_server_url, live_server_api_key)
-
-        with persistent_panel("📈 Options Live Board", "panel_options_live_board_open") as panel_open:
-            if panel_open:
-                render_options_live_board(view_snapshot, state_store)
-
-        with persistent_panel("🧭 15–30 Min + Timeframe Detail", "panel_timeframe_open") as panel_open:
-            if panel_open:
-                render_timeframe_outlook(view_snapshot, st.session_state.get("fast_live_impulse"))
 
         with persistent_panel(
             "🎯 RSI Top–Bottom Setup — Alag Strategy",
@@ -1359,17 +1371,6 @@ with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") a
                     view_snapshot.created_at.date().isoformat(),
                     shadow_journal_store,
                 )
-
-        with persistent_panel("🧮 Spot-to-Premium Calculator", "panel_spot_premium_open") as panel_open:
-            if panel_open:
-                render_spot_premium_calculator(view_snapshot, state_store)
-
-        with persistent_panel(
-            "Compact Evidence — Diagnostic",
-            "panel_compact_evidence_open",
-        ) as panel_open:
-            if panel_open:
-                render_evidence_matrix(view_snapshot, previous_view_snapshot)
 
         with persistent_panel(
             "Advanced Options Evidence",
