@@ -58,6 +58,46 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def fetch_railway_health(
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = 1.5,
+) -> dict[str, Any]:
+    """Lightweight Railway readiness probe used only during cold start.
+
+    This endpoint performs no market-data fetch.  It prevents Streamlit from
+    launching a full snapshot while Railway is between deployments.
+    """
+    root = str(base_url or "").strip().rstrip("/")
+    key = str(api_key or "").strip()
+    if not root or not key:
+        raise ValueError("Railway live URL or API key is missing")
+    try:
+        response = _session_for(root).get(
+            f"{root}/ready",
+            headers={"X-Live-Key": key, "Accept": "application/json"},
+            timeout=max(0.5, float(timeout_seconds)),
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Railway readiness unavailable: {exc}") from exc
+    if response.status_code == 401:
+        raise RuntimeError("Railway LIVE_API_KEY match nahi hui")
+    if response.status_code == 503:
+        return {"ready": False}
+    if response.status_code >= 400:
+        raise RuntimeError(f"Railway readiness HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Railway readiness returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        return {"ready": False}
+    payload = dict(payload)
+    payload["ready"] = bool(payload.get("ready", True))
+    return payload
+
+
 def fetch_railway_live_state(
     base_url: str,
     api_key: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import gc
+import threading
 from dataclasses import replace
 from contextlib import contextmanager
 from html import escape
@@ -45,7 +46,7 @@ from services.live_monitor import (
     fetch_fast_quotes,
     monitor_timestamp,
 )
-from services.railway_live_client import RailwayDhanClient, fetch_railway_live_state
+from services.railway_live_client import RailwayDhanClient, fetch_railway_live_state, fetch_railway_health
 from ui.day_memory import (
     render_day_memory,
     render_evidence_download,
@@ -354,6 +355,26 @@ install_runtime_presentation_patches()
 
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
 
+
+@st.cache_resource(show_spinner=False)
+def _process_runtime_handoff() -> dict[str, object]:
+    """Keep the last successful snapshot across ordinary Streamlit code reruns.
+
+    Community Cloud usually hot-reloads Python edits without replacing the whole
+    process.  A process-level handoff lets a new session render immediately from the
+    last authoritative snapshot instead of rebuilding the full Railway/Dhan pipeline
+    just because UI code changed.  A real process replacement simply starts empty.
+    """
+    return {"snapshot": None, "previous_snapshot": None}
+
+
+_RUNTIME_HANDOFF = _process_runtime_handoff()
+if "snapshot" not in st.session_state and _RUNTIME_HANDOFF.get("snapshot") is not None:
+    st.session_state.snapshot = _RUNTIME_HANDOFF["snapshot"]
+    if _RUNTIME_HANDOFF.get("previous_snapshot") is not None:
+        st.session_state.previous_snapshot = _RUNTIME_HANDOFF["previous_snapshot"]
+    st.session_state["snapshot_restored_from_process_cache"] = True
+
 # Deployment safety: a code/version change must never inherit an already-running
 # auto-refresh loop from the previous build. The user can re-enable Auto Snapshot
 # after the new version has rendered once.
@@ -456,9 +477,27 @@ discipline_store = DisciplineStore(Path(CONFIG.discipline_state_path))
 shadow_journal_store = ShadowJournalStore(
     Path(CONFIG.shadow_journal_path), cloud_backend=shadow_cloud_journal
 )
-if not st.session_state.get("shadow_journal_cloud_loaded", False):
-    shadow_journal_store.load(refresh_cloud=True)
-    st.session_state["shadow_journal_cloud_loaded"] = True
+if not st.session_state.get("shadow_journal_local_loaded", False):
+    # Cold-start rule: never block first paint on GitHub/network history.  Local
+    # journal is enough to render; cloud merge happens in a daemon after the UI
+    # process is alive.
+    st.session_state.shadow_entries_cache = shadow_journal_store.load(refresh_cloud=False)
+    st.session_state["shadow_journal_local_loaded"] = True
+
+if not st.session_state.get("shadow_journal_cloud_sync_started", False):
+    def _refresh_shadow_journal_cloud() -> None:
+        try:
+            shadow_journal_store.load(refresh_cloud=True)
+        except Exception:
+            # Cloud history is advisory/recovery only; startup must remain usable.
+            return
+
+    threading.Thread(
+        target=_refresh_shadow_journal_cloud,
+        daemon=True,
+        name="shadow-journal-cloud-refresh",
+    ).start()
+    st.session_state["shadow_journal_cloud_sync_started"] = True
 news_service = MarketNewsService(Path(CONFIG.news_cache_path))
 
 
@@ -806,6 +845,41 @@ if not credentials_ready:
 snapshot_built_now = False
 snapshot_pipeline_started = time.perf_counter()
 
+# Deployment/startup gate: when Railway is being replaced by the same GitHub commit,
+# do not launch the expensive snapshot pipeline against a backend that is still
+# warming.  A tiny /health probe contains no Dhan market-data request.  The fragment
+# retries independently and promotes to a full app rerun as soon as Railway is ready.
+if "snapshot" not in st.session_state and railway_ready:
+    startup_probe_interval = 3
+
+    @st.fragment(run_every=startup_probe_interval)
+    def _railway_startup_gate() -> None:
+        try:
+            health = fetch_railway_health(
+                live_server_url,
+                live_server_api_key,
+                timeout_seconds=1.5,
+            )
+            if bool(health.get("ready")):
+                st.session_state["railway_startup_ready"] = True
+                st.success("Railway backend ready — market workspace loading…")
+                st.rerun()
+            else:
+                st.info(
+                    "Railway backend warm-up chal raha hai. App automatically retry "
+                    "karegi; Fetch button baar-baar dabane ki zarurat nahi."
+                )
+        except Exception as exc:
+            st.info(
+                "Railway backend reconnect ho raha hai — automatic retry active. "
+                f"({type(exc).__name__})"
+            )
+
+    if not st.session_state.get("railway_startup_ready", False):
+        _railway_startup_gate()
+        st.caption("Cold-start protection: heavy snapshot tabhi build hoga jab backend ready ho.")
+        st.stop()
+
 if "snapshot" not in st.session_state or refresh:
     try:
         with st.spinner(
@@ -852,6 +926,8 @@ if "snapshot" not in st.session_state or refresh:
                 max(0.0, snapshot_completed_at - snapshot_fetch_started_at), 3
             )
             st.session_state.pop("auto_snapshot_reserved_at", None)
+            _RUNTIME_HANDOFF["snapshot"] = new_snapshot
+            _RUNTIME_HANDOFF["previous_snapshot"] = st.session_state.get("previous_snapshot")
             snapshot_built_now = True
     except Exception as exc:
         st.session_state.pop("auto_snapshot_reserved_at", None)

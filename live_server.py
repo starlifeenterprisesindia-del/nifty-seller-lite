@@ -423,6 +423,27 @@ def root() -> dict[str, str]:
     return {"service": "nifty-seller-live", "message": "Railway live server is running"}
 
 
+@app.get("/ready")
+def ready() -> dict[str, Any]:
+    """Deployment readiness, intentionally independent of live-market freshness.
+
+    Railway should switch traffic only after credentials/gateway initialization is
+    usable.  Market-closed periods are still READY; live tick freshness is exposed by
+    /health and /live and must not block an evening deployment.
+    """
+    try:
+        gateway_status = _gateway().status()
+    except HTTPException as exc:
+        raise HTTPException(status_code=503, detail=str(exc.detail)) from exc
+    if isinstance(gateway_status, dict) and gateway_status.get("configured") is False:
+        raise HTTPException(status_code=503, detail="Dhan gateway not configured")
+    return {
+        "ready": True,
+        "service": "nifty-seller-live",
+        "gateway_configured": True,
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     payload = STATE.health()
