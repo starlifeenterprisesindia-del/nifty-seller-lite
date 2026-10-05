@@ -200,7 +200,8 @@ class SnapshotService:
         if not quote:
             return None
         raw = (
-            quote.get("last_trade_time")
+            quote.get("feed_captured_at")
+            or quote.get("last_trade_time")
             or quote.get("last_traded_time")
             or quote.get("ltt")
         )
@@ -217,6 +218,63 @@ class SnapshotService:
         if delta < -300:
             return None
         return max(0.0, delta)
+
+    def _overlay_fresh_nifty_websocket_quote(
+        self,
+        quote: dict[str, Any] | None,
+        now: datetime,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Prefer the already-bundled fresh NIFTY WebSocket tick for spot LTP.
+
+        The grouped REST quote remains the structural quote (OHLC etc.).  Only the
+        live NIFTY LTP/freshness timestamp is overlaid when Railway's existing Dhan
+        WebSocket has a recent tick.  No extra API/network request is made here.
+        """
+        reader = getattr(self.client, "snapshot_live_state", None)
+        if not callable(reader):
+            return quote, False
+        try:
+            state = reader() or {}
+        except Exception:
+            return quote, False
+        if not isinstance(state, dict) or not bool(state.get("connected")):
+            return quote, False
+        try:
+            state_age = float(state.get("last_tick_age_seconds"))
+        except (TypeError, ValueError):
+            return quote, False
+        if state_age < 0 or state_age > float(CONFIG.quote_max_age_seconds):
+            return quote, False
+        nifty = state.get("nifty") or {}
+        if not isinstance(nifty, dict):
+            return quote, False
+        ltp = self._positive_number(nifty.get("ltp"))
+        captured_at = nifty.get("captured_at")
+        captured = self._parse_quote_timestamp(captured_at, now)
+        if ltp is None or captured is None:
+            return quote, False
+        current = pd.Timestamp(now)
+        if current.tzinfo is None:
+            current = current.tz_localize(IST_TIMEZONE)
+        else:
+            current = current.tz_convert(IST_TIMEZONE)
+        captured_age = max(0.0, (current - captured).total_seconds())
+        if captured_age > float(CONFIG.quote_max_age_seconds):
+            return quote, False
+
+        merged = dict(quote or {})
+        if "last_price" in merged:
+            merged["rest_last_price"] = merged.get("last_price")
+        if merged.get("last_trade_time") not in (None, ""):
+            merged["rest_last_trade_time"] = merged.get("last_trade_time")
+        merged["last_price"] = float(ltp)
+        merged["feed_captured_at"] = str(captured_at)
+        merged["websocket_tick_age_seconds"] = round(max(state_age, captured_age), 3)
+        merged["quote_source"] = "DHAN_WEBSOCKET_LIVE"
+        exchange_ltt = nifty.get("last_trade_time")
+        if exchange_ltt not in (None, ""):
+            merged["websocket_last_trade_time"] = exchange_ltt
+        return merged, True
 
     @staticmethod
     def _completed_only(frame: pd.DataFrame) -> pd.DataFrame:
@@ -538,6 +596,9 @@ class SnapshotService:
             CONFIG.nifty.exchange_segment,
             CONFIG.nifty.security_id,
         )
+        nifty_quote, nifty_live_overlay = self._overlay_fresh_nifty_websocket_quote(
+            nifty_quote, current
+        )
         # Dhan's grouped quote endpoint can legitimately omit IDX_I/13 outside the
         # continuous cash session even while historical candles remain available.
         # Do not blank the whole app after market close.  We defer the hard failure
@@ -718,11 +779,15 @@ class SnapshotService:
             message=(
                 "NIFTY grouped quote missing; last completed 1m candle used as reference-only fallback"
                 if nifty_quote_fallback
+                else "Fresh NIFTY WebSocket tick over grouped quote; zero extra Dhan calls"
+                if nifty_live_overlay
                 else "One grouped market-quote request"
             ),
             source=(
                 "DhanHQ completed NIFTY 1m candles"
                 if nifty_quote_fallback
+                else "DhanHQ WebSocket via existing Railway bundle"
+                if nifty_live_overlay
                 else "DhanHQ"
             ),
             use_state=(

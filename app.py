@@ -816,6 +816,10 @@ if "snapshot" not in st.session_state or refresh:
                 news_service=news_service,
             )
             previous_snapshot = st.session_state.get("snapshot")
+            # Auto-snapshot cadence is measured from fetch START, not completion.
+            # Otherwise an 8s build + 15s timer silently becomes ~23s between fresh
+            # quotes.  This preserves the selected cadence without overlapping builds.
+            snapshot_fetch_started_at = time.time()
             new_snapshot = service.build(risk_profile=risk_profile)
             if (
                 previous_snapshot is not None
@@ -824,10 +828,12 @@ if "snapshot" not in st.session_state or refresh:
             ):
                 st.session_state.previous_snapshot = previous_snapshot
             st.session_state.snapshot = new_snapshot
-            st.session_state.last_snapshot_fetch_ts = datetime.now().timestamp()
+            st.session_state.last_snapshot_fetch_ts = snapshot_fetch_started_at
+            st.session_state.last_snapshot_completed_ts = time.time()
             st.session_state.pop("auto_snapshot_reserved_at", None)
             snapshot_built_now = True
     except Exception as exc:
+        st.session_state.pop("auto_snapshot_reserved_at", None)
         st.error(
             f"Snapshot failed safely: {exc}. Railway restart/health check karo; "
             "Fetch button baar-baar na dabayein."

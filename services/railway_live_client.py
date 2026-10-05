@@ -119,6 +119,10 @@ class RailwayDhanClient:
         self._prefetched_intraday: dict[str, Any] = {}
         self._prefetched_expiry: tuple[int, str, list[str]] | None = None
         self._prefetched_option_chain: tuple[str, int, str, Any] | None = None
+        # Same Railway response also carries the latest NIFTY WebSocket tick.
+        # It is used only to make the full snapshot spot price fresh; no extra
+        # Dhan or Railway request is introduced.
+        self._prefetched_live_state: dict[str, Any] | None = None
         self._transport_http_calls = 0
         self._transport_bundle_calls = 0
         self._transport_prefetch_hits = 0
@@ -233,6 +237,9 @@ class RailwayDhanClient:
         self._transport_bundle_errors = {
             str(k): str(v)[:120] for k, v in (data.get("errors") or {}).items()
         }
+        live_state = data.get("live_state")
+        if isinstance(live_state, dict):
+            self._prefetched_live_state = dict(live_state)
         quote = data.get("market_quote")
         if isinstance(quote, dict):
             self._prefetched_market_quote = (self._quote_signature(instruments), quote)
@@ -251,6 +258,14 @@ class RailwayDhanClient:
             )
         return data
 
+    def snapshot_live_state(self) -> dict[str, Any]:
+        """Return the WebSocket state bundled with this snapshot request.
+
+        This is intentionally a memory read only.  SnapshotService can use the
+        fresh NIFTY tick without making another HTTP/Dhan request.
+        """
+        return dict(self._prefetched_live_state or {})
+
     def transport_status(self) -> dict[str, Any]:
         saved = max(0, self._transport_prefetch_hits - self._transport_bundle_calls)
         return {
@@ -261,6 +276,7 @@ class RailwayDhanClient:
             "estimated_round_trips_saved": int(saved),
             "bundle_seconds": round(float(self._transport_bundle_seconds), 4),
             "bundle_errors": dict(self._transport_bundle_errors),
+            "live_tick_bundled": bool(self._prefetched_live_state),
         }
 
     def market_quote(self, instruments: dict[str, list[int]]) -> dict[str, Any]:

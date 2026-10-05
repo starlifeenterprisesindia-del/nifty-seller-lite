@@ -559,6 +559,10 @@ def dhan_snapshot_bundle(
             "rate_limit_cooldown_seconds", "option_family_shared_limiter",
         }
     }
+    # Sample this at the END of the bundle so the NIFTY spot used by the full
+    # snapshot is not the older REST quote fetched before candles/option-chain.
+    # This is the already-running Dhan WebSocket state: zero extra upstream calls.
+    result["live_state"] = STATE.public_state()
     return {"ok": True, "data": result}
 
 
