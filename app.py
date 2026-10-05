@@ -353,6 +353,19 @@ except ImportError:
 install_runtime_presentation_patches()
 
 st.set_page_config(page_title=CONFIG.app_name, page_icon="📈", layout="wide")
+
+# Deployment safety: a code/version change must never inherit an already-running
+# auto-refresh loop from the previous build. The user can re-enable Auto Snapshot
+# after the new version has rendered once.
+if st.session_state.get("_loaded_app_version") != CONFIG.version:
+    st.session_state["_loaded_app_version"] = CONFIG.version
+    st.session_state["auto_snapshot_enabled"] = False
+    for _key in (
+        "auto_snapshot_due",
+        "auto_snapshot_reserved_at",
+        "auto_snapshot_started_at",
+    ):
+        st.session_state.pop(_key, None)
 st.markdown(
     """
     <style>
@@ -828,8 +841,16 @@ if "snapshot" not in st.session_state or refresh:
             ):
                 st.session_state.previous_snapshot = previous_snapshot
             st.session_state.snapshot = new_snapshot
-            st.session_state.last_snapshot_fetch_ts = snapshot_fetch_started_at
-            st.session_state.last_snapshot_completed_ts = time.time()
+            snapshot_completed_at = time.time()
+            # Stability hotfix: cadence/cooldown is anchored to successful completion.
+            # Anchoring it to fetch START can make a slow build immediately overdue and
+            # trigger a rerun/build loop before the page gets a chance to render.
+            st.session_state.last_snapshot_started_ts = snapshot_fetch_started_at
+            st.session_state.last_snapshot_fetch_ts = snapshot_completed_at
+            st.session_state.last_snapshot_completed_ts = snapshot_completed_at
+            st.session_state.last_snapshot_build_seconds = round(
+                max(0.0, snapshot_completed_at - snapshot_fetch_started_at), 3
+            )
             st.session_state.pop("auto_snapshot_reserved_at", None)
             snapshot_built_now = True
     except Exception as exc:
