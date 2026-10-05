@@ -95,7 +95,7 @@ def render_phase4_strategy_lab(snapshot: Any) -> None:
         curve = item.get("curve") or []
         if curve:
             chart = pd.DataFrame(curve).set_index("spot")[["pnl_points"]]
-            st.line_chart(chart, use_container_width=True, height=360)
+            st.line_chart(chart, width="stretch", height=360)
             st.caption(
                 "Expiry payoff points. Protected plan ke quoted entry assumptions use hote hain; "
                 "brokerage, slippage, taxes aur execution drift included nahi hain."
@@ -106,7 +106,7 @@ def render_phase4_strategy_lab(snapshot: Any) -> None:
                 "position": "Position", "side": "Side", "strike": "Strike",
                 "entry_price": "Entry px", "liquidity": "Liquidity",
             })
-            st.dataframe(legs, use_container_width=True, hide_index=True)
+            st.dataframe(legs, width="stretch", hide_index=True)
 
     with tab_greeks:
         g1, g2, g3, g4, g5 = st.columns(5)
@@ -117,7 +117,7 @@ def render_phase4_strategy_lab(snapshot: Any) -> None:
         g5.metric("Greek coverage", _fmt(greeks.get("coverage_pct"), 0, suffix="%"))
         greek_legs = pd.DataFrame(greeks.get("legs") or [])
         if not greek_legs.empty:
-            st.dataframe(greek_legs, use_container_width=True, hide_index=True)
+            st.dataframe(greek_legs, width="stretch", hide_index=True)
         st.caption("Combined Greeks current option-chain snapshot se read-only sum hain; execution signal nahi.")
 
     with tab_whatif:
@@ -153,12 +153,12 @@ def render_phase4_strategy_lab(snapshot: Any) -> None:
         st.caption(scenario.get("note") or "")
         rows = pd.DataFrame(scenario.get("legs") or [])
         if not rows.empty:
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.dataframe(rows, width="stretch", hide_index=True)
 
     with tab_compare:
         table = _comparison_frame(payload)
         if not table.empty:
-            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.dataframe(table, width="stretch", hide_index=True)
         st.caption(
             "Comparison One Brain ka action/ranking replace nahi karta. Ye payoff, risk, Greeks aur liquidity ko side-by-side dikhata hai."
         )
@@ -238,7 +238,7 @@ def render_phase7_strategy_repair(snapshot: Any) -> None:
                 "Max loss / lot ₹": candidate.get("max_loss_rupees_per_lot"),
                 "Liquidity floor": candidate.get("liquidity_floor"),
                 "Breakevens": _be_text(candidate.get("breakevens") or []),
-            }]), use_container_width=True, hide_index=True)
+            }]), width="stretch", hide_index=True)
 
     with tabs[2]:
         before = payload.get("current_greeks") or {}
@@ -250,7 +250,7 @@ def render_phase7_strategy_repair(snapshot: Any) -> None:
                 "Current open position": before.get(greek),
                 "Fresh replacement candidate": after.get(greek),
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         st.caption(
             f"Current Greek coverage {_fmt(before.get('coverage_pct'),0,suffix='%')} · "
             f"candidate coverage {_fmt(after.get('coverage_pct'),0,suffix='%')}. "
@@ -265,13 +265,13 @@ def render_phase7_strategy_repair(snapshot: Any) -> None:
                 "side":"Side", "current_short":"Current short", "candidate_short":"Candidate short",
                 "shift_points":"Shift pts", "outward":"Farther OTM?",
             })
-            st.dataframe(changes, use_container_width=True, hide_index=True)
+            st.dataframe(changes, width="stretch", hide_index=True)
         else:
             st.info("Same-strategy outward roll candidate abhi available nahi hai.")
         hedge_rows = pd.DataFrame((payload.get("hedge_execution") or {}).get("rows") or [])
         if not hedge_rows.empty:
             st.write("**Current hedge execution quality**")
-            st.dataframe(hedge_rows, use_container_width=True, hide_index=True)
+            st.dataframe(hedge_rows, width="stretch", hide_index=True)
 
     st.info(
         "Repair Golden Rule: existing SL/time/spot exit trigger ko repair override nahi karega. "

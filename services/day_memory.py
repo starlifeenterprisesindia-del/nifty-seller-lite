@@ -438,6 +438,167 @@ class DayMemory:
         self.prune_archives()
         return True
 
+    def record_compact(self, now, body):
+        """Persist one app-built compact market sample with zero broker calls.
+
+        The Streamlit app already paid the cost of building the authoritative
+        snapshot.  Reusing that compact payload prevents the Railway recorder from
+        fetching the same quote/candle/option inputs a second time while the app is
+        active.  The background observer remains a fallback when the app is absent.
+        """
+        if not isinstance(body, dict):
+            return False
+        try:
+            at = datetime.fromisoformat(str(body.get("at") or ""))
+        except (TypeError, ValueError):
+            return False
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=IST)
+        at = at.astimezone(IST)
+        if not 0 <= (now.astimezone(IST) - at).total_seconds() <= 180:
+            return False
+        if not recording_time(at):
+            return False
+        expiry = str(body.get("expiry") or "")
+        try:
+            date.fromisoformat(expiry)
+        except (TypeError, ValueError):
+            return False
+        feeds = body.get("feeds") if isinstance(body.get("feeds"), dict) else {}
+        if any(str((feeds.get(name) or {}).get("use_state") or "").upper() != "LIVE" for name in ("quotes", "candles")):
+            return False
+        spot = body.get("spot")
+        try:
+            spot = float(spot)
+        except (TypeError, ValueError):
+            return False
+        stamp = at.isoformat()
+        slot = at.replace(second=0, microsecond=0).isoformat()
+        clean_body = clean(body)
+        with self.connect() as db:
+            self._roll(db, at.date().isoformat(), expiry)
+            options = list(clean_body.get("options") or [])
+            if options and not db.execute("SELECT 1 FROM meta WHERE key='cycle_price_strikes'").fetchone():
+                strikes = sorted({row.get("strike") for row in options if row.get("strike") is not None})[:64]
+                db.execute(
+                    "INSERT INTO meta VALUES ('cycle_price_strikes',?)",
+                    (encode({"expiry": expiry, "strikes": strikes}),),
+                )
+            # Keep one authoritative row per minute.  Later app snapshots in the
+            # same minute replace the earlier row instead of creating duplicates.
+            db.execute("INSERT OR REPLACE INTO samples VALUES (?,?)", (slot, encode(clean_body)))
+            db.execute("DELETE FROM meta WHERE key='last_error'")
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('app_sample_at',?)", (stamp,))
+            self._event(db, stamp, "DATA", "feed", {"status": "APP-FED RECORDING"})
+
+            # Store only the newest already-completed candles carried in the compact
+            # payload.  Repeated app snapshots naturally dedupe on (instrument, at).
+            latest = clean_body.get("latest_candles") if isinstance(clean_body.get("latest_candles"), dict) else {}
+            for label, row in latest.items():
+                if not isinstance(row, dict) or not row.get("timestamp"):
+                    continue
+                instrument = "NIFTY" if str(label).startswith("NIFTY_1M") else (
+                    "FUTURES:" + str((clean_body.get("future_contract") or {}).get("security_id") or "")
+                    if str(label).startswith("FUTURES_1M") else None
+                )
+                if not instrument:
+                    continue
+                raw_at = str(row.get("timestamp"))
+                try:
+                    candle_at = datetime.fromisoformat(raw_at)
+                except ValueError:
+                    continue
+                if candle_at.tzinfo is None:
+                    candle_at = candle_at.replace(tzinfo=IST)
+                candle_at = candle_at.astimezone(IST)
+                if candle_at.date() != at.date():
+                    continue
+                fields = {k: row.get(k) for k in ("open", "high", "low", "close", "volume", "open_interest")}
+                db.execute(
+                    "INSERT OR REPLACE INTO candles VALUES (?,?,?)",
+                    (instrument, candle_at.isoformat(), encode(fields)),
+                )
+
+            barriers = clean_body.get("barriers") if isinstance(clean_body.get("barriers"), dict) else {}
+            active_zone_ids = set()
+            for name in ("nearest_resistance", "next_resistance", "nearest_support", "next_support"):
+                level = barriers.get(name)
+                if not isinstance(level, dict):
+                    continue
+                try:
+                    lo, hi = float(level.get("lower")), float(level.get("upper"))
+                except (TypeError, ValueError):
+                    continue
+                side = str(level.get("side") or ("RESISTANCE" if "resistance" in name else "SUPPORT"))
+                identity = f"{side}:{lo}:{hi}"
+                active_zone_ids.add(identity)
+                existing = db.execute("SELECT body FROM zones WHERE identity=?", (identity,)).fetchone()
+                if existing is None:
+                    db.execute(
+                        "INSERT INTO zones VALUES (?,?)",
+                        (identity, encode({"lower": lo, "upper": hi, "side": side, "first_seen": stamp})),
+                    )
+                status = "ZONE KE ANDAR" if lo <= spot <= hi else "ZONE KE UPAR" if spot > hi else "ZONE KE NEECHE"
+                self._event(db, stamp, "BARRIER", identity, {"zone": f"{lo:,.0f}–{hi:,.0f}", "side": side, "status": status})
+
+            # The app already carries the newest completed 3m candle. Reuse it to
+            # preserve barrier break/rejection/retest history without rebuilding a
+            # market snapshot or making any broker request.
+            candle_3m = latest.get("NIFTY_3M") if isinstance(latest, dict) else None
+            if isinstance(candle_3m, dict) and candle_3m.get("timestamp"):
+                try:
+                    candle_at = datetime.fromisoformat(str(candle_3m.get("timestamp")))
+                    if candle_at.tzinfo is None:
+                        candle_at = candle_at.replace(tzinfo=IST)
+                    candle_at = candle_at.astimezone(IST)
+                except (TypeError, ValueError):
+                    candle_at = None
+                if candle_at is not None and candle_at.date() == at.date():
+                    for identity, raw in db.execute("SELECT identity,body FROM zones"):
+                        try:
+                            level = json.loads(raw)
+                            evidence_start = datetime.fromisoformat(
+                                str(level.get("recovery_after") or level.get("first_seen"))
+                            )
+                            if evidence_start.tzinfo is None:
+                                evidence_start = evidence_start.replace(tzinfo=IST)
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            continue
+                        if candle_at < evidence_start.astimezone(IST) or candle_at.isoformat() == level.get("last_candle"):
+                            continue
+                        try:
+                            reaction, broken = candle_reaction(level, candle_3m)
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                        level.update(broken=broken, last_candle=candle_at.isoformat())
+                        db.execute("UPDATE zones SET body=? WHERE identity=?", (encode(level), identity))
+                        if reaction in {
+                            "BREAK — 3m CLOSE", "BREAK FAILED — 3m CLOSE",
+                            "REJECTION — 3m CLOSE", "RETEST HOLD — 3m CLOSE",
+                        }:
+                            self._event(
+                                db, stamp, "3m REACTION", identity,
+                                {
+                                    "zone": f"{float(level['lower']):,.0f}–{float(level['upper']):,.0f}",
+                                    "side": level.get("side"), "status": reaction,
+                                    "expiry": expiry, "version": clean_body.get("version"),
+                                },
+                            )
+
+            activity = clean_body.get("activity") if isinstance(clean_body.get("activity"), dict) else {}
+            self._event(
+                db, stamp, "FLOW", "background",
+                {k: activity.get(k) for k in ("direction", "state", "confirmation_count")},
+            )
+            self._event(
+                db, stamp, "DIRECTION", "background",
+                {"direction": clean_body.get("direction"), "source": "App authoritative snapshot"},
+            )
+            from services.cycle_outcomes import update_outcomes
+            update_outcomes(db, clean_body)
+        self.prune_archives()
+        return True
+
     def _backfill_app_decision_outcomes(self, db, at, spot):
         """Persist +5m/+15m/+30m spot outcomes for Railway app decisions.
 

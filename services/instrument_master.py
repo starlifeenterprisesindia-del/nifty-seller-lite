@@ -52,6 +52,47 @@ class InstrumentMaster:
 
     def __init__(self, cache_path: Path | None = None):
         self.cache_path = cache_path or Path("data/instrument_master.csv")
+        self._download_lock = threading.Lock()
+        self._prewarm_lock = threading.Lock()
+        self._prewarm_thread: threading.Thread | None = None
+        self._prewarm_error = ""
+
+    def prewarm_async(self) -> None:
+        """Start one best-effort background refresh without blocking first paint."""
+        with self._prewarm_lock:
+            if self._prewarm_thread is not None and self._prewarm_thread.is_alive():
+                return
+            # A fresh local cache needs no network work.
+            identity = self._cache_identity()
+            if identity is not None:
+                try:
+                    age_seconds = max(
+                        0.0, datetime.now().timestamp() - self.cache_path.stat().st_mtime
+                    )
+                    if age_seconds <= CONFIG.instrument_master_cache_max_age_hours * 3600:
+                        return
+                except OSError:
+                    pass
+
+            def _worker() -> None:
+                try:
+                    self.load(allow_download=True)
+                    self._prewarm_error = ""
+                except Exception as exc:
+                    self._prewarm_error = type(exc).__name__
+
+            self._prewarm_thread = threading.Thread(
+                target=_worker, daemon=True, name="instrument-master-prewarm"
+            )
+            self._prewarm_thread.start()
+
+    def prewarm_status(self) -> dict[str, object]:
+        thread = self._prewarm_thread
+        return {
+            "running": bool(thread is not None and thread.is_alive()),
+            "cache_ready": self._cache_identity() is not None,
+            "error": self._prewarm_error,
+        }
 
     def _cache_identity(self) -> tuple[str, int, int] | None:
         try:
@@ -87,17 +128,53 @@ class InstrumentMaster:
         return None
 
     def download(self) -> pd.DataFrame:
-        response = requests.get(
-            INSTRUMENT_MASTER_URL, timeout=CONFIG.request_timeout_seconds
-        )
-        response.raise_for_status()
-        df = pd.read_csv(StringIO(response.text), low_memory=False)
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(self.cache_path, index=False)
-        identity = self._cache_identity()
-        if identity is not None:
-            self._remember_raw(identity, df)
-        return df
+        """Refresh the large Dhan master atomically and at most once per instance.
+
+        Streamlit can rerun while a cold-start prewarm is still downloading.  A
+        partial CSV used to be visible to a second reader.  The lock + atomic replace
+        keeps the old cache usable until the new file is complete.
+        """
+        with self._download_lock:
+            # Another prewarm may have finished while this caller waited.
+            identity = self._cache_identity()
+            if identity is not None:
+                try:
+                    age_seconds = max(
+                        0.0, datetime.now().timestamp() - self.cache_path.stat().st_mtime
+                    )
+                    if age_seconds <= CONFIG.instrument_master_cache_max_age_hours * 3600:
+                        path, mtime_ns, size = identity
+                        with self._memory_lock:
+                            memory = self._raw_memory.get(path)
+                            if memory and memory[:2] == (mtime_ns, size):
+                                return memory[2]
+                        cached = pd.read_csv(self.cache_path, low_memory=False)
+                        if not cached.empty:
+                            self._remember_raw(identity, cached)
+                            return cached
+                except Exception:
+                    pass
+
+            response = requests.get(
+                INSTRUMENT_MASTER_URL, timeout=CONFIG.request_timeout_seconds
+            )
+            response.raise_for_status()
+            df = pd.read_csv(StringIO(response.text), low_memory=False)
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+            try:
+                df.to_csv(temporary, index=False)
+                temporary.replace(self.cache_path)
+            finally:
+                try:
+                    if temporary.exists():
+                        temporary.unlink()
+                except OSError:
+                    pass
+            identity = self._cache_identity()
+            if identity is not None:
+                self._remember_raw(identity, df)
+            return df
 
     def load(self, *, allow_download: bool = True) -> pd.DataFrame:
         cached: pd.DataFrame | None = None

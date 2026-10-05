@@ -39,9 +39,24 @@ def _decision_rows(store=None) -> list[dict[str, Any]]:
     return sorted(merged.values(), key=lambda row: str(row.get("at") or ""))
 
 
-def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> None:
+def render_shadow_journal_status(entries: list[dict[str, Any]], store=None, snapshot=None) -> None:
     decisions = _decision_rows(store)
     report = st.session_state.get("day_memory_report") or {}
+    coverage = ((report.get("recording_coverage") or {}) if isinstance(report, dict) else {})
+    market_live = bool(getattr(getattr(snapshot, "market_session", None), "is_live", False))
+    journal_error = str(st.session_state.get("day_memory_error") or "")
+    sample_age = report.get("last_sample_age_seconds") if isinstance(report, dict) else None
+    persistent_rows = int(coverage.get("app_decision_rows") or 0)
+    if journal_error and not report:
+        feed_label, feed_kind = "WARMING / RETRY", "warning"
+    elif not market_live:
+        feed_label, feed_kind = "REFERENCE — SESSION CLOSED", "info"
+    elif sample_age is not None and float(sample_age) <= 180:
+        feed_label, feed_kind = "LIVE / RECENT", "success"
+    elif report:
+        feed_label, feed_kind = "STALE / GAP", "warning"
+    else:
+        feed_label, feed_kind = "WARMING UP", "info"
     today = (
         str(getattr(store, "last_checked", ""))[:10]
         or str(report.get("day") or "")[:10]
@@ -51,12 +66,16 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> N
     open_items = [item for item in current if str(item.get("status")).upper() == "OPEN"]
     with st.container(border=True):
         st.markdown("**🧪 Auto Shadow Journal**")
-        try:
-            import json
-            checks = json.loads(store.path.with_suffix(".signals.json").read_text()) if store is not None else []
-        except (OSError, ValueError):
-            checks = []
-        rejected = [row for row in checks if str(row.get("at", ""))[:10] == today and row.get("reason") != "READY"]
+        health_text = (
+            f"Journal Feed: **{feed_label}** · Railway decisions {persistent_rows} · "
+            f"last sample age {'—' if sample_age is None else f'{float(sample_age):.0f}s'}"
+        )
+        if feed_kind == "success":
+            st.success(health_text)
+        elif feed_kind == "warning":
+            st.warning(health_text)
+        else:
+            st.info(health_text)
         today_decisions = [
             row for row in decisions
             if str(row.get("session_date")) == today and bool(row.get("session_live", True))
@@ -67,7 +86,6 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None) -> N
         cols[2].metric("Open paper", len(open_items))
         cols[3].metric("Direction floor", f"{CONFIG.simple_direction_min_strength:.0f}%")
         cols[4].metric("Entry ready", f"{CONFIG.simple_entry_ready_score:.0f}%")
-        coverage = ((report.get("recording_coverage") or {}) if isinstance(report, dict) else {})
         if coverage.get("app_session_status"):
             st.caption(
                 f"Railway journal: {coverage.get('app_session_status')} · "
@@ -107,13 +125,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
             st.warning(store.last_error)
         else:
             st.caption("Decision history and paper-trade history are separate; neither places broker orders.")
-        import json
-        try:
-            history = json.loads(store.path.with_suffix(".signals.json").read_text())
-        except (OSError, ValueError):
-            history = []
-        with st.expander("Signal / WAIT reasons history"):
-            st.dataframe(history[-100:], width="stretch", hide_index=True)
+        # WAIT/READY reasons now live in the single Decision Journal below.
         decisions = _decision_rows(store)
         with st.expander("Decision Journal — WAIT bhi record hota hai", expanded=True):
             today_decisions = [row for row in decisions if str(row.get("session_date")) == session_date]

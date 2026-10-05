@@ -269,7 +269,7 @@ def render_candle_pattern_library_shadow(snapshot) -> None:
                 }
             )
         st.markdown("**Recent shadow detections + follow-through**")
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
     else:
         st.info("Current session me abhi koi library pattern record nahi hua.")
 
@@ -499,6 +499,17 @@ if not st.session_state.get("shadow_journal_cloud_sync_started", False):
     ).start()
     st.session_state["shadow_journal_cloud_sync_started"] = True
 news_service = MarketNewsService(Path(CONFIG.news_cache_path))
+
+
+@st.cache_resource
+def _instrument_master_resource() -> InstrumentMaster:
+    return InstrumentMaster(Path("data/instrument_master.csv"))
+
+
+instrument_master = _instrument_master_resource()
+# Hide the large Dhan instrument-master download behind normal app/backend warm-up.
+# It is process-wide, atomic, and never enters the One-Brain scoring path.
+instrument_master.prewarm_async()
 
 
 def optional_number(raw: str) -> float | None:
@@ -896,18 +907,18 @@ if "snapshot" not in st.session_state or refresh:
                 client = DhanClient(credentials)
             service = SnapshotService(
                 client,
-                InstrumentMaster(Path("data/instrument_master.csv")),
+                instrument_master,
                 state_store,
                 context_store,
                 discipline_store,
                 news_service=news_service,
             )
             previous_snapshot = st.session_state.get("snapshot")
-            # Auto-snapshot cadence is measured from fetch START, not completion.
-            # Otherwise an 8s build + 15s timer silently becomes ~23s between fresh
-            # quotes.  This preserves the selected cadence without overlapping builds.
+            # Keep timing diagnostics, but schedule the next auto refresh only after
+            # successful completion so a slow build can never become instantly overdue.
             snapshot_fetch_started_at = time.time()
             new_snapshot = service.build(risk_profile=risk_profile)
+            new_snapshot.metadata["instrument_master_prewarm"] = instrument_master.prewarm_status()
             if (
                 previous_snapshot is not None
                 and previous_snapshot.snapshot_id != new_snapshot.snapshot_id
@@ -1365,7 +1376,7 @@ with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") a
 
         with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
             if panel_open:
-                render_shadow_journal_status(shadow_entries, shadow_journal_store)
+                render_shadow_journal_status(shadow_entries, shadow_journal_store, view_snapshot)
                 render_auto_shadow_journal(
                     shadow_entries,
                     view_snapshot.created_at.date().isoformat(),

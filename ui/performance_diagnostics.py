@@ -50,6 +50,20 @@ def render_performance_diagnostics(
             f"Evidence write: async · pending {async_write.get('pending', 0)} · "
             f"done {async_write.get('completed', 0)} · failed {async_write.get('failed', 0)}"
         )
+    history_async = report.get("history_async") or {}
+    if history_async:
+        st.caption(
+            f"Journal report: async · pending {bool(history_async.get('pending'))} · "
+            f"last {float(history_async.get('seconds') or 0.0):.2f}s · "
+            f"error {history_async.get('error') or 'none'}"
+        )
+    master = report.get("instrument_master") or {}
+    if master:
+        st.caption(
+            f"Instrument master: cache {'READY' if master.get('cache_ready') else 'WARMING'} · "
+            f"prewarm {'RUNNING' if master.get('running') else 'IDLE'} · "
+            f"error {master.get('error') or 'none'}"
+        )
 
     slowest = report.get("slowest_stage") or "—"
     st.caption(
@@ -62,12 +76,12 @@ def render_performance_diagnostics(
     with tab1:
         rows = report.get("stage_rows") or []
         if rows:
-            st.dataframe(rows, hide_index=True, use_container_width=True)
+            st.dataframe(rows, hide_index=True, width="stretch")
         else:
             st.info("Stage timing next fresh snapshot ke baad available hogi.")
     with tab2:
         rows = report.get("feed_rows") or []
         if rows:
-            st.dataframe(rows, hide_index=True, use_container_width=True)
+            st.dataframe(rows, hide_index=True, width="stretch")
         else:
             st.info("Feed diagnostics unavailable.")

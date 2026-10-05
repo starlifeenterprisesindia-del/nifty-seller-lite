@@ -96,7 +96,7 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
             right.metric("Validation 40%", _pct(val.get("directional_hit_rate_pct")), f"n={val.get('rows',0)}")
             st.caption(wf.get("note") or "")
         st.markdown("**Readiness sensitivity — descriptive filter only**")
-        st.dataframe(pd.DataFrame(report["sensitivity"]), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(report["sensitivity"]), hide_index=True, width="stretch")
         st.caption("Ye table purane decisions ko filter karti hai; ye prove nahi karti ki threshold change karne par wahi decisions hote.")
 
     with tab2:
@@ -104,14 +104,14 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         if frame.empty:
             st.caption("Readiness-bucket observations abhi available nahi hain.")
         else:
-            st.dataframe(frame, hide_index=True, use_container_width=True)
+            st.dataframe(frame, hide_index=True, width="stretch")
 
     with tab3:
         frame = pd.DataFrame(report["by_regime"])
         if frame.empty:
             st.caption("Regime validation observations abhi available nahi hain.")
         else:
-            st.dataframe(frame, hide_index=True, use_container_width=True)
+            st.dataframe(frame, hide_index=True, width="stretch")
 
     with tab4:
         st.markdown("**Directional result by action**")
@@ -119,20 +119,20 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         if action_frame.empty:
             st.caption("Action-wise scored observations abhi available nahi hain.")
         else:
-            st.dataframe(action_frame, hide_index=True, use_container_width=True)
+            st.dataframe(action_frame, hide_index=True, width="stretch")
         st.markdown("**Regime × action robustness**")
         cross = pd.DataFrame(report.get("by_regime_action") or [])
         if not cross.empty:
-            st.dataframe(cross, hide_index=True, use_container_width=True)
+            st.dataframe(cross, hide_index=True, width="stretch")
         st.markdown("**5m / 15m / 30m horizon matrix**")
-        st.dataframe(pd.DataFrame(report.get("horizon_matrix") or []), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(report.get("horizon_matrix") or []), hide_index=True, width="stretch")
 
     with tab5:
         align = pd.DataFrame(report.get("evidence_alignment") or [])
         if align.empty:
             st.caption("Big Player / option-bias alignment observations abhi available nahi hain.")
         else:
-            st.dataframe(align, hide_index=True, use_container_width=True)
+            st.dataframe(align, hide_index=True, width="stretch")
         st.caption("Alignment is descriptive only: Big Player + option-bias recorded context vs recorded directional action.")
         rolling = report.get("rolling_stability") or {}
         st.markdown("**Rolling stability**")
@@ -141,14 +141,14 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         else:
             if rolling.get("hit_rate_spread_pct_points") is not None:
                 st.metric("Rolling hit-rate spread", f"{rolling['hit_rate_spread_pct_points']:.1f} pp")
-            st.dataframe(pd.DataFrame(rolling.get("rows") or []), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rolling.get("rows") or []), hide_index=True, width="stretch")
             st.caption(rolling.get("note") or "")
         mf = report.get("multi_fold_walk_forward") or {}
         st.markdown("**Multi-fold chronological validation**")
         if mf.get("status") != "READY":
             st.info(mf.get("note") or "Insufficient data")
         else:
-            st.dataframe(pd.DataFrame(mf.get("rows") or []), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(mf.get("rows") or []), hide_index=True, width="stretch")
             st.caption(mf.get("note") or "")
 
     with tab6:
@@ -156,7 +156,7 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         if misses.empty:
             st.success("Selected horizon par recorded directional MISS rows nahi mile.")
         else:
-            st.dataframe(misses, hide_index=True, use_container_width=True)
+            st.dataframe(misses, hide_index=True, width="stretch")
         st.caption("MISS = recorded directional action ke opposite NIFTY move; option P&L/fill ka verdict nahi.")
 
     with tab7:
@@ -167,7 +167,7 @@ def render_phase5_validation_lab(snapshot: Any, url: str, key: str) -> None:
         z.metric("Median |move|", "—" if wait.get("median_abs_move_points") is None else f"{wait['median_abs_move_points']:.1f} pts")
         frame = pd.DataFrame(wait.get("largest") or [])
         if not frame.empty:
-            st.dataframe(frame, hide_index=True, use_container_width=True)
+            st.dataframe(frame, hide_index=True, width="stretch")
         st.caption(wait.get("note") or "")
 
     with st.expander("Validation limitations", expanded=False):

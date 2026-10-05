@@ -5,7 +5,6 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from services.railway_live_client import RailwayDhanClient
 
@@ -140,7 +139,7 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
     step = st.slider("Replay step", 0, len(rows) - 1, len(rows) - 1, key="phase3_replay_step")
     selected = rows[int(step)]
     st.caption(f"Replay point: {selected.get('at')} · recorded version {selected.get('version') or '—'}")
-    components.html(_chart_html(list(bundle.get("candles_1m") or []), rows, selected), height=590, scrolling=False)
+    st.iframe(_chart_html(list(bundle.get("candles_1m") or []), rows, selected), height=590, width="stretch")
 
     a, b, c, d = st.columns(4)
     a.metric("Action", str(selected.get("final_action") or "WAIT"))
@@ -162,7 +161,7 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
 
     tab1, tab2, tab3, tab4 = st.tabs(["🧠 One Brain Timeline", "🧱 Barrier + Money", "📊 Outcomes", "🧾 Events"])
     with tab1:
-        st.dataframe(_timeline_view(rows), hide_index=True, use_container_width=True)
+        st.dataframe(_timeline_view(rows), hide_index=True, width="stretch")
     with tab2:
         barrier_rows = []
         for row in rows:
@@ -174,7 +173,7 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
                 "R2": _mid(r2), "S1 low": s1.get("lower"), "S1 high": s1.get("upper"), "S1 strength": s1.get("strength"), "S1 pressure": s1.get("pressure"), "S1 state": s1.get("state"), "S2": _mid(s2),
                 "CE Wall": ce.get("strike"), "CE migration": ce.get("migration_points"), "PE Wall": pe.get("strike"), "PE migration": pe.get("migration_points"),
             })
-        st.dataframe(pd.DataFrame(barrier_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(barrier_rows), hide_index=True, width="stretch")
         st.caption("Wall migration aur barrier changes historical display hain; inka live One Brain weight yahan se change nahi hota.")
     with tab3:
         outcome = stats.get("outcomes") or {}
@@ -187,14 +186,14 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
                 "UP": labels.get("UP", 0), "DOWN": labels.get("DOWN", 0), "RANGE": labels.get("RANGE", 0),
                 "Median move pts": item.get("median_move_points"), "Median abs move pts": item.get("median_abs_move_points"),
             })
-        st.dataframe(pd.DataFrame(out_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(out_rows), hide_index=True, width="stretch")
         st.write("**Action counts**", stats.get("action_counts") or {})
         st.write("**Regime counts**", stats.get("regime_counts") or {})
         st.caption(str(stats.get("note") or ""))
     with tab4:
         events = list(bundle.get("events") or [])
         if events:
-            st.dataframe(pd.DataFrame(events), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(events), hide_index=True, width="stretch")
         else:
             st.caption("Selected session me replay events available nahi hain.")
 

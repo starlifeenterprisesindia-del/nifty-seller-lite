@@ -137,6 +137,6 @@ def render_pattern_alerts(snapshot, server_url="", server_key=""):
             "Conflict": "YES" if item.get("conflict") else "NO",
         })
     if rows:
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
     elif history:
         st.info("Selected filters me koi alert nahi mila.")

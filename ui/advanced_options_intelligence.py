@@ -92,7 +92,7 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
                 "contracts": "Contracts", "sides": "Sides", "avg_score": "Avg Score",
                 "peak_score": "Peak Score", "state": "State",
             })
-            st.dataframe(cview, use_container_width=True, hide_index=True)
+            st.dataframe(cview, width="stretch", hide_index=True)
         if rows:
             st.markdown("**Contract-level unusual activity**")
             view = pd.DataFrame(rows).rename(columns={
@@ -102,7 +102,7 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
                 "window_confirm": "Window Confirm", "confirmation": "Confirmation",
                 "reason": "Why", "score": "Activity Score", "tag": "Tag",
             })
-            st.dataframe(view, use_container_width=True, hide_index=True)
+            st.dataframe(view, width="stretch", hide_index=True)
             st.caption(
                 "Phase-10 relative anomaly score = OI + volume + premium movement + current-IV richness + existing flow strength + "
                 "ATM proximity + 1m/3m/5m bias confirmation. *IV Rank here is within the current fetched chain, not historical IV Rank. "
@@ -135,7 +135,7 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
                 "score": "Liquidity", "grade": "Grade", "state": "Execution State",
                 "half_spread_rupees_per_lot": "½-Spread ₹/lot",
             })
-            st.dataframe(view, use_container_width=True, hide_index=True)
+            st.dataframe(view, width="stretch", hide_index=True)
             st.caption(
                 "Phase-10 grade uses bid-ask spread + relative OI + relative volume + ATM proximity. "
                 "½-Spread ₹/lot is only a friction proxy using configured lot size; it is not a guaranteed slippage/fill estimate. "
@@ -162,7 +162,7 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
             chart = chart.dropna(subset=["at", "atm_iv"]).set_index("at")
             if not chart.empty:
                 st.markdown("**Intraday ATM IV trend**")
-                st.line_chart(chart[["atm_iv"]], use_container_width=True)
+                st.line_chart(chart[["atm_iv"]], width="stretch")
 
     with tab4:
         a, b, c, d = st.columns(4)
@@ -179,14 +179,14 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
             frame = pd.DataFrame(smile)
             plot = frame[["strike", "ce_iv", "pe_iv", "mid_iv"]].copy().set_index("strike")
             st.markdown("**Current-expiry IV smile**")
-            st.line_chart(plot, use_container_width=True)
+            st.line_chart(plot, width="stretch")
             table = frame.rename(columns={
                 "strike": "Strike", "moneyness_pct": "Moneyness %", "ce_iv": "CE IV",
                 "pe_iv": "PE IV", "mid_iv": "Mid IV", "ce_delta": "CE Δ", "pe_delta": "PE Δ",
                 "ce_oi": "CE OI", "pe_oi": "PE OI", "atm": "ATM",
             })
             st.markdown("**Current-expiry IV surface / strike matrix**")
-            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.dataframe(table, width="stretch", hide_index=True)
             st.caption(
                 "Ye current selected expiry ka strike × CE/PE IV surface hai. Multi-expiry surface ke liye extra expiry-chain fetch nahi kiya gaya, "
                 "taaki Dhan rate limit aur One-Brain latency safe rahe."
@@ -222,7 +222,7 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
                 "wing_width": "Strike width", "combined_oi": "Combined OI", "combined_volume": "Combined Vol",
             })
             show_cols = [c for c in ["Setup", "PE Strike", "CE Strike", "PE Premium", "CE Premium", "Combined", "Lower BE proxy", "Upper BE proxy", "Strike width", "Combined OI", "Combined Vol"] if c in table]
-            st.dataframe(table[show_cols], use_container_width=True, hide_index=True)
+            st.dataframe(table[show_cols], width="stretch", hide_index=True)
             st.caption("Breakeven proxy assumes long/short strangle held to expiry before charges/slippage; advisory context only.")
         else:
             st.caption("Symmetric OTM strangle rows unavailable in the current fetched strike window.")
@@ -237,10 +237,10 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
             if keys:
                 rename = {m.get("key"): f"{int(round(float(m.get('strike'))))} Straddle" for m in multi if m.get("key")}
                 st.markdown("**Multi-straddle premium trend**")
-                st.line_chart(frame[keys].rename(columns=rename), use_container_width=True)
+                st.line_chart(frame[keys].rename(columns=rename), width="stretch")
             if "atm_premium" in frame:
                 st.markdown("**Fixed current-ATM straddle decay**")
-                st.line_chart(frame[["atm_premium"]].rename(columns={"atm_premium": "ATM straddle"}), use_container_width=True)
+                st.line_chart(frame[["atm_premium"]].rename(columns={"atm_premium": "ATM straddle"}), width="stretch")
         if d:
             x1, x2, x3, x4 = st.columns(4)
             x1.metric("Session decay", _fmt(d.get("decay_points"), 2, " pts"))

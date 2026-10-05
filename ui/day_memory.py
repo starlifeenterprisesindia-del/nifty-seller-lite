@@ -10,7 +10,7 @@ import streamlit as st
 
 from analysis.history_context import history_context
 from analysis.recent_history import recent_history
-from services.day_memory import clean
+from services.day_memory import clean, compact
 from services.railway_live_client import RailwayDhanClient
 
 
@@ -24,6 +24,53 @@ _EVIDENCE_STATUS = {
     "queued": 0, "completed": 0, "failed": 0, "pending": 0,
     "last_seconds": 0.0, "last_error": "",
 }
+
+# Full Railway history/report reads are advisory and must never sit on the live
+# One-Brain critical path.  Keep one process-wide cache keyed by the protected
+# connection fingerprint and refresh it asynchronously.
+_REPORT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nsl-history")
+_REPORT_LOCK = threading.Lock()
+_REPORT_CACHE: dict[str, dict] = {}
+_REPORT_STATUS: dict[str, dict] = {}
+
+
+def _refresh_report_worker(url: str, key: str, connection: str) -> None:
+    started = time.perf_counter()
+    try:
+        report = RailwayDhanClient(url, key, timeout_seconds=8)._post(
+            "/day-memory", {"report": True}
+        )
+        with _REPORT_LOCK:
+            _REPORT_CACHE[connection] = report if isinstance(report, dict) else {}
+            _REPORT_STATUS[connection] = {
+                "pending": False, "fetched_at": time.time(), "error": "",
+                "seconds": round(time.perf_counter() - started, 4),
+            }
+    except Exception as exc:
+        with _REPORT_LOCK:
+            previous = dict(_REPORT_STATUS.get(connection) or {})
+            _REPORT_STATUS[connection] = {
+                **previous, "pending": False, "fetched_at": previous.get("fetched_at", 0.0),
+                "error": type(exc).__name__,
+                "seconds": round(time.perf_counter() - started, 4),
+            }
+
+
+def _queue_report_refresh(url: str, key: str, connection: str, *, ttl_seconds: float = 60.0) -> None:
+    now = time.time()
+    with _REPORT_LOCK:
+        status = dict(_REPORT_STATUS.get(connection) or {})
+        if status.get("pending"):
+            return
+        if now - float(status.get("fetched_at") or 0.0) < ttl_seconds:
+            return
+        _REPORT_STATUS[connection] = {**status, "pending": True}
+    _REPORT_EXECUTOR.submit(_refresh_report_worker, str(url), str(key), connection)
+
+
+def history_async_status(connection: str) -> dict:
+    with _REPORT_LOCK:
+        return dict(_REPORT_STATUS.get(connection) or {})
 
 
 def _post_final_evidence(url: str, key: str, payload: dict):
@@ -140,42 +187,81 @@ def market_history_observation(snapshot):
     return clean({"option_snapshot": option_snapshot, "top9": top9})
 
 def sync_day_memory(snapshot, url, key, *, record_event: bool = True):
-    """Called before presentation; fresh same-version history only, never a vote."""
+    """Attach cached Railway history without blocking the live decision path.
+
+    A slow SQLite/report read used to add up to three seconds to the critical
+    finalize path.  The report now refreshes in a single background worker; the
+    current snapshot consumes the newest completed cache only.  History remains
+    advisory and unavailable data receives no vote.
+    """
     now = datetime.now().timestamp()
     connection = hashlib.sha256(f"{url}|{key}".encode()).hexdigest()
     if st.session_state.get("day_memory_connection") != connection:
         for name in ("day_memory_report", "day_memory_error", "day_memory_fetch_at", "evidence_download"):
-            st.session_state.pop(name,None)
+            st.session_state.pop(name, None)
         st.session_state.day_memory_connection = connection
-    if url and key and now-st.session_state.get("day_memory_fetch_at",0)>=60:
-        try:
-            client = RailwayDhanClient(url,key,timeout_seconds=3)
-            event = (
-                app_observation(snapshot)
-                if record_event and snapshot.market_session.is_live
-                else None
+
+    if url and key:
+        _queue_report_refresh(url, key, connection, ttl_seconds=60.0)
+        with _REPORT_LOCK:
+            cached = _REPORT_CACHE.get(connection)
+            status = dict(_REPORT_STATUS.get(connection) or {})
+        if isinstance(cached, dict) and cached:
+            st.session_state.day_memory_report = cached
+            st.session_state.day_memory_fetch_at = float(status.get("fetched_at") or now)
+            st.session_state.pop("day_memory_error", None)
+        elif status.get("error") and not st.session_state.get("day_memory_report"):
+            st.session_state.day_memory_error = (
+                "History refresh pending — live One Brain unaffected; Railway journal retry active."
             )
-            st.session_state.day_memory_report = client._post("/day-memory", {"event":event})
-            st.session_state.pop("day_memory_error",None)
-        except Exception:
-            st.session_state.day_memory_error = "History unavailable — Railway update/storage/connection check karo."
-        st.session_state.day_memory_fetch_at = now
-    report = st.session_state.get("day_memory_report") if not st.session_state.get("day_memory_error") and url and key else None
+
+    report = (
+        st.session_state.get("day_memory_report")
+        if url and key and isinstance(st.session_state.get("day_memory_report"), dict)
+        else None
+    )
     snapshot.metadata["learning_outcomes"] = list((report or {}).get("outcomes") or [])
-    snapshot.metadata["history_context"] = history_context(snapshot,report)
+    snapshot.metadata["history_context"] = history_context(snapshot, report)
     snapshot.metadata["recent_history"] = recent_history(snapshot, report)
     snapshot.metadata["cycle_recorded_days"] = len((report or {}).get("cycle_prices", {}).get("days", []))
-    # Explicit allowlist: no connection URL/key or arbitrary metadata exported.
+    async_state = history_async_status(connection) if url and key else {}
     snapshot.metadata["recording_diagnostics"] = clean({
         "checked_at": datetime.fromtimestamp(now).astimezone().isoformat(),
         "report_fetched_at_epoch": st.session_state.get("day_memory_fetch_at"),
         "available": report is not None,
         "error": st.session_state.get("day_memory_error"),
+        "async_refresh": async_state,
         **({k: report.get(k) for k in ("recorder_status", "recording_health", "last_sample_age_seconds", "interval_seconds", "counts", "first", "last", "cycle_expiry", "bytes", "last_error", "recording_coverage")} if report else {}),
         "recent_history": snapshot.metadata["recent_history"],
         "history_context": snapshot.metadata["history_context"],
         "usage": "OI/Top9 history supplies rolling calculations via analysis_history feed. Diary supplies context only; no extra vote or automatic training.",
     })
+
+
+
+def _latest_candle_payload(frame) -> dict | None:
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    try:
+        row = frame.iloc[-1]
+        return clean({
+            "timestamp": row.get("timestamp"),
+            "open": row.get("open"), "high": row.get("high"),
+            "low": row.get("low"), "close": row.get("close"),
+            "volume": row.get("volume"), "open_interest": row.get("open_interest"),
+        })
+    except Exception:
+        return None
+
+
+def _compact_app_sample(snapshot) -> dict:
+    body = compact(snapshot, tracked_strikes=())
+    body["latest_candles"] = {
+        "NIFTY_1M": _latest_candle_payload(getattr(snapshot, "candles_1m", None)),
+        "NIFTY_3M": _latest_candle_payload(getattr(snapshot, "candles_3m", None)),
+        "FUTURES_1M": _latest_candle_payload(getattr(snapshot, "future_candles_1m", None)),
+    }
+    return clean(body)
 
 
 def record_final_day_memory(snapshot, url, key):
@@ -195,13 +281,25 @@ def record_final_day_memory(snapshot, url, key):
     now_ts = datetime.now().timestamp()
     last_history_push = float(st.session_state.get("market_history_push_at", 0.0))
     history = market_history_observation(snapshot) if now_ts - last_history_push >= 25.0 else None
-    payload = {"event": app_observation(snapshot), "history": history, "report": False}
+    minute_key = snapshot.created_at.astimezone().strftime("%Y-%m-%dT%H:%M")
+    sample = None
+    if st.session_state.get("day_memory_sample_minute") != minute_key:
+        # CPU-only serialization of the snapshot already in memory.  No broker call.
+        sample = _compact_app_sample(snapshot)
+    payload = {
+        "event": app_observation(snapshot),
+        "history": history,
+        "sample": sample,
+        "report": False,
+    }
     try:
         _EVIDENCE_EXECUTOR.submit(_post_final_evidence, str(url), str(key), payload)
         with _EVIDENCE_LOCK:
             _EVIDENCE_STATUS["queued"] += 1
         if history is not None:
             st.session_state.market_history_push_at = now_ts
+        if sample is not None:
+            st.session_state.day_memory_sample_minute = minute_key
         # As before, one finalized observation is attempted once per immutable snapshot.
         st.session_state.day_memory_final_snapshot = snapshot_key
         snapshot.metadata.setdefault("performance", {})["evidence_write"] = "ASYNC_QUEUED"
@@ -338,7 +436,7 @@ def render_day_memory(snapshot, url, key):
             episode_tab, timing_tab = st.tabs(["Replay timeline", "Big Player timing"])
             with episode_tab:
                 if rows:
-                    st.dataframe(rows, hide_index=True, use_container_width=True)
+                    st.dataframe(rows, hide_index=True, width="stretch")
                 else:
                     st.info("Selected replay rule par complete observed move episode nahi mila.")
             with timing_tab:
@@ -353,7 +451,7 @@ def render_day_memory(snapshot, url, key):
                         }
                         for row in rows
                     ]
-                    st.dataframe(timing_rows, hide_index=True, use_container_width=True)
+                    st.dataframe(timing_rows, hide_index=True, width="stretch")
                 else:
                     st.info("Big Player timing compare karne ke liye replay episodes chahiye.")
             st.caption(str(summary.get("note") or ""))
@@ -367,12 +465,12 @@ def render_day_memory(snapshot, url, key):
             if window.get("inferred_pressure"):
                 st.caption(f"Pressure: {window['inferred_pressure']} · Price support: {window['price_supports_pressure']} — trader count nahi")
             if window.get("rows"):
-                st.dataframe(window["rows"], hide_index=True, use_container_width=True)
+                st.dataframe(window["rows"], hide_index=True, width="stretch")
         st.write("**Futures VWAP — same instrument**")
         st.json(analytics.get("vwap", {}), expanded=False)
         st.write("**FII/DII — prior reported sessions**")
         st.caption(analytics.get("institutions", {}).get("note", "Pending"))
-        st.dataframe(analytics.get("institutions", {}).get("rows", []), hide_index=True, use_container_width=True)
+        st.dataframe(analytics.get("institutions", {}).get("rows", []), hide_index=True, width="stretch")
         recent = snapshot.metadata.get("recent_history", {})
         st.markdown("### Recent History — Price, Big Player aur Barrier")
         st.caption(recent.get("message", "Fresh records ka wait"))
@@ -406,7 +504,7 @@ def render_day_memory(snapshot, url, key):
                              "Observed loss pts":row.get("observed_max_loss_points"),
                              "Coverage":row.get("coverage",row.get("status")),
                              "Spread path complete":row.get("spread_path_complete",False)})
-            st.dataframe(rows,hide_index=True,use_container_width=True)
+            st.dataframe(rows,hide_index=True,width="stretch")
             st.caption("SELL entry bid / hedge ask; exit short ask / hedge bid. Equal-quantity points, no fees/slippage/fill guarantee. Observed loss minute samples ka hai, true intraminute maximum nahi. Missing result zero profit nahi.")
         if cached.get("cycle_summaries"):
             st.write("Completed expiry cycles")
@@ -460,7 +558,7 @@ def render_cycle_prices(view):
             selected[side] = st.selectbox(f"{side} contract", list(labels), format_func=labels.get,
                                          key=f"cycle_price_{view.get('expiry')}_{side}")
         rows = selected_rows(view, selected["CE"], selected["PE"])
-        st.dataframe(pd.DataFrame(rows).drop(columns="Observed at"), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows).drop(columns="Observed at"), hide_index=True, width="stretch")
         st.caption("Blank = Data missing. Exact target-minute snapshot only; 15:28 ko 15:30 nahi banaya. LTP last trade hai, executable bid/ask ya official settlement nahi.")
         with st.expander("Daily change, OI / IV aur observed high-low"):
             detail = []
@@ -475,7 +573,7 @@ def render_cycle_prices(view):
                     record[side+" observed high"] = day["contracts"].get(selected[side], {}).get("observed_high")
                     record[side+" observed low"] = day["contracts"].get(selected[side], {}).get("observed_low")
                 detail.append(record)
-            st.dataframe(detail, hide_index=True, use_container_width=True)
+            st.dataframe(detail, hide_index=True, width="stretch")
             for row in view.get("rows", []):
                 st.caption(f"{row['day']} {row['time']} · Observed: {row['observed_at'] or 'Data missing'}")
                 st.json({side: row["options"].get(selected[side], {}) for side in ("CE", "PE")}, expanded=False)

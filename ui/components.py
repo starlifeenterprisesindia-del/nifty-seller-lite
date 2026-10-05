@@ -917,7 +917,7 @@ def _render_pair_comparison(plan_map):
             pair_plan = plan_map.get(pair_name)
             if pair_plan and getattr(pair_plan, "pair_comparison", ()):
                 st.write(pair_name)
-                st.dataframe(list(pair_plan.pair_comparison), hide_index=True, use_container_width=True)
+                st.dataframe(list(pair_plan.pair_comparison), hide_index=True, width="stretch")
 
 
 def render_protected_candidates(snapshot: MarketSnapshot) -> None:
@@ -1254,7 +1254,11 @@ def render_main_ai_market_view(
                     rows.append({
                         "Block": key.replace("_", " ").title(),
                         "Weight": value.get("weight"),
-                        "Available": value.get("available", "—"),
+                        "Available": (
+                            "YES" if value.get("available") is True
+                            else "NO" if value.get("available") is False
+                            else "—"
+                        ),
                         "Bull": value.get("bullish", "—"),
                         "Bear": value.get("bearish", "—"),
                         "Neutral/State": value.get("neutral", value.get("state", "—")),
@@ -2582,7 +2586,7 @@ def render_options_live_board(snapshot: MarketSnapshot, option_state_store: Any 
         "⚡ Load IV Δ",
         key="load_iv_delta_display_only",
         help="Existing saved option snapshots only. No Dhan/API call and no One-Brain score impact.",
-        use_container_width=True,
+        width="stretch",
     ):
         with st.spinner("Saved IV history compare ho rahi hai — broker call nahi ho rahi..."):
             current_state = (getattr(snapshot, "metadata", {}) or {}).get("option_state_snapshot") or {}

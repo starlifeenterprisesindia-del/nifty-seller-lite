@@ -445,8 +445,7 @@ def render_live_barrier_chart(snapshot: Any) -> None:
     """
 
     import streamlit as st
-    import streamlit.components.v1 as components
-
+    
     payload = build_live_barrier_chart_payload(snapshot)
     if not any(payload["candles"].values()):
         st.caption("📊 Live chart unavailable — completed candle data ka wait.")
@@ -741,4 +740,4 @@ setTf(P.defaultTf || '15m');
 </html>
 """
     with st.container(border=False):
-        components.html(html, height=650, scrolling=False)
+        st.iframe(html, height=650, width="stretch")

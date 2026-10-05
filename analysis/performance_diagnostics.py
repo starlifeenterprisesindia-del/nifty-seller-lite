@@ -107,6 +107,9 @@ def build_performance_report(
     latency_history = list(pipeline_history or [])[-120:]
     transport = performance.get("transport") if isinstance(performance.get("transport"), dict) else {}
     async_evidence = metadata.get("evidence_async_status") if isinstance(metadata.get("evidence_async_status"), dict) else {}
+    recording = metadata.get("recording_diagnostics") if isinstance(metadata.get("recording_diagnostics"), dict) else {}
+    history_async = recording.get("async_refresh") if isinstance(recording.get("async_refresh"), dict) else {}
+    instrument_master = metadata.get("instrument_master_prewarm") if isinstance(metadata.get("instrument_master_prewarm"), dict) else {}
     return {
         "pipeline_seconds": round(pipeline_seconds, 4),
         "p50_pipeline_seconds": round(_percentile(latency_history, 0.50), 4),
@@ -114,6 +117,8 @@ def build_performance_report(
         "latency_samples": len(latency_history),
         "transport": transport,
         "async_evidence": async_evidence,
+        "history_async": history_async,
+        "instrument_master": instrument_master,
         "build_seconds": round(build_seconds, 4),
         "finalize_seconds": round(finalize_seconds, 4),
         "refresh_interval_seconds": round(interval, 1),

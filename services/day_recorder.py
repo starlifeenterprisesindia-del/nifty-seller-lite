@@ -56,6 +56,8 @@ class DayRecorder:
         self.last_build_seconds = None
         self.paper_monitor = None
         self.paper_status = "NOT REGISTERED"
+        self.last_app_ingest_monotonic = 0.0
+        self.last_app_ingest_at = None
 
     def start(self):
         if os.getenv("DAY_MEMORY_ENABLED") != "1":
@@ -83,6 +85,10 @@ class DayRecorder:
         self.thread = threading.Thread(target=self._run, args=(root,), daemon=True)
         self.thread.start()
 
+    def note_app_ingest(self, at=None):
+        self.last_app_ingest_monotonic = clock.monotonic()
+        self.last_app_ingest_at = str(at or datetime.now(IST).isoformat())
+
     def _run(self, root):
         from services.snapshot_service import SnapshotService
         service = None
@@ -91,6 +97,19 @@ class DayRecorder:
             if recording_time(now):
                 started = clock.monotonic()
                 try:
+                    # When the Streamlit app is actively pushing its already-built
+                    # authoritative snapshot, never fetch the same Dhan inputs again.
+                    # The background observer becomes a fallback only if the app has
+                    # been silent for more than 90 seconds.
+                    app_age = (
+                        clock.monotonic() - self.last_app_ingest_monotonic
+                        if self.last_app_ingest_monotonic > 0
+                        else None
+                    )
+                    if app_age is not None and app_age < 90.0:
+                        self.status = f"APP-FED — duplicate broker fetch skipped ({app_age:.0f}s age)"
+                        self.stop_event.wait(max(1.0, 60.0 - clock.time() % 60.0))
+                        continue
                     gateway = self.gateway_factory()
                     minimum_idle = max(8.0, float(os.getenv("DAY_MEMORY_MIN_IDLE_SECONDS", "12") or 12))
                     # Give the foreground app first priority, but do not permanently
@@ -160,8 +179,14 @@ class DayRecorder:
             except (TypeError, ValueError):
                 pass
         health = "NO SAVED SAMPLE" if age is None else "REFERENCE — SESSION CLOSED" if not recording_time(now) else "RECENT SAMPLE" if 0 <= age <= 180 else "RECORDING GAP / STALE"
+        app_ingest_age = (
+            round(clock.monotonic() - self.last_app_ingest_monotonic, 1)
+            if self.last_app_ingest_monotonic > 0 else None
+        )
         return {**data, "recorder_status": self.status, "interval_seconds": 60,
                 "last_build_seconds": self.last_build_seconds,
                 "paper_monitor_status": self.paper_status,
                 "recording_health": health, "last_sample_age_seconds": age,
-                "note": "Background reference, app AI alag. Samples/events limited to observation times; no full replay."}
+                "app_ingest_at": self.last_app_ingest_at,
+                "app_ingest_age_seconds": app_ingest_age,
+                "note": "App snapshots are primary while active; background Dhan observer is fallback only. No extra vote or automatic training."}

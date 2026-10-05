@@ -9,7 +9,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from analysis.alerts import target_crossed
 from config import IST_TIMEZONE
@@ -43,7 +42,7 @@ def _bell_wav() -> bytes:
 def _play_alert(message: str) -> None:
     st.audio(_bell_wav(), format="audio/wav", autoplay=True)
     safe_message = json.dumps(str(message))
-    components.html(
+    st.iframe(
         f"""
         <script>
         const message = {safe_message};
@@ -56,7 +55,8 @@ def _play_alert(message: str) -> None:
         }}
         </script>
         """,
-        height=0,
+        height=1,
+        width="stretch",
     )
 
 
