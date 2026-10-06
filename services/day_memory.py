@@ -136,7 +136,8 @@ def compact(snapshot, tracked_strikes=()):
         evidence = {k: summary.get(k) for k in (
             "core_evidence", "price_action", "patterns", "option_intelligence",
             "heavyweights", "volume", "vix_context", "news_context", "event_risk",
-            "decision", "trade_plan", "execution_guard", "risk_profile")}
+            "decision", "trade_plan", "execution_guard", "risk_profile",
+            "market_intelligence")}
     return clean({
         "record_schema": 2,
         "at": summary["created_at"], "spot": spot, "expiry": summary["expiry"],
@@ -155,6 +156,7 @@ def compact(snapshot, tracked_strikes=()):
         "future_contract": {"security_id": snapshot.metadata.get("future_security_id"), "expiry": snapshot.metadata.get("future_expiry")},
         "institutional_context": summary.get("institutional_context", {}),
         "history_analytics": snapshot.metadata.get("history_analytics", {}),
+        "market_intelligence": summary.get("market_intelligence"),
         # Canonical background inputs/results for later diagnosis, not extra votes.
         "evidence": evidence,
         "storage_mode": "SLIM IMPORTANT DATA" if slim else "FULL DIAGNOSTIC",

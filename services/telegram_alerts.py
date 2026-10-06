@@ -301,7 +301,7 @@ class LiveAlertEngine:
             self._persist_dedupe_state()
 
         audit = {
-            "kind": "COMBINED_SIGNAL",
+            "kind": str(payload.get("kind") or "COMBINED_SIGNAL")[:80],
             "captured_at": str(payload.get("captured_at") or ""),
             "direction": str(payload.get("direction") or ""),
             "names": str(payload.get("names") or "")[:300],
@@ -319,6 +319,59 @@ class LiveAlertEngine:
             ).start()
             return True
         return self._deliver_pattern(message, signatures, timestamp, audit)
+
+    def observe_market_intelligence(self, payload: dict[str, Any], now_ts: float | None = None) -> bool:
+        """Send one deduplicated OB-MIE shadow alert, including direction-unclear expansion.
+
+        The caller has already calculated market intelligence from an authoritative
+        snapshot.  This method performs delivery only; it never fetches market data.
+        """
+        timestamp = time.time() if now_ts is None else now_ts
+        if not _market_hours(datetime.fromtimestamp(timestamp, IST)):
+            return False
+        try:
+            stamp = datetime.fromisoformat(str(payload["captured_at"]))
+            if not 0 <= timestamp - stamp.timestamp() <= 120:
+                return False
+        except (KeyError, ValueError, TypeError):
+            return False
+        direction = str(payload.get("direction") or "MIXED").upper()
+        if direction not in {"BULLISH", "BEARISH", "MIXED"}:
+            return False
+        alert_id = str(payload.get("alert_id") or "").strip()[:180]
+        if not alert_id:
+            return False
+        signature = "mie:" + stamp.date().isoformat() + ":" + alert_id
+        message = str(payload.get("message") or "Market Intelligence alert")[:1800]
+        with self._lock:
+            if signature in self._last_sent:
+                return False
+            self._last_sent[signature] = timestamp
+            self._persist_dedupe_state()
+        audit = {
+            "kind": "MARKET_INTELLIGENCE",
+            "captured_at": str(payload.get("captured_at") or ""),
+            "direction": direction,
+            "names": str(payload.get("title") or payload.get("kind") or "OB-MIE")[:300],
+            "conflict": str(payload.get("kind") or "") == "SYSTEM_CONFLICT",
+            "nifty_ltp": payload.get("nifty_ltp"),
+            "generated_at": datetime.fromtimestamp(timestamp, IST).isoformat(),
+            "market_intelligence": {
+                "kind": str(payload.get("kind") or "")[:80],
+                "score": payload.get("score"),
+                "coverage": payload.get("coverage"),
+                "alignment": str(payload.get("alignment") or "")[:100],
+            },
+        }
+        if self.async_delivery:
+            threading.Thread(
+                target=self._deliver_pattern,
+                args=(message, [signature], timestamp, audit),
+                daemon=True,
+                name="telegram-market-intelligence-send",
+            ).start()
+            return True
+        return self._deliver_pattern(message, [signature], timestamp, audit)
 
     def _deliver_pattern(
         self, message: str, signatures: list[str], timestamp: float, audit: dict[str, Any] | None = None
