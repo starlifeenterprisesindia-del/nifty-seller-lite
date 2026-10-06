@@ -5,6 +5,18 @@ from analysis.alert_audit import filter_alert_history, summarize_alert_history
 from services.railway_live_client import RailwayDhanClient, post_railway_json
 
 
+def _persistent_bool_toggle(label: str, key: str, default: bool) -> bool:
+    """Keep alert preference even when this optional panel is temporarily hidden."""
+    widget_key = f"__widget__{key}"
+    if key not in st.session_state:
+        st.session_state[key] = bool(default)
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = bool(st.session_state.get(key, default))
+    value = bool(st.toggle(label, key=widget_key))
+    st.session_state[key] = value
+    return value
+
+
 def process_combined_signal_alerts(snapshot, server_url="", server_key=""):
     """Send one deduplicated W/M+candle+Big-Player Telegram lane.
 
@@ -39,10 +51,10 @@ def process_combined_signal_alerts(snapshot, server_url="", server_key=""):
 
 
 def render_pattern_alerts(snapshot, server_url="", server_key=""):
-    enabled = st.toggle(
+    enabled = _persistent_bool_toggle(
         "Strong Candle / W-M / Big Player Alerts ON",
-        value=st.session_state.get("combined_signal_alerts_enabled", True),
-        key="combined_signal_alerts_enabled",
+        "combined_signal_alerts_enabled",
+        True,
     )
     st.caption(
         "Ek hi alert lane: completed 3m W/M/candle + Big Player. Same signal refresh par repeat nahi hota; "

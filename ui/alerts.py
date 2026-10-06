@@ -13,7 +13,23 @@ import streamlit as st
 from analysis.alerts import target_crossed
 from config import IST_TIMEZONE
 from models import MarketSnapshot
-from services.railway_live_client import delete_railway_alert, post_railway_json
+from services.railway_live_client import (
+    delete_railway_alert,
+    fetch_railway_premium_alerts,
+    post_railway_json,
+)
+
+
+def _persistent_bool_toggle(label: str, key: str, default: bool) -> bool:
+    """Preserve alert preference when optional alert controls are not rendered."""
+    widget_key = f"__widget__{key}"
+    if key not in st.session_state:
+        st.session_state[key] = bool(default)
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = bool(st.session_state.get(key, default))
+    value = bool(st.toggle(label, key=widget_key))
+    st.session_state[key] = value
+    return value
 
 
 def _bell_wav() -> bytes:
@@ -125,6 +141,36 @@ def render_market_alerts(
     """
     sound_enabled = bool(st.session_state.get("market_alert_sound_enabled", False))
 
+    # Railway is the durable alert authority. After a Streamlit reconnect/new
+    # session, restore the latest ACTIVE premium alert into the browser UI so it
+    # does not appear to have switched itself off while the server monitor is alive.
+    if (
+        live_server_url
+        and live_server_api_key
+        and not st.session_state.get("manual_option_alert_cloud_state_checked", False)
+    ):
+        try:
+            cloud_rows = fetch_railway_premium_alerts(
+                live_server_url, live_server_api_key, timeout_seconds=2.5
+            )
+            active_rows = [
+                row for row in cloud_rows if str(row.get("status", "")).upper() == "ACTIVE"
+            ]
+            if active_rows:
+                row = active_rows[-1]
+                st.session_state.manual_option_cloud_alert_id = row.get("id")
+                st.session_state.manual_option_alert_active = True
+                st.session_state.manual_option_alert_side = str(row.get("side") or "CE")
+                st.session_state.manual_option_alert_position = str(row.get("position") or "BUY")
+                st.session_state.manual_option_alert_strike = float(row.get("strike") or 0.0)
+                st.session_state.manual_option_alert_target = float(row.get("target_premium") or 0.0)
+                st.session_state.manual_option_alert_expiry = str(row.get("expiry") or "")
+            st.session_state.manual_option_alert_cloud_active_count = len(active_rows)
+        except Exception as exc:
+            st.session_state.manual_option_alert_cloud_sync_error = type(exc).__name__
+        finally:
+            st.session_state.manual_option_alert_cloud_state_checked = True
+
     st.subheader("🔔 Manual CE/PE Premium Alert")
     st.caption(
         "Target premium tum khud set karoge. Yeh alert-only hai; One-Brain decision ya broker order ko change nahi karta. "
@@ -133,10 +179,10 @@ def render_market_alerts(
 
     sound_col, test_col = st.columns(2)
     with sound_col:
-        sound_enabled = st.toggle(
+        sound_enabled = _persistent_bool_toggle(
             "Alert Sound ON",
-            value=sound_enabled,
-            key="market_alert_sound_enabled",
+            "market_alert_sound_enabled",
+            sound_enabled,
         )
     with test_col:
         test_sound = st.button(
@@ -315,6 +361,11 @@ def render_market_alerts(
             else:
                 st.warning(message + " Sound OFF tha.")
 
+    cloud_count = int(st.session_state.get("manual_option_alert_cloud_active_count", 0) or 0)
+    if cloud_count:
+        st.caption(f"Railway durable premium alerts active: {cloud_count}")
+    if st.session_state.get("manual_option_alert_cloud_sync_error"):
+        st.caption("Railway alert-state sync pending; server-side alert monitor unaffected hai.")
     st.caption(
         "Phone/Telegram premium monitoring Railway par chalta hai. Browser sound ke liye tab open hona better hai."
     )

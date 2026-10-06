@@ -101,10 +101,65 @@ from ui.strategy_lab import render_phase4_strategy_lab, render_phase7_strategy_r
 from ui.validation_lab import render_phase5_validation_lab
 
 
+_PROCESS_PERSIST_CONTROLS = {
+    "auto_snapshot_enabled",
+    "auto_snapshot_duration_minutes",
+    "auto_snapshot_interval_seconds",
+    "fast_monitor_enabled",
+    "auto_shadow_journal_enabled",
+    "combined_signal_alerts_enabled",
+    "market_alert_sound_enabled",
+}
+
+
+def _remember_runtime_control(key: str, value: object) -> None:
+    """Persist widget state safely across reruns; process-cache only global controls.
+
+    Streamlit deletes widget-backed Session State when a widget is skipped during a
+    rerun. The durable Session State key prevents panel collapse. Only operational
+    controls are additionally copied to the process handoff; visual panel-open state
+    remains per browser session so future viewer sessions cannot affect each other.
+    """
+    st.session_state[key] = value
+    if key not in _PROCESS_PERSIST_CONTROLS:
+        return
+    handoff = globals().get("_RUNTIME_HANDOFF")
+    if isinstance(handoff, dict):
+        controls = handoff.setdefault("controls", {})
+        if isinstance(controls, dict):
+            controls[key] = value
+
+
+def _persistent_toggle(label: str, key: str, *, default: bool = False, **kwargs) -> bool:
+    """Toggle whose durable value survives runs in which the widget is not rendered."""
+    widget_key = f"__widget__{key}"
+    if key not in st.session_state:
+        st.session_state[key] = bool(default)
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = bool(st.session_state.get(key, default))
+    value = bool(st.toggle(label, key=widget_key, **kwargs))
+    _remember_runtime_control(key, value)
+    return value
+
+
+def _persistent_selectbox(label: str, options, key: str, *, default, **kwargs):
+    """Selectbox backed by a non-widget key so refresh reruns cannot reset it."""
+    values = tuple(options)
+    current = st.session_state.get(key, default)
+    if current not in values:
+        current = default
+    widget_key = f"__widget__{key}"
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = current
+    value = st.selectbox(label, values, key=widget_key, **kwargs)
+    _remember_runtime_control(key, value)
+    return value
+
+
 @contextmanager
 def persistent_panel(label: str, key: str):
-    """A rerun-safe replacement for expanders used in the auto-refreshing view."""
-    is_open = st.toggle(label, value=False, key=key)
+    """Panel state that survives early/full reruns and temporary widget hiding."""
+    is_open = _persistent_toggle(label, key, default=False)
     if is_open:
         with st.container(border=True):
             yield True
@@ -365,28 +420,38 @@ def _process_runtime_handoff() -> dict[str, object]:
     last authoritative snapshot instead of rebuilding the full Railway/Dhan pipeline
     just because UI code changed.  A real process replacement simply starts empty.
     """
-    return {"snapshot": None, "previous_snapshot": None}
+    return {"snapshot": None, "previous_snapshot": None, "controls": {}, "app_version": None}
 
 
 _RUNTIME_HANDOFF = _process_runtime_handoff()
+_runtime_controls = _RUNTIME_HANDOFF.get("controls")
+if isinstance(_runtime_controls, dict):
+    for _control_key, _control_value in _runtime_controls.items():
+        if _control_key not in st.session_state:
+            st.session_state[_control_key] = _control_value
 if "snapshot" not in st.session_state and _RUNTIME_HANDOFF.get("snapshot") is not None:
     st.session_state.snapshot = _RUNTIME_HANDOFF["snapshot"]
     if _RUNTIME_HANDOFF.get("previous_snapshot") is not None:
         st.session_state.previous_snapshot = _RUNTIME_HANDOFF["previous_snapshot"]
     st.session_state["snapshot_restored_from_process_cache"] = True
 
-# Deployment safety: a code/version change must never inherit an already-running
-# auto-refresh loop from the previous build. The user can re-enable Auto Snapshot
-# after the new version has rendered once.
-if st.session_state.get("_loaded_app_version") != CONFIG.version:
-    st.session_state["_loaded_app_version"] = CONFIG.version
-    st.session_state["auto_snapshot_enabled"] = False
+# Deployment safety without reconnect regression: only a real process/version
+# transition resets Auto Snapshot. A new browser websocket/session on the SAME app
+# version must inherit the operational control instead of silently switching it OFF.
+_process_version_changed = _RUNTIME_HANDOFF.get("app_version") != CONFIG.version
+if _process_version_changed:
+    _RUNTIME_HANDOFF["app_version"] = CONFIG.version
+    _remember_runtime_control("auto_snapshot_enabled", False)
     for _key in (
+        "__widget__auto_snapshot_enabled",
         "auto_snapshot_due",
         "auto_snapshot_reserved_at",
         "auto_snapshot_started_at",
+        "auto_snapshot_next_due_at",
+        "auto_snapshot_priority_requested_at",
     ):
         st.session_state.pop(_key, None)
+st.session_state["_loaded_app_version"] = CONFIG.version
 st.markdown(
     """
     <style>
@@ -519,6 +584,76 @@ def optional_number(raw: str) -> float | None:
     return float(value)
 
 
+risk_profile = RiskProfile(
+    capital_rupees=float(CONFIG.risk_default_capital),
+    risk_pct=float(CONFIG.risk_default_pct),
+    lot_size=int(CONFIG.risk_default_lot_size),
+    max_lots_cap=int(CONFIG.risk_default_max_lots),
+    target_capture_pct=float(CONFIG.risk_default_target_capture_pct),
+    stop_loss_pct=float(CONFIG.risk_default_stop_loss_pct),
+    entry_start=CONFIG.risk_default_entry_start,
+    entry_end=CONFIG.risk_default_entry_end,
+    forced_exit=CONFIG.risk_default_forced_exit,
+)
+
+
+def _build_authoritative_snapshot_once() -> tuple[object | None, float, Exception | None]:
+    """Build one full snapshot without forcing the rest of the page to rerender.
+
+    Auto refresh calls this from a fragment. The existing page therefore stays on
+    screen while Dhan/Railway processing runs; after success a short full rerun only
+    repaints already-built state.
+    """
+    if st.session_state.get("snapshot_build_inflight", False):
+        return None, 0.0, RuntimeError("snapshot build already in progress")
+    st.session_state.snapshot_build_inflight = True
+    started_wall = time.time()
+    try:
+        if railway_ready:
+            client = RailwayDhanClient(
+                live_server_url,
+                live_server_api_key,
+                timeout_seconds=max(8.0, CONFIG.request_timeout_seconds),
+            )
+        else:
+            credentials = Credentials(client_id=client_id, access_token=access_token)
+            client = DhanClient(credentials)
+        service = SnapshotService(
+            client,
+            instrument_master,
+            state_store,
+            context_store,
+            discipline_store,
+            news_service=news_service,
+        )
+        previous_snapshot = st.session_state.get("snapshot")
+        new_snapshot = service.build(risk_profile=risk_profile)
+        new_snapshot.metadata["instrument_master_prewarm"] = instrument_master.prewarm_status()
+        if (
+            previous_snapshot is not None
+            and previous_snapshot.snapshot_id != new_snapshot.snapshot_id
+            and previous_snapshot.created_at.date() == new_snapshot.created_at.date()
+        ):
+            st.session_state.previous_snapshot = previous_snapshot
+        st.session_state.snapshot = new_snapshot
+        completed_at = time.time()
+        elapsed = max(0.0, completed_at - started_wall)
+        st.session_state.last_snapshot_started_ts = started_wall
+        st.session_state.last_snapshot_fetch_ts = completed_at
+        st.session_state.last_snapshot_completed_ts = completed_at
+        st.session_state.last_snapshot_build_seconds = round(elapsed, 3)
+        st.session_state.last_snapshot_refresh_error = ""
+        st.session_state.last_snapshot_refresh_ok_at = completed_at
+        _RUNTIME_HANDOFF["snapshot"] = new_snapshot
+        _RUNTIME_HANDOFF["previous_snapshot"] = st.session_state.get("previous_snapshot")
+        return new_snapshot, elapsed, None
+    except Exception as exc:
+        st.session_state.last_snapshot_refresh_error = f"{type(exc).__name__}: {exc}"
+        return None, max(0.0, time.time() - started_wall), exc
+    finally:
+        st.session_state.snapshot_build_inflight = False
+
+
 with st.sidebar:
     st.subheader("Connection")
     st.write(f"Version: `{CONFIG.version}`")
@@ -530,119 +665,194 @@ with st.sidebar:
         st.warning("Legacy direct Dhan mode — Railway recommended")
     else:
         st.error("Dhan credentials missing")
-    shadow_journal_enabled = st.toggle(
+    shadow_journal_enabled = _persistent_toggle(
         "Auto Shadow Journal ON",
-        value=True,
-        key="auto_shadow_journal_enabled",
+        "auto_shadow_journal_enabled",
+        default=True,
         help="Maximum 5 paper trades/day; no broker orders.",
     )
-    auto_due = bool(st.session_state.pop("auto_snapshot_due", False))
-    refresh_requested = st.button(
-        "Fetch Fresh Snapshot", type="primary", width="stretch"
-    )
-    refresh = False
-    if auto_due:
-        # The scheduler has already enforced its selected interval.
-        refresh = True
-    elif refresh_requested:
-        now_tick = datetime.now().timestamp()
-        last_tick = float(st.session_state.get("last_snapshot_fetch_ts", 0.0))
-        remaining = CONFIG.snapshot_min_refresh_seconds - (now_tick - last_tick)
-        if remaining > 0:
-            if refresh_requested:
-                st.warning(f"Please wait {remaining:.1f}s before another Dhan snapshot.")
-        else:
-            refresh = True
 
+    # Snapshot controls use durable state keys. Auto refresh is built inside a
+    # fragment, so the main workspace remains mounted while processing happens.
     with st.expander("⏱️ Auto Snapshot", expanded=False):
-        auto_enabled = st.toggle("Auto Snapshot ON", key="auto_snapshot_enabled")
-        duration_minutes = st.selectbox(
+        auto_enabled = _persistent_toggle(
+            "Auto Snapshot ON",
+            "auto_snapshot_enabled",
+            default=False,
+        )
+        duration_minutes = _persistent_selectbox(
             "Kitni der chale",
-            (5, 15, 30, 60),
-            index=1,
-            format_func=lambda value: "1 hour" if value == 60 else f"{value} minute",
-            key="auto_snapshot_duration_minutes",
+            (0, 15, 30, 60),
+            "auto_snapshot_duration_minutes",
+            default=0,
+            format_func=lambda value: (
+                "Manual OFF tak (recommended)" if value == 0
+                else "1 hour" if value == 60
+                else f"{value} minute"
+            ),
             disabled=not auto_enabled,
         )
-        interval_seconds = st.selectbox(
+        interval_seconds = _persistent_selectbox(
             "Har kitni der snapshot",
             (15, 30, 60),
-            index=1,
+            "auto_snapshot_interval_seconds",
+            default=30,
             format_func=lambda value: (
                 "1 minute" if value == 60 else f"{value} second"
             ),
-            key="auto_snapshot_interval_seconds",
             disabled=not auto_enabled,
         )
-        fast_monitor_enabled = st.toggle(
+        fast_monitor_enabled = _persistent_toggle(
             "5-second Fast Live Monitor",
-            value=True,
-            key="fast_monitor_enabled",
+            "fast_monitor_enabled",
+            default=True,
             disabled=not auto_enabled,
         )
         st.caption(
-            "Recommended: full snapshot 30s + Fast Monitor 5s. MAJOR MOVE par fast monitor priority full snapshot trigger karta hai."
+            "Recommended: full snapshot 30s + Fast Monitor 5s. Auto Snapshot ab "
+            "processing/rerun par OFF nahi hota; 0 duration ka matlab manual OFF tak."
         )
-        if auto_enabled and "auto_snapshot_started_at" not in st.session_state:
-            st.session_state.auto_snapshot_started_at = time.time()
-        if not auto_enabled:
-            st.session_state.pop("auto_snapshot_started_at", None)
 
-        @st.fragment(run_every=interval_seconds if auto_enabled else None)
+        now_control = time.time()
+        previous_interval = st.session_state.get("auto_snapshot_interval_seen")
+        previous_duration = st.session_state.get("auto_snapshot_duration_seen")
+        if auto_enabled:
+            if "auto_snapshot_started_at" not in st.session_state:
+                st.session_state.auto_snapshot_started_at = now_control
+            if previous_duration is not None and int(previous_duration) != int(duration_minutes):
+                # A newly selected timed run starts now; it never inherits an old
+                # elapsed timer and switches itself off unexpectedly.
+                st.session_state.auto_snapshot_started_at = now_control
+            if (
+                "auto_snapshot_next_due_at" not in st.session_state
+                or previous_interval is not None
+                and int(previous_interval) != int(interval_seconds)
+            ):
+                last_started = float(st.session_state.get("last_snapshot_started_ts", 0.0))
+                base = max(now_control, last_started)
+                st.session_state.auto_snapshot_next_due_at = base + int(interval_seconds)
+            st.session_state.auto_snapshot_interval_seen = int(interval_seconds)
+            st.session_state.auto_snapshot_duration_seen = int(duration_minutes)
+        else:
+            st.session_state.pop("auto_snapshot_started_at", None)
+            st.session_state.pop("auto_snapshot_next_due_at", None)
+            st.session_state.pop("auto_snapshot_priority_requested_at", None)
+
+        # Five-second heartbeat reuses the same light cadence as Fast Monitor. It
+        # performs no broker call until a full snapshot is actually due, so 30s
+        # mode remains dependable without adding heavy critical-path work.
+        auto_scheduler_every = 5.0 if auto_enabled else None
+
+        @st.fragment(run_every=auto_scheduler_every)
         def auto_snapshot_scheduler() -> None:
-            if not st.session_state.get("auto_snapshot_enabled", False):
+            enabled = bool(st.session_state.get("auto_snapshot_enabled", False))
+            if not enabled:
                 st.caption("OFF — manual snapshot available hai")
                 return
-            now_value = time.time()
-            started = float(
-                st.session_state.get("auto_snapshot_started_at", now_value)
-            )
-            duration_seconds = int(
-                st.session_state.get("auto_snapshot_duration_minutes", 15)
-            ) * 60
-            elapsed = max(0.0, now_value - started)
-            if elapsed >= duration_seconds:
-                st.session_state.auto_snapshot_enabled = False
-                st.session_state.pop("auto_snapshot_started_at", None)
-                st.success("Auto Snapshot duration poori — automatic OFF")
-                st.rerun()
 
             current_snapshot = st.session_state.get("snapshot")
             market_live = bool(
                 current_snapshot is not None
                 and getattr(current_snapshot.market_session, "is_live", False)
             )
-            remaining_run = max(0, round((duration_seconds - elapsed) / 60))
-            if not market_live:
-                st.caption(
-                    f"PAUSED — market live nahi · {remaining_run} min duration baaki"
-                )
-                return
-            last_fetch = max(
-                float(st.session_state.get("last_snapshot_fetch_ts", now_value)),
-                float(st.session_state.get("auto_snapshot_reserved_at", 0.0)),
-            )
-            interval = int(
-                st.session_state.get(
-                    "auto_snapshot_interval_seconds",
-                    CONFIG.full_snapshot_default_seconds,
-                )
-            )
-            next_in = max(0, round(interval - (now_value - last_fetch)))
-            st.caption(
-                f"ON · Agla snapshot ~{next_in}s · {remaining_run} min baaki"
-            )
-            if now_value - last_fetch >= interval:
-                # Reserve the interval before requesting a full rerun. The scheduler
-                # is rendered above the snapshot builder, so without this lock the
-                # next full run would still see an overdue timer and rerun forever
-                # before reaching service.build(). The real fetch timestamp replaces
-                # this reservation immediately after a successful snapshot.
-                st.session_state.auto_snapshot_reserved_at = now_value
-                st.session_state.auto_snapshot_due = True
+            now_value = time.time()
+            run_minutes = int(st.session_state.get("auto_snapshot_duration_minutes", 0) or 0)
+            started = float(st.session_state.get("auto_snapshot_started_at", now_value))
+            if run_minutes > 0 and now_value - started >= run_minutes * 60:
+                _remember_runtime_control("auto_snapshot_enabled", False)
+                st.session_state.pop("auto_snapshot_started_at", None)
+                st.session_state.pop("auto_snapshot_next_due_at", None)
+                st.success("Selected Auto Snapshot duration poori — automatic OFF")
                 st.rerun(scope="app")
 
+            if not market_live:
+                st.caption("PAUSED — market live nahi; Auto Snapshot setting ON rahegi")
+                return
+
+            interval = int(st.session_state.get("auto_snapshot_interval_seconds", 30) or 30)
+            next_due = float(
+                st.session_state.get("auto_snapshot_next_due_at", now_value + interval)
+            )
+            priority_at = float(
+                st.session_state.get("auto_snapshot_priority_requested_at", 0.0) or 0.0
+            )
+            priority_due = priority_at > float(
+                st.session_state.get("last_snapshot_started_ts", 0.0) or 0.0
+            )
+            seconds_left = max(0, int(round(next_due - now_value)))
+            build_seconds = float(st.session_state.get("last_snapshot_build_seconds", 0.0) or 0.0)
+            if build_seconds > interval:
+                st.caption(
+                    f"ON · {interval}s selected · last build {build_seconds:.1f}s; "
+                    "effective cadence processing speed se limited hai"
+                )
+            else:
+                st.caption(
+                    f"ON · {interval}s cadence · next ~{seconds_left}s"
+                    + (" · PRIORITY MOVE" if priority_due else "")
+                )
+
+            if st.session_state.get("snapshot_build_inflight", False):
+                st.caption("Snapshot processing already running — overlap blocked")
+                return
+            if not priority_due and now_value < next_due:
+                return
+
+            build_started = time.time()
+            with st.spinner("Refreshing snapshot in background — main page stays open…"):
+                new_snapshot, elapsed, error = _build_authoritative_snapshot_once()
+            if error is not None or new_snapshot is None:
+                # Do not switch Auto Snapshot OFF on a transient feed/backend error.
+                # Retry after a bounded delay instead of entering a rerun loop.
+                st.session_state.auto_snapshot_next_due_at = time.time() + max(5, min(interval, 15))
+                st.warning(
+                    f"Auto refresh retry scheduled · {type(error).__name__ if error else 'busy'}"
+                )
+                return
+
+            completed = time.time()
+            # Start-to-start cadence when feasible; if processing itself is slower
+            # than the selected interval, always give the UI a small quiet gap.
+            st.session_state.auto_snapshot_next_due_at = max(
+                build_started + interval, completed + 2.0
+            )
+            st.session_state.pop("auto_snapshot_priority_requested_at", None)
+            st.success(f"Fresh snapshot ready · {elapsed:.1f}s")
+            # This app rerun is now lightweight: the expensive snapshot already exists.
+            st.rerun(scope="app")
+
         auto_snapshot_scheduler()
+
+    # Manual refresh is also isolated in a fragment, so pressing it does not blank
+    # or collapse the live workspace while the heavy snapshot is processing.
+    @st.fragment
+    def manual_snapshot_refresh() -> None:
+        clicked = st.button("Fetch Fresh Snapshot", type="primary", width="stretch")
+        if not clicked:
+            return
+        if st.session_state.get("snapshot_build_inflight", False):
+            st.warning("Snapshot already processing — overlap blocked")
+            return
+        now_tick = time.time()
+        last_tick = float(st.session_state.get("last_snapshot_started_ts", 0.0) or 0.0)
+        remaining = CONFIG.snapshot_min_refresh_seconds - (now_tick - last_tick)
+        if remaining > 0:
+            st.warning(f"Please wait {remaining:.1f}s before another Dhan snapshot.")
+            return
+        with st.spinner("Refreshing snapshot — current page remains open…"):
+            new_snapshot, elapsed, error = _build_authoritative_snapshot_once()
+        if error is not None or new_snapshot is None:
+            st.error(f"Snapshot failed safely: {error}")
+            return
+        if st.session_state.get("auto_snapshot_enabled", False):
+            interval = int(st.session_state.get("auto_snapshot_interval_seconds", 30) or 30)
+            st.session_state.auto_snapshot_next_due_at = max(
+                now_tick + interval, time.time() + 2.0
+            )
+        st.success(f"Fresh snapshot ready · {elapsed:.1f}s")
+        st.rerun(scope="app")
+
+    manual_snapshot_refresh()
     clear_instrument_cache = False
     clear_option_state = False
     # Destructive maintenance is hidden from the normal trading UI. It can be
@@ -834,18 +1044,6 @@ with st.sidebar:
         st.session_state.pop("snapshot", None)
         st.success("Bounded option history cleared")
 
-risk_profile = RiskProfile(
-    capital_rupees=float(CONFIG.risk_default_capital),
-    risk_pct=float(CONFIG.risk_default_pct),
-    lot_size=int(CONFIG.risk_default_lot_size),
-    max_lots_cap=int(CONFIG.risk_default_max_lots),
-    target_capture_pct=float(CONFIG.risk_default_target_capture_pct),
-    stop_loss_pct=float(CONFIG.risk_default_stop_loss_pct),
-    entry_start=CONFIG.risk_default_entry_start,
-    entry_end=CONFIG.risk_default_entry_end,
-    forced_exit=CONFIG.risk_default_forced_exit,
-)
-
 if not credentials_ready:
     st.code(
         '[live_server]\nurl = "https://YOUR-SERVICE.up.railway.app"\napi_key = "YOUR_LIVE_API_KEY"',
@@ -891,62 +1089,18 @@ if "snapshot" not in st.session_state and railway_ready:
         st.caption("Cold-start protection: heavy snapshot tabhi build hoga jab backend ready ho.")
         st.stop()
 
-if "snapshot" not in st.session_state or refresh:
-    try:
-        with st.spinner(
-            "Building one authoritative DhanHQ snapshot, core market evidence and option intelligence..."
-        ):
-            if railway_ready:
-                client = RailwayDhanClient(
-                    live_server_url,
-                    live_server_api_key,
-                    timeout_seconds=max(8.0, CONFIG.request_timeout_seconds),
-                )
-            else:
-                credentials = Credentials(client_id=client_id, access_token=access_token)
-                client = DhanClient(credentials)
-            service = SnapshotService(
-                client,
-                instrument_master,
-                state_store,
-                context_store,
-                discipline_store,
-                news_service=news_service,
-            )
-            previous_snapshot = st.session_state.get("snapshot")
-            # Keep timing diagnostics, but schedule the next auto refresh only after
-            # successful completion so a slow build can never become instantly overdue.
-            snapshot_fetch_started_at = time.time()
-            new_snapshot = service.build(risk_profile=risk_profile)
-            new_snapshot.metadata["instrument_master_prewarm"] = instrument_master.prewarm_status()
-            if (
-                previous_snapshot is not None
-                and previous_snapshot.snapshot_id != new_snapshot.snapshot_id
-                and previous_snapshot.created_at.date() == new_snapshot.created_at.date()
-            ):
-                st.session_state.previous_snapshot = previous_snapshot
-            st.session_state.snapshot = new_snapshot
-            snapshot_completed_at = time.time()
-            # Stability hotfix: cadence/cooldown is anchored to successful completion.
-            # Anchoring it to fetch START can make a slow build immediately overdue and
-            # trigger a rerun/build loop before the page gets a chance to render.
-            st.session_state.last_snapshot_started_ts = snapshot_fetch_started_at
-            st.session_state.last_snapshot_fetch_ts = snapshot_completed_at
-            st.session_state.last_snapshot_completed_ts = snapshot_completed_at
-            st.session_state.last_snapshot_build_seconds = round(
-                max(0.0, snapshot_completed_at - snapshot_fetch_started_at), 3
-            )
-            st.session_state.pop("auto_snapshot_reserved_at", None)
-            _RUNTIME_HANDOFF["snapshot"] = new_snapshot
-            _RUNTIME_HANDOFF["previous_snapshot"] = st.session_state.get("previous_snapshot")
-            snapshot_built_now = True
-    except Exception as exc:
-        st.session_state.pop("auto_snapshot_reserved_at", None)
+if "snapshot" not in st.session_state:
+    with st.spinner(
+        "Building first authoritative DhanHQ snapshot, core market evidence and option intelligence..."
+    ):
+        new_snapshot, _initial_elapsed, _initial_error = _build_authoritative_snapshot_once()
+    if _initial_error is not None or new_snapshot is None:
         st.error(
-            f"Snapshot failed safely: {exc}. Railway restart/health check karo; "
+            f"Snapshot failed safely: {_initial_error}. Railway restart/health check karo; "
             "Fetch button baar-baar na dabayein."
         )
         st.stop()
+    snapshot_built_now = True
 
 snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
@@ -1208,9 +1362,10 @@ def render_fast_live_monitor() -> None:
             cooldown = max(CONFIG.snapshot_min_refresh_seconds, CONFIG.simple_priority_snapshot_cooldown_seconds)
             if now_fast - last_priority >= cooldown and now_fast - last_full >= CONFIG.snapshot_min_refresh_seconds:
                 st.session_state.last_priority_snapshot_ts = now_fast
-                st.session_state.auto_snapshot_reserved_at = now_fast
-                st.session_state.auto_snapshot_due = True
-                st.rerun(scope="app")
+                # Do not force a full-app rerun from the 5s monitor. The lightweight
+                # auto scheduler fragment will pick this up on its next heartbeat and
+                # build the full snapshot while the current page remains mounted.
+                st.session_state.auto_snapshot_priority_requested_at = now_fast
         with st.container(border=True):
             icon = (
                 "🟢" if impulse.direction == "BULLISH"
@@ -1241,8 +1396,21 @@ def render_fast_live_monitor() -> None:
 
 render_fast_live_monitor()
 
-# Alert delivery is independent of whether the visual panel is expanded. It reuses
-# the existing snapshot only; no new broker/API market calculation is performed.
+# Alert delivery is independent of whether the visual panel is expanded. Alert
+# preferences use non-widget keys, so a processing rerun cannot silently switch them
+# off when the optional controls are temporarily absent.
+if "combined_signal_alerts_enabled" not in st.session_state:
+    st.session_state.combined_signal_alerts_enabled = True
+if "market_alert_sound_enabled" not in st.session_state:
+    st.session_state.market_alert_sound_enabled = False
+_remember_runtime_control(
+    "combined_signal_alerts_enabled",
+    bool(st.session_state.get("combined_signal_alerts_enabled", True)),
+)
+_remember_runtime_control(
+    "market_alert_sound_enabled",
+    bool(st.session_state.get("market_alert_sound_enabled", False)),
+)
 process_combined_signal_alerts(snapshot, live_server_url, live_server_api_key)
 
 
@@ -1310,6 +1478,17 @@ with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
                     live_server_url=live_server_url,
                     live_server_api_key=live_server_api_key,
                 )
+
+# Preserve any alert preference changed inside the optional controls across websocket
+# reconnects in the same Streamlit process.
+_remember_runtime_control(
+    "combined_signal_alerts_enabled",
+    bool(st.session_state.get("combined_signal_alerts_enabled", True)),
+)
+_remember_runtime_control(
+    "market_alert_sound_enabled",
+    bool(st.session_state.get("market_alert_sound_enabled", False)),
+)
 
 
 # PRE-LIVE MAIN ROUTE TOOLS (v2.64.6): these five high-use live panels stay

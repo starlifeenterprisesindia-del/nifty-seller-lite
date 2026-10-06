@@ -98,6 +98,38 @@ def fetch_railway_health(
     return payload
 
 
+def fetch_railway_premium_alerts(
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = 3.0,
+) -> list[dict[str, Any]]:
+    """Read durable Railway premium-alert state; no broker/Dhan request is made."""
+    root = str(base_url or "").strip().rstrip("/")
+    key = str(api_key or "").strip()
+    if not root or not key:
+        return []
+    try:
+        response = _session_for(root).get(
+            f"{root}/alerts",
+            headers={"X-Live-Key": key, "Accept": "application/json"},
+            timeout=max(0.5, float(timeout_seconds)),
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Railway alert state unavailable: {exc}") from exc
+    if response.status_code == 401:
+        raise RuntimeError("Railway LIVE_API_KEY match nahi hui")
+    if response.status_code >= 400:
+        raise RuntimeError(f"Railway alerts HTTP {response.status_code}")
+    try:
+        envelope = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Railway alerts returned invalid JSON") from exc
+    data = envelope.get("data") if isinstance(envelope, dict) else None
+    rows = (data or {}).get("alerts") if isinstance(data, dict) else None
+    return [dict(item) for item in (rows or []) if isinstance(item, dict)]
+
+
 def fetch_railway_live_state(
     base_url: str,
     api_key: str,
