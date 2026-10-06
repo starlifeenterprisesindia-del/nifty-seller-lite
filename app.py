@@ -597,6 +597,31 @@ risk_profile = RiskProfile(
 )
 
 
+def _market_clock_expected_live() -> bool:
+    """Clock-side live-session expectation, independent of the last snapshot.
+
+    A previous CLOSED snapshot must not keep Auto Snapshot paused forever when the
+    next trading session opens. This helper intentionally makes no broker/API call.
+    """
+    now_ist = datetime.now(ZoneInfo(IST_TIMEZONE))
+    if now_ist.weekday() >= 5:
+        return False
+    return CONFIG.market_open <= now_ist.time() < CONFIG.market_close
+
+
+def _format_age(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    value = max(0.0, float(seconds))
+    if value < 60:
+        return f"{value:.0f}s"
+    minutes, secs = divmod(int(value), 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
 def _build_authoritative_snapshot_once() -> tuple[object | None, float, Exception | None]:
     """Build one full snapshot without forcing the rest of the page to rerender.
 
@@ -751,10 +776,15 @@ with st.sidebar:
                 return
 
             current_snapshot = st.session_state.get("snapshot")
-            market_live = bool(
+            snapshot_says_live = bool(
                 current_snapshot is not None
                 and getattr(current_snapshot.market_session, "is_live", False)
             )
+            # Do not trust only the previous snapshot's session flag. A CLOSED
+            # snapshot from yesterday would otherwise keep the scheduler paused
+            # forever the next morning. The clock expectation wakes the scheduler
+            # at the next regular NSE session without any extra API call.
+            market_live = snapshot_says_live or _market_clock_expected_live()
             now_value = time.time()
             run_minutes = int(st.session_state.get("auto_snapshot_duration_minutes", 0) or 0)
             started = float(st.session_state.get("auto_snapshot_started_at", now_value))
@@ -766,7 +796,10 @@ with st.sidebar:
                 st.rerun(scope="app")
 
             if not market_live:
-                st.caption("PAUSED — market live nahi; Auto Snapshot setting ON rahegi")
+                st.caption(
+                    "PAUSED — market closed hai; Auto Snapshot ON rahega aur next regular "
+                    "market session me apne-aap resume hoga"
+                )
                 return
 
             interval = int(st.session_state.get("auto_snapshot_interval_seconds", 30) or 30)
@@ -813,9 +846,15 @@ with st.sidebar:
             completed = time.time()
             # Start-to-start cadence when feasible; if processing itself is slower
             # than the selected interval, always give the UI a small quiet gap.
-            st.session_state.auto_snapshot_next_due_at = max(
-                build_started + interval, completed + 2.0
-            )
+            fetched_is_live = bool(getattr(new_snapshot.market_session, "is_live", False))
+            if _market_clock_expected_live() and not fetched_is_live:
+                # Exchange holiday / server-side session disagreement: avoid hammering
+                # the backend every 15/30 seconds while still checking periodically.
+                st.session_state.auto_snapshot_next_due_at = completed + 300.0
+            else:
+                st.session_state.auto_snapshot_next_due_at = max(
+                    build_started + interval, completed + 2.0
+                )
             st.session_state.pop("auto_snapshot_priority_requested_at", None)
             st.success(f"Fresh snapshot ready · {elapsed:.1f}s")
             # This app rerun is now lightweight: the expensive snapshot already exists.
@@ -849,7 +888,13 @@ with st.sidebar:
             st.session_state.auto_snapshot_next_due_at = max(
                 now_tick + interval, time.time() + 2.0
             )
-        st.success(f"Fresh snapshot ready · {elapsed:.1f}s")
+        if bool(getattr(new_snapshot.market_session, "is_live", False)):
+            st.success(f"Fresh snapshot ready · {elapsed:.1f}s")
+        else:
+            st.info(
+                f"Reference snapshot refreshed · {elapsed:.1f}s · market closed, "
+                "isliye price/option values same reh sakte hain"
+            )
         st.rerun(scope="app")
 
     manual_snapshot_refresh()
@@ -1272,6 +1317,53 @@ _perf = snapshot.metadata.get("performance") or {}
 _stages = _perf.get("stages") or {}
 _slowest = str(_perf.get("slowest_stage") or "")
 _slowest_seconds = float(_stages.get(_slowest) or 0.0) if _slowest else 0.0
+
+# Always-visible snapshot runtime strip. The old timing line disappeared whenever a
+# restored/cached snapshot did not carry pipeline metadata, which made a working
+# scheduler look broken. Keep operational state visible even with partial metadata.
+_now_ist = datetime.now(ZoneInfo(IST_TIMEZONE))
+_created_at = getattr(snapshot, "created_at", None)
+if _created_at is not None:
+    try:
+        _created_ist = _created_at.astimezone(ZoneInfo(IST_TIMEZONE))
+    except Exception:
+        _created_ist = _created_at
+    _snapshot_clock = _created_ist.strftime("%H:%M:%S")
+    try:
+        _snapshot_age = max(0.0, (_now_ist - _created_ist).total_seconds())
+    except Exception:
+        _snapshot_age = None
+else:
+    _snapshot_clock = "—"
+    _snapshot_age = None
+
+_auto_on = bool(st.session_state.get("auto_snapshot_enabled", False))
+_auto_interval = int(st.session_state.get("auto_snapshot_interval_seconds", 30) or 30)
+_snapshot_live = bool(getattr(snapshot.market_session, "is_live", False))
+_clock_live = _market_clock_expected_live()
+if _auto_on and (_snapshot_live or _clock_live):
+    _next_due = float(st.session_state.get("auto_snapshot_next_due_at", time.time()) or time.time())
+    _next_text = f"next ~{max(0, int(round(_next_due - time.time())))}s"
+    _auto_text = f"{_auto_interval}s ON"
+else:
+    _next_text = "next session" if _auto_on else "manual"
+    _auto_text = "PAUSED (CLOSED)" if _auto_on else "OFF"
+
+_last_ok = float(st.session_state.get("last_snapshot_refresh_ok_at", 0.0) or 0.0)
+_last_ok_text = (
+    datetime.fromtimestamp(_last_ok, ZoneInfo(IST_TIMEZONE)).strftime("%H:%M:%S")
+    if _last_ok > 0 else "—"
+)
+_build_text = (
+    f"{float(st.session_state.get('last_snapshot_build_seconds', 0.0) or 0.0):.1f}s"
+    if st.session_state.get("last_snapshot_build_seconds") is not None else "—"
+)
+_data_text = "LIVE" if _snapshot_live else "LAST DATA"
+st.caption(
+    f"🕒 Snapshot {_snapshot_clock} · age {_format_age(_snapshot_age)} · "
+    f"Auto {_auto_text} ({_next_text}) · last refresh {_last_ok_text} · "
+    f"build {_build_text} · {_data_text}"
+)
 if _perf.get("pipeline_seconds") is not None:
     st.caption(
         f"⚙️ Processing {float(_perf['pipeline_seconds']):.2f}s · "
