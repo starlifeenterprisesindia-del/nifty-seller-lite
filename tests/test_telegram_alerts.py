@@ -50,3 +50,32 @@ def test_alert_history_records_delivery_without_extra_market_work():
     assert history and history[0]["kind"] == "FAST_MOVE"
     assert history[0]["status"] == "SENT"
     assert history[0]["latency_seconds"] >= 0
+
+
+def test_market_intelligence_alert_accepts_mixed_direction_and_dedupes():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    messages: list[str] = []
+    engine = LiveAlertEngine(
+        ReadyNotifier(), sender=messages.append, async_delivery=False
+    )
+    now = datetime(2026, 10, 6, 11, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    payload = {
+        "captured_at": now.isoformat(),
+        "alert_id": "PRESSURE_WATCH:MIXED:65",
+        "kind": "PRESSURE_WATCH",
+        "title": "Large move building",
+        "direction": "MIXED",
+        "nifty_ltp": 25000,
+        "score": 66,
+        "coverage": 80,
+        "alignment": "NO CLEAR ALIGNMENT",
+        "message": "Large move building — direction unclear",
+    }
+    assert engine.observe_market_intelligence(payload, now_ts=now.timestamp())
+    assert len(messages) == 1
+    assert not engine.observe_market_intelligence(payload, now_ts=now.timestamp() + 1)
+    history = engine.alert_history()
+    assert history[0]["kind"] == "MARKET_INTELLIGENCE"
+    assert history[0]["direction"] == "MIXED"
