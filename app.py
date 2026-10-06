@@ -99,6 +99,7 @@ from ui.advanced_options_intelligence import render_phase2_options_intelligence
 from ui.replay_review import render_phase3_replay
 from ui.strategy_lab import render_phase4_strategy_lab, render_phase7_strategy_repair
 from ui.validation_lab import render_phase5_validation_lab
+from ui.market_intelligence import render_market_intelligence, process_market_intelligence_alerts
 
 
 _PROCESS_PERSIST_CONTROLS = {
@@ -108,6 +109,7 @@ _PROCESS_PERSIST_CONTROLS = {
     "fast_monitor_enabled",
     "auto_shadow_journal_enabled",
     "combined_signal_alerts_enabled",
+    "market_intelligence_alerts_enabled",
     "market_alert_sound_enabled",
 }
 
@@ -1149,6 +1151,28 @@ if "snapshot" not in st.session_state:
 
 snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
+
+
+def _attach_market_intelligence_shadow(snapshot, previous_snapshot):
+    """Attach OB-MIE after current One-Brain decisions, with fail-open isolation."""
+    metadata = getattr(snapshot, "metadata", {})
+    if metadata.get("market_intelligence") or metadata.get("market_intelligence_error"):
+        return
+    started = time.perf_counter()
+    try:
+        from analysis.market_intelligence import calculate_market_intelligence
+        result = calculate_market_intelligence(snapshot, previous_snapshot)
+        metadata["market_intelligence"] = result.to_dict()
+        metadata["market_intelligence_engine"] = "analysis.market_intelligence.calculate_market_intelligence"
+        metadata["market_intelligence_core_weight"] = 0
+    except Exception as exc:
+        # Fail-open by design: canonical One Brain remains authoritative.
+        metadata["market_intelligence_error"] = f"{type(exc).__name__}: {exc}"[:300]
+    finally:
+        performance = metadata.setdefault("performance", {})
+        performance["market_intelligence_seconds"] = round(time.perf_counter() - started, 5)
+
+
 def _finalize_snapshot_once(snapshot, previous_snapshot):
     """Run the canonical Future/Common/Guard pipeline once per fresh snapshot.
 
@@ -1227,6 +1251,10 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
     snapshot.metadata["common_decision"] = build_common_decision(
         snapshot, execution_guard=snapshot.execution_guard
     )
+    # Shadow intelligence is calculated only after the authoritative One-Brain
+    # decision/guard pipeline is finished.  It has zero core weight and cannot
+    # feed back into any decision above.
+    _attach_market_intelligence_shadow(snapshot, previous_snapshot)
     snapshot.metadata["canonical_finalized"] = True
 
     # Evidence remains exact, but the Railway endpoint now returns only an ACK for
@@ -1282,6 +1310,9 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
 
 
 shadow_entries = _finalize_snapshot_once(snapshot, previous_snapshot)
+# Idempotent safety for a restored/cached snapshot created before OB-MIE existed.
+# Fresh snapshots already have this attached inside the canonical finalizer.
+_attach_market_intelligence_shadow(snapshot, previous_snapshot)
 # Phase-11 latency history is session-local diagnostics only. It never feeds a
 # market score, and keeping 120 points is enough for P50/P95 without unbounded RAM.
 _perf_now = snapshot.metadata.setdefault("performance", {})
@@ -1493,6 +1524,8 @@ render_fast_live_monitor()
 # off when the optional controls are temporarily absent.
 if "combined_signal_alerts_enabled" not in st.session_state:
     st.session_state.combined_signal_alerts_enabled = True
+if "market_intelligence_alerts_enabled" not in st.session_state:
+    st.session_state.market_intelligence_alerts_enabled = True
 if "market_alert_sound_enabled" not in st.session_state:
     st.session_state.market_alert_sound_enabled = False
 _remember_runtime_control(
@@ -1500,10 +1533,15 @@ _remember_runtime_control(
     bool(st.session_state.get("combined_signal_alerts_enabled", True)),
 )
 _remember_runtime_control(
+    "market_intelligence_alerts_enabled",
+    bool(st.session_state.get("market_intelligence_alerts_enabled", True)),
+)
+_remember_runtime_control(
     "market_alert_sound_enabled",
     bool(st.session_state.get("market_alert_sound_enabled", False)),
 )
 process_combined_signal_alerts(snapshot, live_server_url, live_server_api_key)
+process_market_intelligence_alerts(snapshot, live_server_url, live_server_api_key)
 
 
 def render_market_decision_reason_panel() -> None:
@@ -1533,6 +1571,7 @@ render_main_ai_market_view(
     previous_view_snapshot,
     decision_reason_renderer=render_market_decision_reason_panel,
 )
+render_market_intelligence(view_snapshot)
 
 # PRE-LIVE MAIN SCREEN (v2.64): keep only the highest-value live evidence visible.
 # W/M + special candle remain prominent inside this compact nearest-level block.
@@ -1554,6 +1593,15 @@ with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
             "Automatic W/M + Candle + Big Player delivery background me same rahegi; "
             "neeche ke controls sirf view/configuration hain."
         )
+        _persistent_toggle(
+            "Market Intelligence / Impulse alerts ON",
+            "market_intelligence_alerts_enabled",
+            default=True,
+            help="Pressure build-up, One-Brain alignment, conflict aur build-up-failed alerts. Existing market snapshot hi reuse hota hai.",
+        )
+        _mie_status = st.session_state.get("market_intelligence_alert_status")
+        if _mie_status:
+            st.caption("Market Intelligence alerts: " + str(_mie_status))
         with persistent_panel(
             "Strong Candle / W-M / Big Player Alerts",
             "panel_pattern_alerts_open",

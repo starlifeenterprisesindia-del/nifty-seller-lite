@@ -714,6 +714,13 @@ def pattern_alert(payload: dict[str, Any] = Body(...), key: str = Query(default=
     return {"ok": True, "data": {"sent": ALERTS.observe_pattern(payload)}}
 
 
+@app.post("/alerts/market-intelligence")
+def market_intelligence_alert(payload: dict[str, Any] = Body(...), key: str = Query(default=""),
+                              x_live_key: str = Header(default="")) -> dict[str, Any]:
+    _authorise(key, x_live_key)
+    return {"ok": True, "data": {"sent": ALERTS.observe_market_intelligence(payload)}}
+
+
 @app.post("/alerts/pattern-history")
 def pattern_alert_history(payload: dict[str, Any] = Body(default={}), key: str = Query(default=""),
                           x_live_key: str = Header(default="")) -> dict[str, Any]:
