@@ -157,6 +157,10 @@ def compact(snapshot, tracked_strikes=()):
         "institutional_context": summary.get("institutional_context", {}),
         "history_analytics": snapshot.metadata.get("history_analytics", {}),
         "market_intelligence": summary.get("market_intelligence"),
+        "performance": {
+            key: (snapshot.metadata.get("performance") or {}).get(key)
+            for key in ("pipeline_seconds", "build_seconds", "market_intelligence_seconds", "slowest_stage")
+        },
         # Canonical background inputs/results for later diagnosis, not extra votes.
         "evidence": evidence,
         "storage_mode": "SLIM IMPORTANT DATA" if slim else "FULL DIAGNOSTIC",

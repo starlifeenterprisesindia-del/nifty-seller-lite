@@ -361,6 +361,9 @@ class LiveAlertEngine:
                 "score": payload.get("score"),
                 "coverage": payload.get("coverage"),
                 "alignment": str(payload.get("alignment") or "")[:100],
+                "liquidity_bias": str(payload.get("liquidity_bias") or "")[:40],
+                "liquidity_target": payload.get("liquidity_target") if isinstance(payload.get("liquidity_target"), dict) else None,
+                "sweep_outcome": str(payload.get("sweep_outcome") or "")[:80],
             },
         }
         if self.async_delivery:

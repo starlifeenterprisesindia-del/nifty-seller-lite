@@ -20,6 +20,8 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from analysis.liquidity_intelligence import LiquidityIntelligence, calculate_liquidity_intelligence
+
 
 # Directional expert families.  The weights sum to 1.00 before regime/reliability
 # multipliers.  Correlated sub-signals are intentionally kept inside one family.
@@ -102,6 +104,8 @@ class MarketIntelligenceResult:
     reversal_direction: str
     reversal_quality: float
     institutional_pressure: str
+    liquidity: LiquidityIntelligence
+    move_radar: dict[str, Any]
     evidence_coverage: float
     evidence_conflict: str
     conflict_score: float
@@ -123,6 +127,8 @@ class MarketIntelligenceResult:
         data["path_5m"] = self.path_5m.to_dict()
         data["path_15m"] = self.path_15m.to_dict()
         data["path_30m"] = self.path_30m.to_dict()
+        data["liquidity"] = self.liquidity.to_dict()
+        data["move_radar"] = dict(self.move_radar)
         data["experts"] = [item.to_dict() for item in self.experts]
         data["alerts"] = [dict(item) for item in self.alerts]
         return data
@@ -987,6 +993,52 @@ def _move_potential(expansion: float) -> str:
     return "EXPANSION"
 
 
+
+def _move_radar(
+    snapshot: Any,
+    *,
+    direction: str,
+    expansion: float,
+    velocity: float | None,
+    persistence: int,
+    coverage: float,
+    conflict: str,
+) -> dict[str, Any]:
+    """Human-facing precaution state; it never feeds a trading decision."""
+    is_live = bool(getattr(getattr(snapshot, "market_session", None), "is_live", False))
+    velocity_value = float(velocity or 0.0)
+    if not is_live:
+        return {
+            "state": "NORMAL", "level": "REFERENCE", "direction": "MIXED",
+            "visual": "GREY", "blink": False, "message": "Market closed / reference data",
+        }
+    if expansion >= 76 and coverage >= 58 and conflict != "HIGH" and (persistence >= 1 or velocity_value >= 12):
+        if direction == "BULLISH":
+            state, visual, message = "STRONG BULLISH BUILD-UP", "GREEN", "Strong upside move pressure building"
+        elif direction == "BEARISH":
+            state, visual, message = "STRONG BEARISH BUILD-UP", "RED", "Strong downside move pressure building"
+        else:
+            state, visual, message = "BIG MOVE HIGH PRESSURE", "AMBER", "Large-move pressure high; direction not confirmed"
+        return {"state": state, "level": "HIGH", "direction": direction, "visual": visual, "blink": True, "message": message}
+    if expansion >= 60 or (expansion >= 52 and velocity_value >= 14):
+        if direction == "BULLISH":
+            state, visual, message = "BULLISH MOVE BUILDING", "GREEN", "Upside pressure developing — attention mode"
+        elif direction == "BEARISH":
+            state, visual, message = "BEARISH MOVE BUILDING", "RED", "Downside pressure developing — attention mode"
+        else:
+            state, visual, message = "BIG MOVE WATCH", "AMBER", "Abnormal move pressure developing; direction unclear"
+        return {"state": state, "level": "BUILDING", "direction": direction, "visual": visual, "blink": True, "message": message}
+    if expansion >= 48 or velocity_value >= 10:
+        return {
+            "state": "WATCH", "level": "WATCH", "direction": direction,
+            "visual": "AMBER", "blink": velocity_value >= 12,
+            "message": "Pressure forming — precaution watch",
+        }
+    return {
+        "state": "NORMAL", "level": "NORMAL", "direction": direction,
+        "visual": "GREY", "blink": False, "message": "No abnormal move build-up",
+    }
+
 def _one_brain_direction(snapshot: Any) -> tuple[str, str]:
     simple = (getattr(snapshot, "metadata", {}) or {}).get("simple_brain") or {}
     direction = str(simple.get("direction") or "").upper()
@@ -1069,17 +1121,25 @@ def _invalidation(snapshot: Any, direction: str, structure_event: str) -> str:
 def _alerts(
     *, snapshot: Any, direction: str, expansion: float, velocity: float | None,
     system_status: str, alignment: str, coverage: float, conflict: str,
-    fake_risk: str, previous: dict[str, Any] | None,
+    fake_risk: str, liquidity: LiquidityIntelligence, move_radar: dict[str, Any],
+    previous: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], ...]:
     if not bool(getattr(getattr(snapshot, "market_session", None), "is_live", False)):
         return ()
     output: list[dict[str, Any]] = []
     previous_expansion = _num((previous or {}).get("expansion_pressure"))
-    previous_state = str((previous or {}).get("impulse_state") or "")
     spot = _num((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
     stamp = getattr(snapshot, "created_at", None)
+    previous_liquidity = (previous or {}).get("liquidity") if isinstance((previous or {}).get("liquidity"), dict) else {}
+    previous_radar = (previous or {}).get("move_radar") if isinstance((previous or {}).get("move_radar"), dict) else {}
 
-    def add(kind: str, priority: str, title: str, message: str) -> None:
+    def zone_text() -> str:
+        zone = liquidity.primary_zone
+        if zone is None:
+            return ""
+        return f" · Target {zone.lower:.0f}-{zone.upper:.0f}"
+
+    def add(kind: str, priority: str, title: str, message: str, score: float | None = None) -> None:
         output.append({
             "kind": kind,
             "priority": priority,
@@ -1088,31 +1148,72 @@ def _alerts(
             "message": message,
             "captured_at": stamp.isoformat() if stamp is not None else "",
             "nifty_ltp": spot,
-            "score": round(expansion, 1),
+            "score": round(expansion if score is None else score, 1),
+            "liquidity_bias": liquidity.hunt_bias,
+            "liquidity_target": liquidity.primary_zone.to_dict() if liquidity.primary_zone else None,
+            "sweep_outcome": liquidity.sweep_outcome,
         })
 
+    crossed_52 = expansion >= 52 and (previous_expansion is None or previous_expansion < 52)
     crossed_60 = expansion >= 60 and (previous_expansion is None or previous_expansion < 60)
     crossed_75 = expansion >= 75 and (previous_expansion is None or previous_expansion < 75)
+
+    radar_state = str(move_radar.get("state") or "NORMAL")
+    old_radar_state = str(previous_radar.get("state") or "NORMAL")
+    if (
+        (crossed_52 or (velocity is not None and velocity >= 14 and expansion >= 50))
+        and coverage >= 50 and conflict != "HIGH"
+        and radar_state != "NORMAL" and radar_state != old_radar_state
+    ):
+        label = direction if direction != "MIXED" else "DIRECTION UNCLEAR"
+        add(
+            "BIG_MOVE_PRECAUTION", "WATCH", "Big move precaution",
+            f"{label} · {radar_state} · Expansion {expansion:.0f}/100{zone_text()}",
+        )
+
     if crossed_60 and coverage >= 55 and conflict != "HIGH":
         label = direction if direction != "MIXED" else "DIRECTION UNCLEAR"
-        add("PRESSURE_WATCH", "WATCH", "Pressure building", f"{label} · Expansion pressure {expansion:.0f}/100 · {system_status}")
+        add("PRESSURE_WATCH", "WATCH", "Pressure building", f"{label} · Expansion {expansion:.0f}/100 · {system_status}{zone_text()}")
     if crossed_75 and coverage >= 65 and conflict != "HIGH":
-        add("STRONG_BUILDUP", "HIGH", "Strong move build-up", f"{direction} · Expansion pressure {expansion:.0f}/100 · Evidence coverage {coverage:.0f}%")
+        add("STRONG_BUILDUP", "HIGH", "Strong move build-up", f"{direction} · Expansion {expansion:.0f}/100 · Coverage {coverage:.0f}%{zone_text()}")
+
+    current_hunt = liquidity.upside_hunt_pressure if liquidity.hunt_bias == "UPSIDE" else liquidity.downside_hunt_pressure if liquidity.hunt_bias == "DOWNSIDE" else max(liquidity.upside_hunt_pressure, liquidity.downside_hunt_pressure)
+    old_hunt_bias = str((previous_liquidity or {}).get("hunt_bias") or "")
+    old_hunt_value = _num((previous_liquidity or {}).get("upside_hunt_pressure" if liquidity.hunt_bias == "UPSIDE" else "downside_hunt_pressure"), 0.0) or 0.0
+    if (
+        liquidity.hunt_bias in {"UPSIDE", "DOWNSIDE"}
+        and current_hunt >= 70 and liquidity.primary_zone is not None
+        and expansion >= 54 and coverage >= 55 and conflict != "HIGH"
+        and (old_hunt_bias != liquidity.hunt_bias or old_hunt_value < 70)
+    ):
+        add(
+            "LIQUIDITY_HUNT_WATCH", "HIGH", "Liquidity hunt watch",
+            f"{liquidity.hunt_bias} hunt {current_hunt:.0f}/100 · Reach {liquidity.reach_state}{zone_text()}",
+            current_hunt,
+        )
+
+    if liquidity.sweep_state not in {"NONE", "UPSIDE TARGET TESTING", "DOWNSIDE TARGET TESTING"}:
+        old_sweep = str((previous_liquidity or {}).get("sweep_state") or "NONE")
+        if old_sweep != liquidity.sweep_state:
+            add(
+                "LIQUIDITY_SWEEP", "HIGH", "Liquidity sweep / breach",
+                f"{liquidity.sweep_state} · After sweep: {liquidity.sweep_outcome}",
+                max(liquidity.sweep_quality, expansion),
+            )
+
     if alignment in {"ALIGNMENT WATCH", "STRONG EVIDENCE ALIGNMENT"} and fake_risk != "HIGH":
         previous_alignment = str((previous or {}).get("one_brain_alignment") or "")
         if alignment != previous_alignment:
-            add("ONE_BRAIN_ALIGNMENT", "HIGH" if alignment.startswith("STRONG") else "WATCH", "One Brain alignment", f"One Brain + Market Intelligence {direction} aligned · {alignment}")
+            add("ONE_BRAIN_ALIGNMENT", "HIGH" if alignment.startswith("STRONG") else "WATCH", "One Brain alignment", f"One Brain + Market Intelligence {direction} aligned · {alignment}{zone_text()}")
     if alignment == "SYSTEM CONFLICT":
         previous_alignment = str((previous or {}).get("one_brain_alignment") or "")
         if previous_alignment != alignment:
             add("SYSTEM_CONFLICT", "CAUTION", "System conflict", "One Brain and Market Intelligence direction disagree — do not chase")
     if previous_expansion is not None and previous_expansion >= 72 and expansion <= previous_expansion - 20 and expansion < 60:
         add("BUILDUP_FAILED", "CAUTION", "Build-up failed", f"Expansion pressure fell {previous_expansion:.0f} → {expansion:.0f}")
-    # Rapid pressure acceleration is informative even before absolute threshold.
     if velocity is not None and velocity >= 18 and expansion >= 52 and not any(item["kind"] in {"PRESSURE_WATCH", "STRONG_BUILDUP"} for item in output):
-        add("PRESSURE_ACCELERATION", "WATCH", "Pressure accelerating", f"Expansion pressure velocity +{velocity:.0f} since prior snapshot")
-    return tuple(output[:4])
-
+        add("PRESSURE_ACCELERATION", "WATCH", "Pressure accelerating", f"Expansion pressure velocity +{velocity:.0f} since prior snapshot{zone_text()}")
+    return tuple(output[:7])
 
 def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None = None) -> MarketIntelligenceResult:
     """Calculate shadow-only Market Intelligence from one authoritative snapshot."""
@@ -1157,9 +1258,19 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
     persistence = previous_persistence + 1 if previous_direction == direction and expansion >= 60 else 1 if expansion >= 60 else 0
 
     conflict, conflict_score = _conflict(experts, direction)
+    liquidity = calculate_liquidity_intelligence(
+        snapshot, previous_snapshot,
+        direction=direction, bull_pressure=bull, bear_pressure=bear,
+        expansion_pressure=expansion, breakout_quality=breakout_quality,
+        reversal_quality=reversal_quality, conflict=conflict,
+    )
     institutional = _institutional_pressure(expert_map, snapshot)
     impulse = _impulse_state(expansion, direction)
     potential = _move_potential(expansion)
+    move_radar = _move_radar(
+        snapshot, direction=direction, expansion=expansion, velocity=velocity,
+        persistence=persistence, coverage=coverage, conflict=conflict,
+    )
     one_direction, action = _one_brain_direction(snapshot)
     alignment = _alignment(one_direction, direction, action, coverage, conflict, expansion)
     fake_risk = _fake_move_risk(direction, breakout_quality, expert_map, conflict)
@@ -1175,7 +1286,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
     alerts = _alerts(
         snapshot=snapshot, direction=direction, expansion=expansion, velocity=velocity,
         system_status=status, alignment=alignment, coverage=coverage, conflict=conflict,
-        fake_risk=fake_risk, previous=previous_mie,
+        fake_risk=fake_risk, liquidity=liquidity, move_radar=move_radar, previous=previous_mie,
     )
 
     reasons = tuple(dict.fromkeys([
@@ -1183,6 +1294,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         *expansion_reasons,
         *volatility_reasons,
         f"Institutional pressure {institutional}",
+        *liquidity.reasons,
         f"Evidence coverage {coverage:.0f}% · conflict {conflict}",
     ]))[:8]
     cautions: list[str] = [
@@ -1197,7 +1309,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         cautions.append("Market closed/reference data")
 
     return MarketIntelligenceResult(
-        engine="ONE_BRAIN_MARKET_INTELLIGENCE_V1",
+        engine="ONE_BRAIN_MARKET_INTELLIGENCE_V2_LIQUIDITY_RADAR",
         mode="SHADOW_ONLY_ZERO_CORE_WEIGHT",
         status="READY" if coverage >= 45 else "PARTIAL",
         market_state=regime,
@@ -1217,6 +1329,8 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         reversal_direction=reversal_direction,
         reversal_quality=reversal_quality,
         institutional_pressure=institutional,
+        liquidity=liquidity,
+        move_radar=move_radar,
         evidence_coverage=round(coverage, 1),
         evidence_conflict=conflict,
         conflict_score=conflict_score,
