@@ -1,4 +1,7 @@
-# Nifty Seller Lite 2.50 — Lean AI Tracker
+# Nifty Seller Lite 2.69 — Stability + Early Direction + Sweep Refinement
+
+**2.69 live-shadow refinement:** current-snapshot evidence quality now avoids binary option/participation weight cliffs; One-Brain raw action scores remain separately recorded from display-stable scores; the fast Market Intelligence direction requires broad, accelerating, structurally supported evidence; countertrend impulses are caution states; and liquidity breaches require completed-candle acceptance before continuation is favored. No new broker/API call is added.
+
 
 Read-only NIFTY options decision-support app with one operational path:
 

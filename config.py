@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.68.0_SMART_ALERT_COMPACT_UI"
+    version: str = "2.69.0_STABILITY_DIRECTION_SWEEP_REFINEMENT"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5

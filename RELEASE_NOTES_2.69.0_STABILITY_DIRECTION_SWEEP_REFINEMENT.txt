@@ -1,0 +1,58 @@
+Nifty Seller Lite — v2.69.0_STABILITY_DIRECTION_SWEEP_REFINEMENT
+
+Purpose
+-------
+Consolidated live-shadow refinement based on 07-Oct-2026 screen recording, Market Intelligence Test Pack,
+Support Bundle, 3m/15m charts and option-chain evidence. This is not a new strategy and adds no broker call.
+
+1) One-Brain evidence stability / score flip-flop
+- Fixed a regime-hint fallback bug where max(UP, DOWN) >= threshold could select the regime side even when
+  the regime-side score itself was weak. The hinted side must now be credible and not materially weaker.
+- Options evidence no longer has a READY -> zero-weight denominator cliff when the composite score is
+  temporarily zero but current 1m/3m option-flow windows are already READY.
+- The fallback uses CURRENT snapshot windows only, at deliberately reduced quality. No stale option score is
+  carried forward. Truly missing evidence remains NO VOTE.
+- Option and Participation weights scale with current evidence quality instead of binary all-or-nothing weight.
+- User-facing Direction/Entry scores use bounded display hysteresis to reduce noisy 10-15 point visual jumps.
+  Raw scores still drive the operational action logic and are recorded separately.
+
+2) Early direction refinement
+- 15m remains dominant structural context, not a short-horizon veto.
+- Fast-family direction uses independent families only: Structure, Futures, Options Flow, Barriers/Walls,
+  Heavyweight Breadth and Momentum Acceleration. Trend is deliberately excluded from this fast vote.
+- A fast direction may override a MIXED precaution view only when the consensus is broad, the signed edge is
+  meaningful, pressure is actively accelerating and structure supports it (or expansion is exceptionally high).
+- Added context labels: WITH TREND, BREAKOUT WATCH, EARLY PRESSURE, REVERSAL WATCH, COUNTERTREND IMPULSE.
+- Countertrend/reversal/early-pressure warnings stay precautionary; they cannot become CONDITIONS MET merely
+  from short-timeframe acceleration.
+
+3) Liquidity sweep / stop-cascade refinement
+- A first close through a liquidity zone is now BREACH — PENDING ACCEPTANCE, not instant continuation.
+- The exact breached pool is locked for up to five minutes so recalculated targets cannot move the goalpost.
+- CONTINUATION FAVORED requires follow-through acceptance on completed 1m closes.
+- Quick reclaim of the original pool becomes SWEEP/RECLAIM -> REVERSAL WATCH/FAVORED.
+- Before a sweep, user-facing text is CONTINUATION LEAN / REVERSAL LEAN, reserving FAVORED for observed
+  post-breach behavior.
+
+4) Market Intelligence / Move Radar
+- Early-direction overlay remains shadow-only and has zero One-Brain decision weight.
+- Move Radar upgrades quickly on real pressure but downgrades more slowly to reduce one-snapshot flicker.
+- Opposite-to-15m early pressure is shown as AMBER reversal/countertrend caution rather than a full green/red
+  trend confirmation.
+- Evidence freshness now discounts aged feed components.
+
+5) Recording / validation
+- Market Intelligence export includes early_direction, dominant_context, direction_context, fast-family count,
+  sweep acceptance state, sweep age and locked sweep-anchor zone.
+- Day Memory records raw vs display-stable One-Brain scores and option/participation quality.
+
+Golden-rule verification
+------------------------
+- Extra Dhan/API calls added: ZERO
+- Heavy ML added: NO
+- Full-depth order book added: NO
+- Market Intelligence decision weight in One Brain: ZERO / shadow-only
+- decision.py, future_brain.py, execution_guard.py, trade_plan.py, position_guardian.py and snapshot_service.py
+  remain byte-identical to v2.68.0.
+- simple_brain.py was intentionally refined only to address the observed evidence-weight cliff and the discovered
+  regime-hint score bug.

@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # Compact GitHub package: pure-Python analysis/services/ui modules live in one zip.
-_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v268.zip")
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v269.zip")
 if _RUNTIME_BUNDLE.exists() and str(_RUNTIME_BUNDLE) not in sys.path:
     sys.path.insert(0, str(_RUNTIME_BUNDLE))
 

@@ -134,7 +134,9 @@ def app_observation(snapshot):
                   "score": simple.get("entry_readiness", common.get("trade_confidence", getattr(evaluation,"score",0))), "expiry": snapshot.expiry,
                   "spot": snapshot.nifty_quote.get("last_price"), "legs": legs if valid else [],
                   "simple_brain": {k: simple.get(k) for k in (
-                      "engine", "regime", "direction", "direction_strength", "entry_readiness",
+                      "engine", "regime", "direction", "direction_strength", "raw_direction_strength",
+                      "display_direction_strength", "entry_readiness", "raw_entry_readiness",
+                      "display_entry_readiness", "option_quality", "option_window_fallback", "participation_quality",
                       "evidence_coverage", "confirmation_blocks",
                       "entry_state", "candidate_action", "final_action", "trigger", "next_level",
                       "risk_notes", "reasons")},

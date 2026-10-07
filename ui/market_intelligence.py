@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from html import escape
 
 import streamlit as st
 
 from services.railway_live_client import post_railway_json
+from analysis.pattern_alerts import combined_signal_alert
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -53,8 +55,21 @@ def _evidence_label(item: dict[str, Any]) -> str:
 
 def _simple_market_story(item: dict[str, Any]) -> str:
     direction = str(item.get("direction") or "MIXED")
+    early = str(item.get("early_direction") or direction)
+    context = str(item.get("direction_context") or "MIXED")
     expansion = _num(item.get("expansion_pressure"))
     regime = str(item.get("market_state") or "UNCERTAIN")
+    arrow = "↑" if early == "BULLISH" else "↓" if early == "BEARISH" else "↔"
+    if context == "REVERSAL WATCH" and early in {"BULLISH", "BEARISH"}:
+        return f"{early} REVERSAL WATCH {arrow}"
+    if context == "COUNTERTREND IMPULSE" and early in {"BULLISH", "BEARISH"}:
+        return f"{early} COUNTERTREND {arrow}"
+    if context == "BREAKOUT WATCH" and early in {"BULLISH", "BEARISH"}:
+        return f"{early} BREAKOUT WATCH {arrow}"
+    if context == "EARLY PRESSURE" and early in {"BULLISH", "BEARISH"}:
+        return f"{early} EARLY PRESSURE {arrow}"
+    if direction == "MIXED" and early in {"BULLISH", "BEARISH"} and expansion >= 50:
+        return f"{early} EARLY PRESSURE {arrow}"
     if direction == "BULLISH" and expansion >= 52:
         return "BULLISH BUILD-UP ↑"
     if direction == "BEARISH" and expansion >= 52:
@@ -126,6 +141,54 @@ def render_move_radar(snapshot: Any) -> None:
     )
 
 
+def _story_value(value: Any) -> str:
+    return escape(str(value or "—"))
+
+
+def _render_story_grid(items: list[tuple[str, str]], *, outlook: bool = False) -> None:
+    """Responsive, wrapping MI cards; never changes calculations."""
+    cls = "obmie-outlook-grid" if outlook else "obmie-story-grid"
+    cells = "".join(
+        f'<div class="obmie-story-cell"><div class="obmie-label">{escape(label)}</div>'
+        f'<div class="obmie-value">{_story_value(value)}</div></div>'
+        for label, value in items
+    )
+    st.markdown(
+        f"""
+<style>
+.obmie-story-grid, .obmie-outlook-grid {{
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 18px; width: 100%; margin: 2px 0 8px 0;
+}}
+.obmie-outlook-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; }}
+.obmie-story-cell {{ min-width: 0; padding: 2px 0; }}
+.obmie-label {{
+  font-size: clamp(.66rem, .74vw, .78rem); line-height: 1.2; font-weight: 800;
+  letter-spacing: .02em; opacity: .82; margin-bottom: 5px;
+}}
+.obmie-value {{
+  font-size: clamp(1.03rem, 1.48vw, 1.42rem); line-height: 1.14; font-weight: 720;
+  white-space: normal; overflow-wrap: anywhere; word-break: normal; min-height: 1.3em;
+}}
+.obmie-outlook-grid .obmie-value {{ font-size: clamp(.98rem, 1.32vw, 1.28rem); }}
+@media (max-width: 900px) {{
+  .obmie-story-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }}
+  .obmie-outlook-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px; }}
+  .obmie-value {{ font-size: clamp(1rem, 3.7vw, 1.26rem); }}
+}}
+@media (max-width: 560px) {{
+  .obmie-story-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 10px; }}
+  .obmie-outlook-grid {{ grid-template-columns: 1fr; gap: 6px; }}
+  .obmie-label {{ font-size: .66rem; }}
+  .obmie-value {{ font-size: 1.02rem; line-height: 1.15; }}
+}}
+</style>
+<div class="{cls}">{cells}</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_market_intelligence(snapshot: Any) -> None:
     """Simple user-facing story; detailed calculations remain hidden by default."""
     item = (getattr(snapshot, "metadata", {}) or {}).get("market_intelligence") or {}
@@ -145,20 +208,23 @@ def render_market_intelligence(snapshot: Any) -> None:
     pressure = _num(item.get("expansion_pressure"))
     velocity = item.get("pressure_velocity")
     velocity_marker = "↑↑" if velocity is not None and _num(velocity) >= 14 else "↑" if velocity is not None and _num(velocity) >= 5 else ""
+    one_brain_text = (
+        "✅ ALIGNED" if alignment in {"STRONG EVIDENCE ALIGNMENT", "ALIGNMENT WATCH", "DIRECTION ALIGNED"}
+        else "⚠ CONFLICT" if alignment == "SYSTEM CONFLICT" else "— NO CLEAR VIEW"
+    )
 
     st.subheader("🧠 Market Intelligence")
     with st.container(border=True):
-        a, b, c, d = st.columns(4)
-        a.metric("MARKET", _simple_market_story(item))
-        b.metric("MOVE", _simple_move(item))
-        c.metric("LIQUIDITY TARGET", target)
-        d.metric("HUNT", f"{hunt_bias} · {hunt_strength}")
-
-        e, f, g, h = st.columns(4)
-        e.metric("AFTER TARGET", sweep_outcome)
-        f.metric("MOVE PRESSURE", f"{pressure:.0f}/100 {velocity_marker}".strip())
-        g.metric("ONE BRAIN", "✅ ALIGNED" if alignment in {"STRONG EVIDENCE ALIGNMENT", "ALIGNMENT WATCH", "DIRECTION ALIGNED"} else "⚠ CONFLICT" if alignment == "SYSTEM CONFLICT" else "— NO CLEAR VIEW")
-        h.metric("STATUS", str(item.get("system_status") or "WAIT"))
+        _render_story_grid([
+            ("MARKET", _simple_market_story(item)),
+            ("MOVE", _simple_move(item)),
+            ("LIQUIDITY TARGET", target),
+            ("HUNT", f"{hunt_bias} · {hunt_strength}"),
+            ("AFTER TARGET", sweep_outcome),
+            ("MOVE PRESSURE", f"{pressure:.0f}/100 {velocity_marker}".strip()),
+            ("ONE BRAIN", one_brain_text),
+            ("STATUS", str(item.get("system_status") or "WAIT")),
+        ])
 
         if alignment == "STRONG EVIDENCE ALIGNMENT":
             st.success(f"🔥 STRONG EVIDENCE ALIGNMENT · {_direction_icon(direction)} {direction} · Target {target}")
@@ -167,10 +233,11 @@ def render_market_intelligence(snapshot: Any) -> None:
         elif str(liquidity.get("sweep_state") or "NONE") not in {"NONE", "UPSIDE TARGET TESTING", "DOWNSIDE TARGET TESTING"}:
             st.info(f"🔥 {liquidity.get('sweep_state')} · {sweep_outcome}")
 
-        p1, p2, p3 = st.columns(3)
-        p1.metric("5m", _path_text(item.get("path_5m")))
-        p2.metric("15m", _path_text(item.get("path_15m")))
-        p3.metric("30m", _path_text(item.get("path_30m")))
+        _render_story_grid([
+            ("5m", _path_text(item.get("path_5m"))),
+            ("15m", _path_text(item.get("path_15m"))),
+            ("30m", _path_text(item.get("path_30m"))),
+        ], outlook=True)
         st.caption(
             f"Reach: {reach} · Evidence: {_evidence_label(item)} · "
             f"Fake-move risk: {item.get('fake_move_risk', 'MEDIUM')} · "
@@ -188,6 +255,12 @@ def render_market_intelligence(snapshot: Any) -> None:
         y2.metric("Reversal Quality", f"{_num(item.get('reversal_quality')):.0f}")
         y3.metric("Coverage", f"{_num(item.get('evidence_coverage')):.0f}%")
         y4.metric("Conflict", str(item.get("evidence_conflict") or "HIGH"))
+        st.caption(
+            f"Early direction: {item.get('early_direction', item.get('direction', 'MIXED'))} · "
+            f"15m context: {item.get('dominant_context', 'MIXED')} · "
+            f"Context: {item.get('direction_context', 'MIXED')} · "
+            f"Fast families: {int(_num(item.get('fast_confirmation_count')))}"
+        )
 
         if isinstance(liquidity, dict):
             st.markdown("**Liquidity / Stop-Cascade research**")
@@ -199,7 +272,8 @@ def render_market_intelligence(snapshot: Any) -> None:
             ext = liquidity.get("extension_zone") if isinstance(liquidity.get("extension_zone"), dict) else None
             st.caption(
                 f"Primary: {target} · Extension: {_zone_text(ext)} · "
-                f"Sweep: {liquidity.get('sweep_state', 'NONE')} · Outcome: {sweep_outcome}"
+                f"Sweep: {liquidity.get('sweep_state', 'NONE')} · Outcome: {sweep_outcome} · "
+                f"Acceptance: {liquidity.get('acceptance_state', 'NONE')}"
             )
             for reason in liquidity.get("reasons") or ():
                 st.caption("• " + str(reason))
@@ -214,7 +288,7 @@ def render_market_intelligence(snapshot: Any) -> None:
                 "Bull": expert.get("bullish"), "Bear": expert.get("bearish"), "Range": expert.get("range_score"),
                 "Reliability": round(_num(expert.get("reliability")) * 100),
                 "Freshness": round(_num(expert.get("freshness")) * 100),
-                "Why": " | ".join(str(x) for x in (expert.get("reasons") or ())[:2]),
+                "Why": "; ".join(str(v) for v in (expert.get("reasons") or ())[:3]),
             })
         if rows:
             st.dataframe(rows, hide_index=True, width="stretch")
@@ -224,14 +298,34 @@ def render_market_intelligence(snapshot: Any) -> None:
             for caution in liquidity.get("cautions") or ():
                 st.caption("Liquidity caution: " + str(caution))
 
-
 def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", server_key: str = "") -> list[dict[str, Any]]:
-    """Deliver at most one highest-value alert per fresh snapshot, with cooldown."""
+    """Smart Telegram controller for OB-MIE.
+
+    All calculations/events remain available in snapshot/journal.  Delivery is intentionally
+    selective: one meaningful alert per setup, with material-change overrides only.
+    """
     if not st.session_state.get("market_intelligence_alerts_enabled", True):
         return []
     item = (getattr(snapshot, "metadata", {}) or {}).get("market_intelligence") or {}
     alerts = [row for row in (item.get("alerts") or ()) if isinstance(row, dict)]
     if not alerts:
+        return []
+
+    expansion = _num(item.get("expansion_pressure"))
+    coverage = _num(item.get("evidence_coverage"))
+    alignment = str(item.get("one_brain_alignment") or "NO CLEAR ALIGNMENT")
+
+    # Mixed-direction acceleration is useful on-screen but usually too noisy for Telegram.
+    filtered = []
+    for candidate in alerts:
+        kind0 = str(candidate.get("kind") or "")
+        dir0 = str(candidate.get("direction") or "MIXED").upper()
+        if dir0 == "MIXED" and kind0 in {"PRESSURE_ACCELERATION", "PRESSURE_WATCH"} and expansion < 75:
+            continue
+        if kind0 == "ONE_BRAIN_ALIGNMENT" and alignment == "ALIGNMENT WATCH" and (expansion < 60 or coverage < 70):
+            continue
+        filtered.append(candidate)
+    if not filtered:
         return []
 
     rank = {
@@ -245,10 +339,12 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         "BIG_MOVE_PRECAUTION": 72,
         "PRESSURE_WATCH": 68,
     }
-    row = max(alerts, key=lambda x: rank.get(str(x.get("kind") or ""), 0))
+    row = max(filtered, key=lambda x: rank.get(str(x.get("kind") or ""), 0))
     kind = str(row.get("kind") or "MIE")
     direction = str(row.get("direction") or "MIXED").upper()
-    score_band = int(_num(row.get("score")) // 5 * 5)
+    current_rank = rank.get(kind, 0)
+    score = _num(row.get("score"), expansion)
+    score_band = int(score // 10 * 10)
     created_at = getattr(snapshot, "created_at")
     day = created_at.date().isoformat()
     target = row.get("liquidity_target") if isinstance(row.get("liquidity_target"), dict) else None
@@ -259,20 +355,59 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     if fingerprint in seen:
         return []
 
-    # Routine pre-alerts get a 90-second cooldown. State changes/conflicts/sweeps can
-    # bypass it because they represent materially new information.
-    critical = kind in {"SYSTEM_CONFLICT", "BUILDUP_FAILED", "LIQUIDITY_SWEEP", "ONE_BRAIN_ALIGNMENT"}
-    last_key = "market_intelligence_last_routine_alert_at"
-    previous_ts = _num(st.session_state.get(last_key), 0.0)
     current_ts = created_at.timestamp()
-    if not critical and previous_ts and current_ts - previous_ts < 90:
+    last_ts = _num(st.session_state.get("smart_alert_last_sent_at"), 0.0)
+    last_dir = str(st.session_state.get("smart_alert_last_direction") or "MIXED").upper()
+    last_kind = str(st.session_state.get("smart_alert_last_kind") or "")
+    last_rank = int(_num(st.session_state.get("smart_alert_last_rank"), 0))
+    last_score = _num(st.session_state.get("smart_alert_last_score"), 0.0)
+    age = current_ts - last_ts if last_ts else 9999.0
+
+    # Three-minute setup cooldown.  Only a material state change can break it.
+    critical = kind in {"SYSTEM_CONFLICT", "BUILDUP_FAILED", "LIQUIDITY_SWEEP"}
+    direction_flip = direction in {"BULLISH", "BEARISH"} and last_dir in {"BULLISH", "BEARISH"} and direction != last_dir
+    strong_upgrade = (
+        kind in {"ONE_BRAIN_ALIGNMENT", "STRONG_BUILDUP"}
+        and current_rank > last_rank
+        and score >= last_score + 12
+    )
+    material_change = critical or direction_flip or strong_upgrade
+    if age < 180 and not material_change:
+        st.session_state.market_intelligence_alert_status = "Smart cooldown — evidence recorded, Telegram suppressed"
+        return []
+    if age < 60 and critical and kind == last_kind and direction == last_dir:
         return []
 
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
     zone = liquidity.get("primary_zone") if isinstance(liquidity.get("primary_zone"), dict) else None
     target_text = _zone_text(zone)
-    target_line = "" if target_text == "NO CLEAR TARGET" else f"\nLiquidity target: {target_text} · Hunt {liquidity.get('hunt_bias', 'UNCLEAR')} {liquidity.get('hunt_strength', '')}"
-    sweep_line = "" if str(liquidity.get("sweep_state") or "NONE") == "NONE" else f"\nSweep: {liquidity.get('sweep_state')} · {liquidity.get('sweep_outcome', 'UNCLEAR')}"
+    hunt_bias = str(liquidity.get("hunt_bias") or "UNCLEAR")
+    hunt_strength = str(liquidity.get("hunt_strength") or "")
+    sweep_state = str(liquidity.get("sweep_state") or "NONE")
+    sweep_outcome = str(liquidity.get("sweep_outcome") or "UNCLEAR")
+
+    # Reuse already-computed candle/Big-Player evidence in the same Telegram story.
+    confirm_line = ""
+    try:
+        confirm = combined_signal_alert(snapshot)
+    except Exception:
+        confirm = None
+    if isinstance(confirm, dict) and not bool(confirm.get("conflict")):
+        cdir = str(confirm.get("direction") or "MIXED").upper()
+        names = str(confirm.get("names") or "").strip()
+        if names and (direction == "MIXED" or cdir == direction):
+            confirm_line = f"\nConfirm: {names[:180]}"
+
+    if alignment in {"STRONG EVIDENCE ALIGNMENT", "ALIGNMENT WATCH", "DIRECTION ALIGNED"}:
+        one_brain_text = "ALIGNED"
+    elif alignment == "SYSTEM CONFLICT":
+        one_brain_text = "CONFLICT"
+    else:
+        one_brain_text = "NO CLEAR ALIGNMENT"
+
+    icon = "🟢" if direction == "BULLISH" else "🔴" if direction == "BEARISH" else "🟠"
+    target_line = "" if target_text == "NO CLEAR TARGET" else f"\nTarget: {target_text} · Hunt {hunt_bias} {hunt_strength}".rstrip()
+    sweep_line = "" if sweep_state in {"NONE", "UPSIDE TARGET TESTING", "DOWNSIDE TARGET TESTING"} else f"\nSweep: {sweep_state} · {sweep_outcome}"
     payload = {
         "captured_at": row.get("captured_at") or created_at.isoformat(),
         "alert_id": fingerprint,
@@ -282,20 +417,20 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         "nifty_ltp": row.get("nifty_ltp"),
         "score": row.get("score"),
         "coverage": item.get("evidence_coverage"),
-        "alignment": item.get("one_brain_alignment"),
+        "alignment": alignment,
         "liquidity_bias": liquidity.get("hunt_bias"),
         "liquidity_target": zone,
         "sweep_outcome": liquidity.get("sweep_outcome"),
         "message": (
             f"🧠 ONE BRAIN MARKET INTELLIGENCE\n"
-            f"{row.get('title', kind)} — {direction}\n"
-            f"{row.get('message', '')}\n"
-            f"Status: {item.get('system_status', 'WATCH')} · Move pressure {_num(item.get('expansion_pressure')):.0f}/100 · Coverage {_num(item.get('evidence_coverage')):.0f}%"
-            f"{target_line}{sweep_line}\n"
-            f"One Brain: {item.get('one_brain_alignment', 'NO CLEAR ALIGNMENT')}\n"
-            "Precaution/shadow intelligence — automatic order nahi lagaya gaya."
+            f"{icon} {row.get('title', kind)} · {direction}\n"
+            f"Move {expansion:.0f}/100 · Coverage {coverage:.0f}%"
+            f"{target_line}{sweep_line}{confirm_line}\n"
+            f"One Brain: {one_brain_text} · Status: {item.get('system_status', 'WATCH')}\n"
+            "Precaution/shadow alert · automatic order nahi."
         ),
     }
+
     if server_url and server_key:
         try:
             post_railway_json(server_url, server_key, "/alerts/market-intelligence", payload)
@@ -304,16 +439,18 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
             return []
         seen.add(fingerprint)
         st.session_state[seen_key] = list(seen)[-300:]
-        if not critical:
-            st.session_state[last_key] = current_ts
-        st.session_state.market_intelligence_alert_status = "Telegram synced"
+        st.session_state.smart_alert_last_sent_at = current_ts
+        st.session_state.smart_alert_last_direction = direction
+        st.session_state.smart_alert_last_kind = kind
+        st.session_state.smart_alert_last_rank = current_rank
+        st.session_state.smart_alert_last_score = score
+        st.session_state.market_intelligence_alert_status = "Telegram synced · Smart Alert mode"
         st.session_state.last_market_intelligence_alerts = [row]
         return [row]
 
     seen.add(fingerprint)
     st.session_state[seen_key] = list(seen)[-300:]
-    if not critical:
-        st.session_state[last_key] = current_ts
     st.session_state.market_intelligence_alert_status = "App only — Telegram gateway not configured"
     st.session_state.last_market_intelligence_alerts = [row]
     return []
+

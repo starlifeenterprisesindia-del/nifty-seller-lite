@@ -1216,16 +1216,20 @@ def render_main_ai_market_view(
             entry_state = str(simple.get("entry_state") or "WAIT")
             a, b, c, d = st.columns(4)
             core_block_coverage = simple_core_block_coverage(simple)
-            a.metric("DIRECTION", f"{simple.get('direction', 'MIXED')} {float(simple.get('direction_strength') or 0):.0f}/100")
+            _display_direction_strength = float(simple.get("display_direction_strength", simple.get("direction_strength")) or 0)
+            _raw_direction_strength = float(simple.get("raw_direction_strength", simple.get("direction_strength")) or 0)
+            a.metric("DIRECTION", f"{simple.get('direction', 'MIXED')} {_display_direction_strength:.0f}/100")
+            if abs(_display_direction_strength - _raw_direction_strength) >= 3:
+                a.caption(f"Raw {_raw_direction_strength:.0f} · stability view")
             if core_block_coverage is not None:
                 a.caption(f"Core blocks available {core_block_coverage:.0f}%")
             b.metric("REGIME", str(simple.get("regime") or "TRANSITION"))
             c.metric(
                 entry_metric_label(),
-                "DATA INCOMPLETE" if "DATA" in entry_state else f"{float(simple.get('entry_readiness') or 0):.0f}/100",
+                "DATA INCOMPLETE" if "DATA" in entry_state else f"{float(simple.get('display_entry_readiness', simple.get('entry_readiness')) or 0):.0f}/100",
             )
             if "DATA" in entry_state:
-                c.caption(f"Structural readiness {float(simple.get('entry_readiness') or 0):.0f}/100")
+                c.caption(f"Structural readiness {float(simple.get('display_entry_readiness', simple.get('entry_readiness')) or 0):.0f}/100")
             d.metric("ACTION", public_action_label(str(common.get("final_action") or simple.get("final_action") or "WAIT")))
             trigger = str(simple.get("trigger") or simple.get("instruction") or "")
             if common.get("entry_allowed"):

@@ -18,37 +18,69 @@ def _persistent_bool_toggle(label: str, key: str, default: bool) -> bool:
 
 
 def process_combined_signal_alerts(snapshot, server_url="", server_key=""):
-    """Send one deduplicated W/M+candle+Big-Player Telegram lane.
+    """Background confirmation lane with Smart-Alert suppression.
 
-    This only reads evidence already present in the snapshot.  Keeping it outside
-    the visual panel means closing/collapsing UI controls cannot silently disable
-    Telegram delivery.
+    W/M, candle and Big-Player evidence still calculates/records normally.  When
+    Market Intelligence alerts are enabled, Big-Player-only events stay background
+    evidence and same-direction confirmations are suppressed for the shared 3-minute
+    setup cooldown.  This changes delivery only, never One-Brain calculations.
     """
     if not st.session_state.get("combined_signal_alerts_enabled", True):
         return None
     alert = combined_signal_alert(snapshot)
     if alert is None:
         return None
+
     ids = set(alert["pattern_ids"])
     key = f"combined_signal_seen_{snapshot.created_at.date()}"
     seen = set(st.session_state.get(key, []))
     if ids and ids.issubset(seen):
         return alert
+
+    direction = str(alert.get("direction") or "MIXED").upper()
+    pattern_ids = [str(x) for x in alert.get("pattern_ids") or []]
+    big_only = bool(pattern_ids) and all(x.startswith("BIG:") for x in pattern_ids)
+    mi_enabled = bool(st.session_state.get("market_intelligence_alerts_enabled", True))
+
+    # In Smart mode, Big Player EARLY/CONFIRMED by itself is evidence, not another
+    # Telegram notification.  It is merged into the next meaningful MI story.
+    if mi_enabled and big_only and not bool(alert.get("conflict")):
+        st.session_state.combined_signal_alert_status = "Background evidence — Big Player merged into Smart Alert"
+        return alert
+
+    current_ts = snapshot.created_at.timestamp()
+    last_ts = float(st.session_state.get("smart_alert_last_sent_at") or 0.0)
+    last_dir = str(st.session_state.get("smart_alert_last_direction") or "MIXED").upper()
+    age = current_ts - last_ts if last_ts else 9999.0
+    direction_flip = direction in {"BULLISH", "BEARISH"} and last_dir in {"BULLISH", "BEARISH"} and direction != last_dir
+
+    # If Market Intelligence just sent the same setup, do not send a second candle/
+    # Big-Player message.  Opposite-direction conflict/flip is still allowed.
+    if mi_enabled and age < 180 and direction == last_dir and not bool(alert.get("conflict")):
+        st.session_state.combined_signal_alert_status = "Smart cooldown — confirmation recorded, Telegram suppressed"
+        return alert
+    if mi_enabled and age < 60 and not direction_flip and not bool(alert.get("conflict")):
+        return alert
+
     if server_url and server_key:
         try:
             post_railway_json(server_url, server_key, "/alerts/pattern", alert)
         except Exception:
-            # Keep unsent ids out of local 'seen' so a later rerun can retry.
             st.session_state.combined_signal_alert_status = "Telegram delivery pending"
             return alert
     else:
         st.session_state.combined_signal_alert_status = "App only — Telegram gateway not configured"
         return alert
-    st.session_state[key] = list(seen | ids)[-300:]
-    st.session_state.combined_signal_alert_status = "Telegram synced"
-    st.session_state.last_combined_signal_alert = alert
-    return alert
 
+    st.session_state[key] = list(seen | ids)[-300:]
+    st.session_state.combined_signal_alert_status = "Telegram synced · Smart Alert mode"
+    st.session_state.last_combined_signal_alert = alert
+    st.session_state.smart_alert_last_sent_at = current_ts
+    st.session_state.smart_alert_last_direction = direction
+    st.session_state.smart_alert_last_kind = "PATTERN_CONFIRMATION"
+    st.session_state.smart_alert_last_rank = 84
+    st.session_state.smart_alert_last_score = 0.0
+    return alert
 
 def render_pattern_alerts(snapshot, server_url="", server_key=""):
     enabled = _persistent_bool_toggle(
@@ -57,8 +89,8 @@ def render_pattern_alerts(snapshot, server_url="", server_key=""):
         True,
     )
     st.caption(
-        "Ek hi alert lane: completed 3m W/M/candle + Big Player. Same signal refresh par repeat nahi hota; "
-        "Big Player later confirm ho to sirf stronger upgrade alert aa sakta hai."
+        "Smart Alert mode: Big Player-only events background evidence rahenge; completed 3m confirmation "
+        "sirf tab Telegram jayega jab recent Market Intelligence alert same setup ko already cover na kare."
     )
     if not enabled:
         return

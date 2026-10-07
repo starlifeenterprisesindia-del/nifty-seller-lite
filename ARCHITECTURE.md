@@ -1,4 +1,17 @@
-# Architecture — V2.50 Lean AI Tracker
+# Architecture — V2.69 Stability / Market Intelligence Refinement
+
+## Stability rule
+
+All live evidence still comes from the single authoritative snapshot. Missing evidence is NO VOTE. Current READY 1m/3m option-flow windows may provide a reduced-quality fallback when the composite option score is temporarily unformed; no stale prior option score is carried forward. Raw One-Brain scores remain the action inputs; bounded display scores exist only to stop user-facing numerical flicker.
+
+## Fast vs slow context
+
+15m price structure is the dominant context. A separate fast-family consensus (Structure, Futures, Options Flow, Barriers/Walls, Heavyweight Breadth, Momentum) is allowed to create precautionary early direction only when breadth, acceleration and structural support agree. Opposite-context signals are labelled REVERSAL WATCH / COUNTERTREND IMPULSE rather than silently becoming a new trend.
+
+## Liquidity acceptance
+
+A liquidity breach is not continuation by itself. The breached zone is temporarily locked; follow-through completed closes are required for acceptance. A quick reclaim is classified as a sweep/reversal condition.
+
 
 ## One authoritative snapshot
 
