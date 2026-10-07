@@ -41,6 +41,14 @@ def process_combined_signal_alerts(snapshot, server_url="", server_key=""):
     pattern_ids = [str(x) for x in alert.get("pattern_ids") or []]
     big_only = bool(pattern_ids) and all(x.startswith("BIG:") for x in pattern_ids)
     mi_enabled = bool(st.session_state.get("market_intelligence_alerts_enabled", True))
+    mi_item = (getattr(snapshot, "metadata", {}) or {}).get("market_intelligence") or {}
+
+    # One Telegram voice: when Market Intelligence is available/enabled, W/M, candle
+    # and Big Player remain supportive evidence only.  MI embeds them in the next
+    # material alert, so this lane never rings separately and cannot duplicate it.
+    if mi_enabled and mi_item:
+        st.session_state.combined_signal_alert_status = "Background evidence — merged into Market Intelligence Smart Alert"
+        return alert
 
     # In Smart mode, Big Player EARLY/CONFIRMED by itself is evidence, not another
     # Telegram notification.  It is merged into the next meaningful MI story.

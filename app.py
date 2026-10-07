@@ -1598,14 +1598,14 @@ with persistent_panel("📊 Show Live Chart — Simple / Advanced", "panel_live_
 with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
     if alerts_open:
         st.caption(
-            "Automatic W/M + Candle + Big Player delivery background me same rahegi; "
-            "neeche ke controls sirf view/configuration hain."
+            "Smart Alert mode: Market Intelligence primary Telegram voice hai; W/M + Candle + Big Player "
+            "supportive evidence ke roop me calculate/record hote hain aur same story me merge hote hain."
         )
         _persistent_toggle(
             "Market Intelligence / Move Radar / Liquidity alerts ON",
             "market_intelligence_alerts_enabled",
             default=True,
-            help="Big-move precaution, pressure build-up, liquidity hunt/sweep, One-Brain alignment, conflict aur build-up-failed alerts. Existing market snapshot hi reuse hota hai.",
+            help="Big-move risk, pressure quality/fake-risk, move attack, liquidity hunt/sweep, One-Brain alignment/conflict aur build-up/flip alerts. Existing market snapshot hi reuse hota hai; extra broker call nahi.",
         )
         _mie_status = st.session_state.get("market_intelligence_alert_status")
         if _mie_status:

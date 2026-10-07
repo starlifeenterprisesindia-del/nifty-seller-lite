@@ -1,61 +1,66 @@
-# Architecture — V2.69 Stability / Market Intelligence Refinement
-
-## Stability rule
-
-All live evidence still comes from the single authoritative snapshot. Missing evidence is NO VOTE. Current READY 1m/3m option-flow windows may provide a reduced-quality fallback when the composite option score is temporarily unformed; no stale prior option score is carried forward. Raw One-Brain scores remain the action inputs; bounded display scores exist only to stop user-facing numerical flicker.
-
-## Fast vs slow context
-
-15m price structure is the dominant context. A separate fast-family consensus (Structure, Futures, Options Flow, Barriers/Walls, Heavyweight Breadth, Momentum) is allowed to create precautionary early direction only when breadth, acceleration and structural support agree. Opposite-context signals are labelled REVERSAL WATCH / COUNTERTREND IMPULSE rather than silently becoming a new trend.
-
-## Liquidity acceptance
-
-A liquidity breach is not continuation by itself. The breached zone is temporarily locked; follow-through completed closes are required for acceptance. A quick reclaim is classified as a sweep/reversal condition.
-
+# Architecture — V2.70 Pressure Integrity / Smart Alert Hardening
 
 ## One authoritative snapshot
 
-`services/snapshot_service.py` builds one `MarketSnapshot`. Screen, journal, PDF and decision logic consume that same snapshot. Analysis modules do not fetch broker data independently.
+`services/snapshot_service.py` builds one `MarketSnapshot`. Screen, journal, PDF and decision logic consume that same snapshot. New Market Intelligence logic performs **no independent broker/API fetch**.
 
-## Canonical operational brain
+## Canonical operational brain — unchanged
 
-`analysis/simple_brain.py` is the operational decision authority after evidence is built:
+`analysis/simple_brain.py` remains the operational authority after evidence is built:
 
 1. **Trend / Regime — 40%**
 2. **Options Flow — 25%**
 3. **Participation — 20%**
 4. **Barrier / Entry — 15%**
 
-Weights normalize over available evidence. **Missing = no vote.** Big Player is confirmation inside Participation, not a fifth directional vote. FII/DII, VIX, news, Greeks, W/M and special candles keep their context/risk/quality roles and do not create duplicate final decisions.
+Weights normalize over available evidence. **Missing = no vote.** Market Intelligence never feeds a second directional score back into One Brain.
 
-## Future Brain
+## Two-speed Market Intelligence
 
-`analysis/future_brain.py` remains advisory for the next 5/15 minutes. Longer 30m/1h rows are context strength, not a second calibrated probability engine. The old duplicate 5–15 minute outlook is not rendered on the main screen.
+### Fast lane — do not miss the move
 
-## AI Move Check
+Move Radar can enter WATCH / BUILDING / HIGH immediately from pressure acceleration and already-available independent evidence. It does **not** wait for W/M, strong-candle completion or multi-snapshot persistence.
 
-`analysis/ai_move_tracker.py` freezes a valid live UP/DOWN thesis from the canonical Simple One-Brain. `ui/ai_move_tracker.py` runs as a 3-minute Streamlit fragment and reads only Railway's already-running `/live` cache. It does **not** fetch Dhan data or recalculate indicators/options/Top-9/Brain.
+### Quality lane — real vs fake pressure
 
-The tracker records current signed move, MFE, MAE, 5m/15m/30m checkpoints and a locked relevant barrier. Full snapshots may confirm that barrier using their already-computed completed 3m close. A tiny Railway-only `AI TRACKER` event persists each 3-minute observation; it never creates a decision vote or Dhan call.
+`analysis/pressure_integrity.py` evaluates:
 
-## Journal
+- independent-family confirmation/opposition
+- immediate price response / pressure efficiency
+- nearest relevant barrier distance, strength and break pressure
+- already-computed live 1m market speed
+- pressure persistence and collapse
+- W/M and candle evidence as **small supportive context only**
 
-New decision rows are limited to **09:30–15:00 IST**. Existing rows can continue receiving outcome backfills after 15:00 so late signals are not left incomplete.
+Outputs include pressure quality, fake/real evidence score, move-attack state, realized progress and flip state. A pressure wave that already produced a meaningful price move is marked REALIZED; later cooling becomes EXHAUSTING instead of being misclassified as fake.
 
-## Alerts
+## Pattern rule
 
-Strong 3m candle, valid W/M and Big Player activity share one combined Telegram path. Fingerprints are reserved before asynchronous delivery and recent fingerprints persist on Railway volume to prevent duplicate messages across reruns/restarts. Manual CE/PE premium alerts remain separate because they are user-defined price alerts, not market-evidence alerts.
+W/M and strong-candle patterns are never mandatory gates for Move Radar or pressure verification. They can strengthen or oppose a view but their absence is **NO VOTE**.
 
-## Options walls
+## Liquidity rule
 
-Operational Options Intelligence continues to use the bounded near-ATM window. The full chain is already available during snapshot construction, so presentation also records **Global Max OI CE/PE** without another API call. The two concepts are explicitly labelled and are not double-counted.
+A liquidity pool already containing price is a **CURRENT BATTLE ZONE**, not a future target. The next directional extension is a **NEXT HUNT ZONE**. A first breach is PENDING ACCEPTANCE. A quick reclaim is only REVERSAL WATCH; follow-through completed closes are required before REVERSAL FAVORED.
+
+## Alert architecture
+
+Market Intelligence is the primary automatic Telegram voice. Pattern/W-M/Big Player evidence remains calculated and journaled, but when the MI lane is enabled it is merged into the Smart Alert context. Material state changes can alert: Big Move Watch, Pressure Verified, Absorption/Fake Risk, Build-up Failed, Exhaustion, Flip Watch/Confirmed, Move Attack, Liquidity Sweep, Alignment or System Conflict.
+
+## WAIT presentation
+
+One Brain action logic is unchanged. UI labels may show NO EDGE / WATCH / ARMED while the canonical action remains WAIT. This is presentation only and cannot open the entry gate.
+
+## Validation
+
+The Market Intelligence Test Pack records raw move pressure, pressure quality, price response, barrier attack, supportive signals, realized progress, flip states, liquidity roles and retrospective 5/15/30-minute outcomes. Future outcome columns are post-hoc labels only and are never exposed to the live predictor.
 
 ## Performance rules
 
-- no extra Dhan call for AI Move Check
-- no full Brain rerun from the 3-minute tracker
-- instrument master / VIX / nearest-future resolution cached in process
-- one combined alert path rather than duplicate Big Player delivery
-- runtime files and caches excluded from release
+- no new Dhan/broker request
+- no full-history scan on the critical live path
+- no ML model on the live path
+- no duplicate evidence weighting
+- W/M/candle support is optional, never blocking
+- current One Brain core files stay protected
 
 The app remains read-only and never places, modifies or exits broker orders.

@@ -1048,6 +1048,22 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     )
 
 
+def _wait_display_stage(simple: dict[str, Any], common_action: str = "WAIT") -> str:
+    """Presentation-only WAIT progression; canonical action remains unchanged."""
+    if str(common_action or "WAIT").upper() != "WAIT":
+        return str(common_action or "WAIT")
+    state = str((simple or {}).get("entry_state") or "WAIT").upper()
+    if "DATA" in state:
+        return "DATA WAIT"
+    if "READY" in state or "BREAK TRIGGER" in state or "TRIGGER PENDING" in state:
+        return "ARMED · WAIT"
+    if "BREAK" in state or "PULLBACK" in state or "WATCH" in state or "BUILD" in state:
+        return "WATCH · WAIT"
+    if "NO CLEAR" in state or "NO EDGE" in state:
+        return "NO EDGE · WAIT"
+    return "WAIT"
+
+
 def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     decision = snapshot.decision
     common = getattr(snapshot, "metadata", {}).get("common_decision") or {}
@@ -1061,6 +1077,8 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
     }.get(direction, f"Market direction {direction}")
     entry_ready = bool(common.get("entry_allowed"))
     common_action = str(common.get("final_action") or "WAIT")
+    simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
+    display_wait_stage = _wait_display_stage(simple, common_action)
     bundle = getattr(snapshot, "trade_plan", None)
     plan_map = ({"CE BUY": bundle.ce_buy, "PE BUY": bundle.pe_buy,
                  "CE SELL": bundle.ce_sell, "PE SELL": bundle.pe_sell,
@@ -1073,7 +1091,7 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
         score = float(getattr(eval_map.get(common_best), "score", 0) or 0)
     if common_action == "WAIT" or not entry_ready:
         css_class = "wait"
-        title = "WAIT"
+        title = display_wait_stage if snapshot.market_session.is_live else "WAIT"
         if not snapshot.market_session.is_live:
             subtitle = "REFERENCE ONLY — fresh strategy ranking band"
             structure = snapshot.market_session.message
@@ -1088,7 +1106,6 @@ def _render_final_action_hero(snapshot: MarketSnapshot, feed_ok: bool) -> None:
                 reference = "Reference ranking; entry confirmed nahi. " + reference
             else:
                 reference = "Koi usable strike setup nahi. "
-            simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
             simple_reason = str(simple.get("instruction") or "")
             common_blockers = common.get("blockers") or ()
             blocker_text = simple_reason or (str(common_blockers[0]) if common_blockers else "Entry trigger pending")
@@ -1230,7 +1247,9 @@ def render_main_ai_market_view(
             )
             if "DATA" in entry_state:
                 c.caption(f"Structural readiness {float(simple.get('display_entry_readiness', simple.get('entry_readiness')) or 0):.0f}/100")
-            d.metric("ACTION", public_action_label(str(common.get("final_action") or simple.get("final_action") or "WAIT")))
+            _action_raw = str(common.get("final_action") or simple.get("final_action") or "WAIT")
+            _action_display = _wait_display_stage(simple, _action_raw) if _action_raw.upper() == "WAIT" else public_action_label(_action_raw)
+            d.metric("ACTION", _action_display)
             trigger = str(simple.get("trigger") or simple.get("instruction") or "")
             if common.get("entry_allowed"):
                 st.success(f"🚨 **{ready_banner_label()} — {public_action_label(common.get('final_action'))}** · {trigger}")
@@ -1255,17 +1274,26 @@ def render_main_ai_market_view(
                 for key, value in blocks.items():
                     if not isinstance(value, dict):
                         continue
+                    def _cell(value_in: Any, *, pct: bool = False) -> str:
+                        if value_in is None or value_in == "":
+                            return "—"
+                        try:
+                            number = float(value_in)
+                        except (TypeError, ValueError):
+                            return str(value_in)
+                        return f"{number:.0f}%" if pct else f"{number:.1f}"
+
                     rows.append({
                         "Block": key.replace("_", " ").title(),
-                        "Weight": value.get("weight"),
+                        "Weight": _cell(value.get("weight"), pct=True),
                         "Available": (
                             "YES" if value.get("available") is True
                             else "NO" if value.get("available") is False
                             else "—"
                         ),
-                        "Bull": value.get("bullish", "—"),
-                        "Bear": value.get("bearish", "—"),
-                        "Neutral/State": value.get("neutral", value.get("state", "—")),
+                        "Bull": _cell(value.get("bullish")),
+                        "Bear": _cell(value.get("bearish")),
+                        "Neutral/State": _cell(value.get("neutral", value.get("state"))),
                     })
                 if rows:
                     st.dataframe(rows, width="stretch", hide_index=True)
@@ -2899,10 +2927,19 @@ def render_market_context(snapshot: MarketSnapshot) -> None:
         },
     ]
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    _inst_age = ""
+    if institutional.as_of_date:
+        try:
+            _as_of = datetime.fromisoformat(str(institutional.as_of_date)).date()
+            _snapshot_day = snapshot.created_at.date()
+            _days_old = max(0, (_snapshot_day - _as_of).days)
+            _inst_age = f" · {_days_old} calendar day{'s' if _days_old != 1 else ''} old"
+        except (TypeError, ValueError):
+            _inst_age = ""
     st.write(
         f"**Institutional status:** {institutional.status} | "
         f"**Observations:** {institutional.observations}/15 | "
-        f"**As of:** {institutional.as_of_date or '—'} | "
+        f"**As of:** {institutional.as_of_date or '—'}{_inst_age} | "
         f"**Confidence:** {institutional.confidence:.1f}%"
     )
 

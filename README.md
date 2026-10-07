@@ -1,29 +1,28 @@
-# Nifty Seller Lite 2.69 — Stability + Early Direction + Sweep Refinement
-
-**2.69 live-shadow refinement:** current-snapshot evidence quality now avoids binary option/participation weight cliffs; One-Brain raw action scores remain separately recorded from display-stable scores; the fast Market Intelligence direction requires broad, accelerating, structurally supported evidence; countertrend impulses are caution states; and liquidity breaches require completed-candle acceptance before continuation is favored. No new broker/API call is added.
-
+# Nifty Seller Lite 2.70 — Pressure Integrity + Smart Alert Hardening
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
-The canonical Simple One-Brain remains intentionally small: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**, never an invented neutral vote. Future Brain is advisory only and no UI panel creates a second decision engine.
+The canonical Simple One-Brain remains intentionally small: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**, never an invented neutral vote. Future Brain and Market Intelligence are advisory/shadow layers; no UI panel creates a second operational decision engine.
 
-## 2.50 highlights
+## 2.70 highlights
 
-- **AI Move Check**: freezes a canonical UP/DOWN thesis and checks price every 3 minutes from Railway's existing live cache. It tracks ON TRACK / WEAKENING / STALLED / INVALIDATED / TARGET MET, MFE/MAE and 5m/15m/30m outcomes. It does not recalculate indicators, option flow, Top-9, news or One-Brain. Each 3-minute result is also written as a tiny Railway `AI TRACKER` history event for later audit.
-- **Locked barrier tracking**: the tracker keeps the original relevant support/resistance so the goalpost cannot silently move. A completed 3m close from the normal snapshot can confirm the break.
-- **Journal window 09:30–15:00 IST**: no new decision rows outside the clean learning window; already-open rows may still receive later outcome backfills.
-- **Auto Snapshot adds 1 hour**.
-- **Combined Strong Candle / W-M / Big Player alerts**: one Telegram lane with deduplication; the old separate Big Player alert path is removed.
-- **Calculator persistence**: one outer panel only, so Streamlit reruns no longer collapse an unnecessary inner expander; manual entry inputs retain session-state keys.
-- **Top-9 missing data = NO VOTE**: stale/flat session-change fallback cannot create fake 100% neutral Participation.
-- **Cleaner presentation**: Compact Evidence is diagnostic, entry DATA WAIT is shown as data incomplete, Brain Fit is separated from Strike/Pair Quality, near-ATM OI walls are clearly distinguished from full-chain Global Max OI.
-- **Lean performance**: instrument reference resolution is cached in-process; the AI tracker makes only one lightweight `/live` read every 3 minutes and adds no Dhan/option-chain calls.
+- **Pressure Integrity Engine (shadow-only):** separates fast big-move risk from directional pressure quality. It labels pressure as UNVERIFIED / BUILDING / VERIFIED / REALIZED / ABSORPTION RISK / BUILD-UP FAILED / EXHAUSTING / FLIP WATCH / FLIP CONFIRMED.
+- **No late-warning penalty from patterns:** W/M and strong-candle evidence is supportive only. Missing W/M/candle confirmation never blocks an early Move Radar warning.
+- **Move Attack state:** combines already-cached pressure, price response and barrier attack into NORMAL / WATCH / BUILDING / ATTACK / BREAK-EXPANSION states without adding a broker call.
+- **Real-vs-fake distinction:** pressure that already moved price meaningfully is remembered as REALIZED; if it later cools it becomes EXHAUSTING rather than incorrectly labelled fake.
+- **Pressure flip control:** opposite pressure begins as FLIP WATCH and upgrades only after stronger independent confirmation.
+- **Liquidity wording:** a zone already containing price is shown as CURRENT BATTLE ZONE; the directional extension becomes NEXT HUNT ZONE. Immediate reclaim/rejection is REVERSAL WATCH; follow-through is required before REVERSAL FAVORED.
+- **One Telegram voice:** W/M, candle and Big Player evidence still calculate and record, but when Market Intelligence alerts are enabled they are merged as supportive context instead of creating repeated standalone messages.
+- **WAIT presentation:** backend WAIT safety remains unchanged; the UI can show NO EDGE / WATCH / ARMED progression so a trigger-ready setup is visible without loosening One Brain.
+- **Diagnostic hardening:** numeric core-block tables use consistent display types to avoid Streamlit/PyArrow mixed-type serialization warnings.
+- **Validation pack:** adds pressure-integrity review fields and CSV output for fake/real pressure, price response, barriers, flips and realized move tracking.
+- **No extra API calls:** all new calculations reuse the authoritative MarketSnapshot and already-cached evidence.
 
 ## Main screen philosophy
 
-Show one operational answer first. Deep evidence stays behind expanders. The app favors fewer calculations, correct calculations, and observable prediction outcomes over adding more indicators.
+Show one operational answer first. Deep evidence stays behind expanders. Market Intelligence may warn early that **a move is developing**, while pressure quality separately indicates how trustworthy its direction currently is.
 
 ## Run
 

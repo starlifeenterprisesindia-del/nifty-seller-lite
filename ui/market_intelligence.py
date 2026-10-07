@@ -82,17 +82,29 @@ def _simple_market_story(item: dict[str, Any]) -> str:
 
 
 def _simple_move(item: dict[str, Any]) -> str:
-    impulse = str(item.get("impulse_state") or "NORMAL")
-    if "EXPANSION" in impulse or "HIGH PRESSURE" in impulse:
-        return "EXPANSION PRESSURE HIGH ⚡"
-    if "STRONG" in impulse:
-        return "STRONG MOVE FORMING ⚡"
-    if "MOVE BUILDING" in impulse:
-        return "MOVE BUILDING ⚡"
-    if "PRESSURE" in impulse:
-        return "PRESSURE FORMING"
+    integrity = item.get("pressure_integrity") if isinstance(item.get("pressure_integrity"), dict) else {}
+    qstate = str(integrity.get("quality_state") or "UNVERIFIED")
+    attack = str(integrity.get("move_attack_state") or "NORMAL")
+    risk = str(integrity.get("move_risk_state") or "NORMAL")
+    if qstate == "FLIP CONFIRMED":
+        return "PRESSURE FLIP CONFIRMED ↻"
+    if qstate == "FLIP WATCH":
+        return "PRESSURE FLIP WATCH ↻"
+    if qstate in {"ABSORPTION RISK", "BUILD-UP FAILED"}:
+        return "PRESSURE REJECTED / FAKE RISK"
+    if qstate == "EXHAUSTING":
+        return "MOVE EXHAUSTING"
+    if attack == "BREAK / EXPANSION":
+        return "BREAK / EXPANSION ⚡"
+    if attack == "ATTACK":
+        return "BARRIER ATTACK ⚡"
+    if risk == "HIGH":
+        return "BIG MOVE RISK HIGH ⚡"
+    if risk == "BUILDING":
+        return "MOVE RISK BUILDING ⚡"
+    if risk == "WATCH":
+        return "MOVE WATCH"
     return "NO STRONG BUILD-UP"
-
 
 def render_move_radar(snapshot: Any) -> None:
     """Always-visible precaution banner driven only by the precomputed MI result."""
@@ -107,6 +119,9 @@ def render_move_radar(snapshot: Any) -> None:
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
     target = _zone_text(liquidity.get("primary_zone") if isinstance(liquidity, dict) else None)
     pressure = _num(item.get("expansion_pressure"))
+    integrity = item.get("pressure_integrity") if isinstance(item.get("pressure_integrity"), dict) else {}
+    quality_state = str(integrity.get("quality_state") or "UNVERIFIED")
+    quality_score = _num(integrity.get("quality_score"))
 
     palette = {
         "GREEN": ("#0b7a3e", "#e9f8ef", "🟢"),
@@ -134,7 +149,7 @@ def render_move_radar(snapshot: Any) -> None:
 </style>
 <div class="obmie-radar">
   <div class="obmie-radar-title">{dot} MOVE RADAR · {state}</div>
-  <div class="obmie-radar-sub">{message} · Pressure {pressure:.0f}/100{extra}</div>
+  <div class="obmie-radar-sub">{message} · Pressure {pressure:.0f}/100 · Quality {quality_state} {quality_score:.0f}/100{extra}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -198,8 +213,12 @@ def render_market_intelligence(snapshot: Any) -> None:
 
     direction = str(item.get("direction") or "MIXED")
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
+    integrity = item.get("pressure_integrity") if isinstance(item.get("pressure_integrity"), dict) else {}
     zone = liquidity.get("primary_zone") if isinstance(liquidity, dict) else None
     target = _zone_text(zone if isinstance(zone, dict) else None)
+    zone_role = str(liquidity.get("zone_role") or "LIQUIDITY ZONE")
+    next_hunt = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else None
+    next_hunt_text = _zone_text(next_hunt) if next_hunt else "—"
     hunt_bias = str(liquidity.get("hunt_bias") or "UNCLEAR") if isinstance(liquidity, dict) else "UNCLEAR"
     hunt_strength = str(liquidity.get("hunt_strength") or "LOW") if isinstance(liquidity, dict) else "LOW"
     sweep_outcome = str(liquidity.get("sweep_outcome") or "UNCLEAR") if isinstance(liquidity, dict) else "UNCLEAR"
@@ -218,10 +237,10 @@ def render_market_intelligence(snapshot: Any) -> None:
         _render_story_grid([
             ("MARKET", _simple_market_story(item)),
             ("MOVE", _simple_move(item)),
-            ("LIQUIDITY TARGET", target),
+            (zone_role, target),
             ("HUNT", f"{hunt_bias} · {hunt_strength}"),
-            ("AFTER TARGET", sweep_outcome),
             ("MOVE PRESSURE", f"{pressure:.0f}/100 {velocity_marker}".strip()),
+            ("PRESSURE QUALITY", f"{integrity.get('quality_state', 'UNVERIFIED')} · {_num(integrity.get('quality_score')):.0f}/100"),
             ("ONE BRAIN", one_brain_text),
             ("STATUS", str(item.get("system_status") or "WAIT")),
         ])
@@ -239,8 +258,8 @@ def render_market_intelligence(snapshot: Any) -> None:
             ("30m", _path_text(item.get("path_30m"))),
         ], outlook=True)
         st.caption(
-            f"Reach: {reach} · Evidence: {_evidence_label(item)} · "
-            f"Fake-move risk: {item.get('fake_move_risk', 'MEDIUM')} · "
+            f"Next hunt: {next_hunt_text} · After zone: {sweep_outcome} · Reach: {reach} · "
+            f"Fake-risk: {integrity.get('fake_pressure_score', '—')} · Evidence: {_evidence_label(item)} · "
             "scores evidence hain, calibrated probabilities nahi."
         )
 
@@ -255,6 +274,11 @@ def render_market_intelligence(snapshot: Any) -> None:
         y2.metric("Reversal Quality", f"{_num(item.get('reversal_quality')):.0f}")
         y3.metric("Coverage", f"{_num(item.get('evidence_coverage')):.0f}%")
         y4.metric("Conflict", str(item.get("evidence_conflict") or "HIGH"))
+        z1, z2, z3, z4 = st.columns(4)
+        z1.metric("Pressure Quality", f"{_num(integrity.get('quality_score')):.0f}/100")
+        z2.metric("Attack State", str(integrity.get("move_attack_state") or "NORMAL"))
+        z3.metric("Price Response", str(integrity.get("price_response_state") or "UNCONFIRMED"))
+        z4.metric("Barrier", str(integrity.get("barrier_state") or "—"))
         st.caption(
             f"Early direction: {item.get('early_direction', item.get('direction', 'MIXED'))} · "
             f"15m context: {item.get('dominant_context', 'MIXED')} · "
@@ -285,9 +309,9 @@ def render_market_intelligence(snapshot: Any) -> None:
             rows.append({
                 "Expert": expert.get("name"),
                 "Available": "YES" if expert.get("available") else "NO VOTE",
-                "Bull": expert.get("bullish"), "Bear": expert.get("bearish"), "Range": expert.get("range_score"),
-                "Reliability": round(_num(expert.get("reliability")) * 100),
-                "Freshness": round(_num(expert.get("freshness")) * 100),
+                "Bull": f"{_num(expert.get('bullish')):.1f}", "Bear": f"{_num(expert.get('bearish')):.1f}", "Range": f"{_num(expert.get('range_score')):.1f}",
+                "Reliability": f"{round(_num(expert.get('reliability')) * 100)}%",
+                "Freshness": f"{round(_num(expert.get('freshness')) * 100)}%",
                 "Why": "; ".join(str(v) for v in (expert.get("reasons") or ())[:3]),
             })
         if rows:
@@ -320,7 +344,7 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     for candidate in alerts:
         kind0 = str(candidate.get("kind") or "")
         dir0 = str(candidate.get("direction") or "MIXED").upper()
-        if dir0 == "MIXED" and kind0 in {"PRESSURE_ACCELERATION", "PRESSURE_WATCH"} and expansion < 75:
+        if dir0 == "MIXED" and kind0 == "BIG_MOVE_PRECAUTION" and expansion < 58:
             continue
         if kind0 == "ONE_BRAIN_ALIGNMENT" and alignment == "ALIGNMENT WATCH" and (expansion < 60 or coverage < 70):
             continue
@@ -329,15 +353,18 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         return []
 
     rank = {
-        "SYSTEM_CONFLICT": 100,
-        "BUILDUP_FAILED": 98,
-        "LIQUIDITY_SWEEP": 96,
-        "ONE_BRAIN_ALIGNMENT": 92,
-        "STRONG_BUILDUP": 88,
-        "LIQUIDITY_HUNT_WATCH": 82,
-        "PRESSURE_ACCELERATION": 76,
-        "BIG_MOVE_PRECAUTION": 72,
-        "PRESSURE_WATCH": 68,
+        "PRESSURE_FLIP_CONFIRMED": 110,
+        "SYSTEM_CONFLICT": 106,
+        "PRESSURE_ABSORBED": 104,
+        "BUILDUP_FAILED": 102,
+        "LIQUIDITY_SWEEP": 100,
+        "MOVE_EXHAUSTING": 98,
+        "PRESSURE_FLIP_WATCH": 96,
+        "PRESSURE_VERIFIED": 94,
+        "MOVE_ATTACK": 92,
+        "ONE_BRAIN_ALIGNMENT": 90,
+        "LIQUIDITY_HUNT_WATCH": 86,
+        "BIG_MOVE_PRECAUTION": 80,
     }
     row = max(filtered, key=lambda x: rank.get(str(x.get("kind") or ""), 0))
     kind = str(row.get("kind") or "MIE")
@@ -364,12 +391,15 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     age = current_ts - last_ts if last_ts else 9999.0
 
     # Three-minute setup cooldown.  Only a material state change can break it.
-    critical = kind in {"SYSTEM_CONFLICT", "BUILDUP_FAILED", "LIQUIDITY_SWEEP"}
+    critical = kind in {
+        "SYSTEM_CONFLICT", "BUILDUP_FAILED", "LIQUIDITY_SWEEP", "PRESSURE_ABSORBED",
+        "PRESSURE_FLIP_CONFIRMED", "PRESSURE_FLIP_WATCH", "MOVE_EXHAUSTING",
+    }
     direction_flip = direction in {"BULLISH", "BEARISH"} and last_dir in {"BULLISH", "BEARISH"} and direction != last_dir
     strong_upgrade = (
-        kind in {"ONE_BRAIN_ALIGNMENT", "STRONG_BUILDUP"}
+        kind in {"ONE_BRAIN_ALIGNMENT", "PRESSURE_VERIFIED", "MOVE_ATTACK"}
         and current_rank > last_rank
-        and score >= last_score + 12
+        and score >= last_score + 8
     )
     material_change = critical or direction_flip or strong_upgrade
     if age < 180 and not material_change:
@@ -379,8 +409,12 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         return []
 
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
+    integrity = item.get("pressure_integrity") if isinstance(item.get("pressure_integrity"), dict) else {}
     zone = liquidity.get("primary_zone") if isinstance(liquidity.get("primary_zone"), dict) else None
     target_text = _zone_text(zone)
+    zone_role = str(liquidity.get("zone_role") or "LIQUIDITY ZONE")
+    next_zone = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else None
+    next_target_text = _zone_text(next_zone) if next_zone else ""
     hunt_bias = str(liquidity.get("hunt_bias") or "UNCLEAR")
     hunt_strength = str(liquidity.get("hunt_strength") or "")
     sweep_state = str(liquidity.get("sweep_state") or "NONE")
@@ -388,15 +422,19 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
 
     # Reuse already-computed candle/Big-Player evidence in the same Telegram story.
     confirm_line = ""
-    try:
-        confirm = combined_signal_alert(snapshot)
-    except Exception:
-        confirm = None
-    if isinstance(confirm, dict) and not bool(confirm.get("conflict")):
-        cdir = str(confirm.get("direction") or "MIXED").upper()
-        names = str(confirm.get("names") or "").strip()
-        if names and (direction == "MIXED" or cdir == direction):
-            confirm_line = f"\nConfirm: {names[:180]}"
+    supportive = [str(x) for x in (integrity.get("supportive_signals") or []) if str(x).strip()]
+    if supportive:
+        confirm_line = "\nSupport: " + ", ".join(supportive[:2])
+    else:
+        try:
+            confirm = combined_signal_alert(snapshot)
+        except Exception:
+            confirm = None
+        if isinstance(confirm, dict) and not bool(confirm.get("conflict")):
+            cdir = str(confirm.get("direction") or "MIXED").upper()
+            names = str(confirm.get("names") or "").strip()
+            if names and (direction == "MIXED" or cdir == direction):
+                confirm_line = f"\nSupport: {names[:180]}"
 
     if alignment in {"STRONG EVIDENCE ALIGNMENT", "ALIGNMENT WATCH", "DIRECTION ALIGNED"}:
         one_brain_text = "ALIGNED"
@@ -406,7 +444,9 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         one_brain_text = "NO CLEAR ALIGNMENT"
 
     icon = "🟢" if direction == "BULLISH" else "🔴" if direction == "BEARISH" else "🟠"
-    target_line = "" if target_text == "NO CLEAR TARGET" else f"\nTarget: {target_text} · Hunt {hunt_bias} {hunt_strength}".rstrip()
+    target_line = "" if target_text == "NO CLEAR TARGET" else f"\n{zone_role.title()}: {target_text} · Hunt {hunt_bias} {hunt_strength}".rstrip()
+    if next_target_text and next_target_text != "NO CLEAR TARGET":
+        target_line += f" · Next {next_target_text}"
     sweep_line = "" if sweep_state in {"NONE", "UPSIDE TARGET TESTING", "DOWNSIDE TARGET TESTING"} else f"\nSweep: {sweep_state} · {sweep_outcome}"
     payload = {
         "captured_at": row.get("captured_at") or created_at.isoformat(),
@@ -424,7 +464,8 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         "message": (
             f"🧠 ONE BRAIN MARKET INTELLIGENCE\n"
             f"{icon} {row.get('title', kind)} · {direction}\n"
-            f"Move {expansion:.0f}/100 · Coverage {coverage:.0f}%"
+            f"Move {expansion:.0f}/100 · Quality {integrity.get('quality_state', 'UNVERIFIED')} "
+            f"{_num(integrity.get('quality_score')):.0f}/100 · Coverage {coverage:.0f}%"
             f"{target_line}{sweep_line}{confirm_line}\n"
             f"One Brain: {one_brain_text} · Status: {item.get('system_status', 'WATCH')}\n"
             "Precaution/shadow alert · automatic order nahi."

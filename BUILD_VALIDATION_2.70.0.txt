@@ -1,0 +1,29 @@
+Nifty Seller Lite v2.70.0 — Build Validation
+
+Static compile: PASS (entire source tree)
+Targeted refinement tests: 7 PASS
+- W/M/candle absence does not block fast move risk / real pressure
+- first fast warning is not immediately labelled fake
+- established opposing price + strong barrier -> absorption/fake risk
+- realized move then pressure collapse -> exhausting, not fake failure
+- opposite pressure -> flip watch/confirmed path
+- first liquidity reclaim -> reversal watch
+- reclaim follow-through -> reversal favored
+
+Pressure Integrity synthetic benchmark (3000 iterations): ~2.27 ms average in build container.
+This is a micro-benchmark, not live snapshot latency.
+
+Protected canonical files verified byte-for-byte unchanged versus v2.69.0:
+- analysis/decision.py
+- analysis/simple_brain.py
+- analysis/future_brain.py
+- analysis/execution_guard.py
+- analysis/trade_plan.py
+- analysis/position_guardian.py
+- services/snapshot_service.py
+
+No new Dhan/broker API calls added.
+No ML added.
+15:15 broker-side spot freeze behavior intentionally not modified.
+
+UI runtime note: Streamlit package is not installed in the build container, so full Streamlit rendering was not executed here. Python compilation of UI files passed; live visual verification remains a deployment check.
