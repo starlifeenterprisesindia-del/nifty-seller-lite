@@ -1,0 +1,32 @@
+ONE BRAIN / NIFTY SELLER — v2.67.0_MI_LIQUIDITY_MOVE_RADAR_SHADOW
+
+Purpose
+- Extend the existing shadow-only Market Intelligence Engine without changing the canonical One Brain decision path.
+- Add probable liquidity/stop-cascade mapping and a simple always-visible Move Radar for large-move precaution.
+
+New shadow intelligence
+- Probable Liquidity Map from already-available levels, barriers, swings, session levels, option walls, patterns and modest round-number context.
+- Upside / Downside Hunt Pressure, Hunt Bias and Hunt Strength.
+- Primary Liquidity Target plus optional Extension Zone.
+- Reach Score / Reach State and Path Clearance.
+- Prior-target sweep/breach detection with Continuation Favored / Reversal Favored / Unclear outcome.
+- MOVE RADAR: NORMAL / WATCH / BULLISH MOVE BUILDING / BEARISH MOVE BUILDING / BIG MOVE WATCH / strong build-up states.
+- Lightweight blink/pulse UI for green bullish, red bearish and amber direction-unclear precaution states.
+- Combined alert candidates for Big Move Precaution, Liquidity Hunt Watch and Liquidity Sweep/Breach, integrated with existing alignment/conflict/build-up alerts.
+- 90-second routine-alert cooldown plus state/fingerprint deduplication; critical conflict/sweep/alignment state changes can bypass routine cooldown.
+
+UI simplification
+- Main Market Intelligence card now shows one short story: MARKET, MOVE, LIQUIDITY TARGET, HUNT, AFTER TARGET, MOVE PRESSURE, ONE BRAIN, STATUS, and 5m/15m/30m outlook.
+- Detailed scores and expert evidence remain hidden under Advanced / Research detail.
+
+Validation downloads
+- Existing v2.66.1 Market Intelligence Test Pack retained.
+- Added liquidity_hunt_review.csv and liquidity/radar/sweep fields to snapshot + alert exports.
+
+Golden-rule protection
+- Zero new broker/API calls.
+- Zero Market Intelligence decision weight in canonical One Brain.
+- No imports added to decision.py, simple_brain.py, future_brain.py, execution_guard.py, trade_plan.py, position_guardian.py or snapshot_service.py.
+- Liquidity subsystem consumes already-fused directional/expansion scores; it does not create a second directional vote or feed back into common evidence.
+- Missing evidence remains NO VOTE.
+- All target/hunt/reach values are evidence scores, not calibrated probabilities and not claims of exact retail stop money or participant intent.

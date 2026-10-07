@@ -1,0 +1,54 @@
+ONE BRAIN / NIFTY SELLER — v2.67.0 verification
+Build: 2.67.0_MI_LIQUIDITY_MOVE_RADAR_SHADOW
+Base: 2.66.1_MI_VALIDATION_DOWNLOAD
+
+Golden-rule verification
+- New broker/API calls: 0
+- Canonical One Brain decision weight from Market Intelligence: 0
+- Protected canonical files SHA-256-identical to v2.66.1:
+  analysis/decision.py
+  analysis/simple_brain.py
+  analysis/future_brain.py
+  analysis/execution_guard.py
+  analysis/trade_plan.py
+  analysis/position_guardian.py
+  services/snapshot_service.py
+- Liquidity intelligence reads the existing snapshot plus already-fused Market Intelligence pressure. It does not add a second directional vote.
+- Move Radar reads precomputed Market Intelligence metadata only.
+- Missing evidence remains NO VOTE.
+
+New functionality
+- Probable liquidity zone map (not exact stop-money claims)
+- Upside/downside Hunt Pressure + Hunt Bias/Strength
+- Primary target + extension zone
+- Reach Score/State + Path Clearance
+- Prior-target liquidity sweep/breach detection
+- Continuation Favored / Reversal Favored / Unclear after-target state
+- Always-visible Move Radar with green/red/amber precaution pulse
+- Big Move Precaution, Liquidity Hunt Watch, Liquidity Sweep/Breach alerts
+- Existing Pressure, Alignment, Conflict and Build-up Failed alerts retained
+- Routine alert cooldown + deduplication
+- Simplified Market Intelligence front card; detailed calculations hidden in Advanced/Research
+- Existing v2.66.1 validation download retained and extended with liquidity_hunt_review.csv
+
+Performance (synthetic repeated OB-MIE calculation benchmark; not a live Railway guarantee)
+- v2.66.1 baseline: ~6.84 ms average, ~7.94 ms p95
+- v2.67.0: ~7.74 ms average, ~8.83 ms p95
+- Incremental shadow-intelligence overhead: ~0.9 ms average in this benchmark
+- Canonical One Brain calculation happens before shadow attachment and is unchanged.
+
+Validation
+- Market Intelligence + Liquidity/Move Radar tests: 12 passed
+- Critical decision/data/risk suite: 168 passed, 2 Streamlit-UI-only tests deselected because Streamlit is not installed in this build container
+- Architecture/release suite: 29 passed
+- Python compileall: PASS
+- Validation ZIP synthetic export check: PASS; liquidity_hunt_review.csv present
+
+Known validation-environment limitation
+- The container cannot install Streamlit (network/package access unavailable), so Streamlit AppTest-only tests cannot execute here. Syntax compilation passes. Railway already installs streamlit==1.59.1 from requirements.txt during normal deployment.
+- One pre-existing stale summary-presenter test also fails unchanged on v2.66.1 because it searches for a UI call that the base app no longer contains; it is not caused by v2.67.0.
+
+Safety semantics
+- Pressure/Hunt/Reach/Path scores are evidence scores, not probabilities.
+- Liquidity zones infer probable clustered interest from existing levels/structure/options context; exact retail stop amounts and participant intent are not observable.
+- Move Radar is a precaution warning, not an automatic trade instruction.

@@ -99,7 +99,8 @@ from ui.advanced_options_intelligence import render_phase2_options_intelligence
 from ui.replay_review import render_phase3_replay
 from ui.strategy_lab import render_phase4_strategy_lab, render_phase7_strategy_repair
 from ui.validation_lab import render_phase5_validation_lab
-from ui.market_intelligence import render_market_intelligence, process_market_intelligence_alerts
+from ui.market_intelligence import render_market_intelligence, render_move_radar, process_market_intelligence_alerts
+from services.market_intelligence_export import build_market_intelligence_test_pack
 
 
 _PROCESS_PERSIST_CONTROLS = {
@@ -1566,6 +1567,7 @@ def render_market_decision_reason_panel() -> None:
             render_indicators(view_snapshot)
 
 render_compact_status_bar(view_snapshot)
+render_move_radar(view_snapshot)
 render_main_ai_market_view(
     view_snapshot,
     previous_view_snapshot,
@@ -1594,10 +1596,10 @@ with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
             "neeche ke controls sirf view/configuration hain."
         )
         _persistent_toggle(
-            "Market Intelligence / Impulse alerts ON",
+            "Market Intelligence / Move Radar / Liquidity alerts ON",
             "market_intelligence_alerts_enabled",
             default=True,
-            help="Pressure build-up, One-Brain alignment, conflict aur build-up-failed alerts. Existing market snapshot hi reuse hota hai.",
+            help="Big-move precaution, pressure build-up, liquidity hunt/sweep, One-Brain alignment, conflict aur build-up-failed alerts. Existing market snapshot hi reuse hota hai.",
         )
         _mie_status = st.session_state.get("market_intelligence_alert_status")
         if _mie_status:
@@ -1838,6 +1840,34 @@ with st.expander("🧰 Checks & Downloads Centre", expanded=False):
                 mime="application/zip",
                 width="stretch",
             )
+
+    st.divider()
+    st.markdown("**Market Intelligence validation**")
+    st.caption("One-click shadow test pack: Impulse/Move Radar + Liquidity Hunt/Sweep + Alignment ko 5/15/30m outcomes ke saath validate karta hai. Existing Railway Day Memory hi read hoti hai; live Dhan traffic aur One Brain decision path par zero effect.")
+    if st.button("Prepare Market Intelligence Test Pack", key="prepare_market_intelligence_test_pack", width="stretch"):
+        if not live_server_url or not live_server_api_key:
+            st.info("Market Intelligence Test Pack ke liye Railway connection chahiye.")
+        else:
+            try:
+                with st.spinner("Building Market Intelligence validation ZIP from already-recorded evidence..."):
+                    raw_evidence = RailwayDhanClient(
+                        live_server_url, live_server_api_key, timeout_seconds=60
+                    ).download_bytes("/day-memory-export-file")
+                    st.session_state.market_intelligence_test_pack_bytes = build_market_intelligence_test_pack(
+                        raw_evidence, view_snapshot.public_summary()
+                    )
+                st.success("Market Intelligence Test Pack ready")
+            except Exception as exc:
+                st.error(f"Market Intelligence Test Pack not generated: {exc}")
+    if st.session_state.get("market_intelligence_test_pack_bytes"):
+        _mie_stamp = snapshot.created_at.strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            "Download Market Intelligence Test Pack ZIP",
+            data=st.session_state.market_intelligence_test_pack_bytes,
+            file_name=f"one_brain_market_intelligence_test_pack_{_mie_stamp}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
 
     st.divider()
     st.markdown("**Recorded data and backups**")

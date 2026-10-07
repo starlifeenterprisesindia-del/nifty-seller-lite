@@ -1,0 +1,10 @@
+Nifty Seller Lite v2.66.1 — Market Intelligence Validation Download
+
+- Adds one-click "Market Intelligence Test Pack" in Checks & Downloads Centre.
+- Uses existing Railway Day Memory export only when user clicks the button.
+- Adds zero live Dhan/broker calls and zero One Brain decision weight.
+- Pack contains snapshot scores, impulse/move review, alignment/conflict rows,
+  alert candidates, expert evidence, persistent One Brain decisions and performance.
+- Adds retrospective 5m/15m/30m observed spot movement columns for offline validation.
+- Day Memory now records only four small timing fields for performance audit.
+- Existing One Brain decision/calculation modules are unchanged.
