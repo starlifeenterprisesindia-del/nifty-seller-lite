@@ -21,6 +21,7 @@ from typing import Any, Iterable
 import pandas as pd
 
 from analysis.liquidity_intelligence import LiquidityIntelligence, calculate_liquidity_intelligence
+from analysis.pressure_integrity import PressureIntegrity, calculate_pressure_integrity
 
 
 # Directional expert families.  The weights sum to 1.00 before regime/reliability
@@ -108,6 +109,7 @@ class MarketIntelligenceResult:
     reversal_direction: str
     reversal_quality: float
     institutional_pressure: str
+    pressure_integrity: PressureIntegrity
     liquidity: LiquidityIntelligence
     move_radar: dict[str, Any]
     evidence_coverage: float
@@ -131,6 +133,7 @@ class MarketIntelligenceResult:
         data["path_5m"] = self.path_5m.to_dict()
         data["path_15m"] = self.path_15m.to_dict()
         data["path_30m"] = self.path_30m.to_dict()
+        data["pressure_integrity"] = self.pressure_integrity.to_dict()
         data["liquidity"] = self.liquidity.to_dict()
         data["move_radar"] = dict(self.move_radar)
         data["experts"] = [item.to_dict() for item in self.experts]
@@ -1130,8 +1133,13 @@ def _move_radar(
     conflict: str,
     direction_context: str = "MIXED",
     previous_radar: dict[str, Any] | None = None,
+    pressure_integrity: PressureIntegrity | None = None,
 ) -> dict[str, Any]:
-    """Human-facing precaution state with upgrade-fast / downgrade-slow hysteresis."""
+    """Fast precaution banner. Move-risk is fast; direction-quality can upgrade later.
+
+    A warning never waits for W/M/candle confirmation.  PressureIntegrity only decides
+    whether directional colour should be trusted, absorbed, failed or flipping.
+    """
     is_live = bool(getattr(getattr(snapshot, "market_session", None), "is_live", False))
     velocity_value = float(velocity or 0.0)
     previous_radar = previous_radar or {}
@@ -1142,46 +1150,49 @@ def _move_radar(
             "visual": "GREY", "blink": False, "message": "Market closed / reference data",
         }
 
-    contextual_caution = direction_context in {"COUNTERTREND IMPULSE", "REVERSAL WATCH", "EARLY PRESSURE"}
-    if expansion >= 76 and coverage >= 58 and conflict != "HIGH" and (persistence >= 1 or velocity_value >= 12):
-        if contextual_caution and direction in {"BULLISH", "BEARISH"}:
-            state = f"{direction} REVERSAL WATCH"
-            return {"state": state, "level": "HIGH", "direction": direction, "visual": "AMBER", "blink": True,
-                    "message": f"Strong {direction.lower()} pressure against dominant 15m context — confirmation required"}
-        if direction == "BULLISH":
-            state, visual, message = "STRONG BULLISH BUILD-UP", "GREEN", "Strong upside move pressure building"
-        elif direction == "BEARISH":
-            state, visual, message = "STRONG BEARISH BUILD-UP", "RED", "Strong downside move pressure building"
-        else:
-            state, visual, message = "BIG MOVE HIGH PRESSURE", "AMBER", "Large-move pressure high; direction not confirmed"
-        return {"state": state, "level": "HIGH", "direction": direction, "visual": visual, "blink": True, "message": message}
-    if expansion >= 60 or (expansion >= 52 and velocity_value >= 14):
-        if contextual_caution and direction in {"BULLISH", "BEARISH"}:
-            return {"state": f"{direction} REVERSAL WATCH", "level": "BUILDING", "direction": direction,
-                    "visual": "AMBER", "blink": True,
-                    "message": f"{direction.title()} countertrend/reversal pressure developing — attention mode"}
-        if direction == "BULLISH":
-            state, visual, message = "BULLISH MOVE BUILDING", "GREEN", "Upside pressure developing — attention mode"
-        elif direction == "BEARISH":
-            state, visual, message = "BEARISH MOVE BUILDING", "RED", "Downside pressure developing — attention mode"
-        else:
-            state, visual, message = "BIG MOVE WATCH", "AMBER", "Abnormal move pressure developing; direction unclear"
-        return {"state": state, "level": "BUILDING", "direction": direction, "visual": visual, "blink": True, "message": message}
-    if expansion >= 48 or velocity_value >= 10:
-        return {
-            "state": "WATCH", "level": "WATCH", "direction": direction,
-            "visual": "AMBER", "blink": velocity_value >= 12,
-            "message": "Pressure forming — precaution watch",
-        }
-    # Downgrade hysteresis: one softer snapshot does not immediately erase an
-    # active warning.  Real collapses are still surfaced by BUILDUP_FAILED alerts.
-    if previous_level in {"HIGH", "BUILDING"} and expansion >= 44 and conflict != "HIGH":
+    integrity = pressure_integrity
+    qstate = str(getattr(integrity, "quality_state", "UNVERIFIED") or "UNVERIFIED").upper()
+    qscore = float(getattr(integrity, "quality_score", 0.0) or 0.0)
+    attack = str(getattr(integrity, "move_attack_state", "NORMAL") or "NORMAL").upper()
+    move_risk = str(getattr(integrity, "move_risk_state", "NORMAL") or "NORMAL").upper()
+
+    if qstate in {"ABSORPTION RISK", "BUILD-UP FAILED"}:
+        label = "PRESSURE ABSORBED" if qstate == "ABSORPTION RISK" else "BUILD-UP FAILED"
+        return {"state": label, "level": "CAUTION", "direction": direction, "visual": "AMBER",
+                "blink": True, "message": f"{direction.title()} pressure did not confirm cleanly — fake/rejection risk"}
+    if qstate == "EXHAUSTING":
+        return {"state": "MOVE EXHAUSTING", "level": "CAUTION", "direction": direction, "visual": "AMBER",
+                "blink": True, "message": "Earlier pressure produced a move but is now cooling — reversal risk rising"}
+    if qstate == "FLIP WATCH":
+        return {"state": "PRESSURE FLIP WATCH", "level": "CAUTION", "direction": direction, "visual": "AMBER",
+                "blink": True, "message": f"Opposite {direction.lower()} pressure is taking control — confirmation pending"}
+    if qstate == "FLIP CONFIRMED":
+        visual = "GREEN" if direction == "BULLISH" else "RED" if direction == "BEARISH" else "AMBER"
+        return {"state": f"{direction} FLIP CONFIRMED", "level": "HIGH", "direction": direction,
+                "visual": visual, "blink": True, "message": f"Pressure flip confirmed · quality {qscore:.0f}/100"}
+
+    # Immediate move-risk warning: do not wait for pattern/persistence confirmation.
+    if move_risk in {"HIGH", "BUILDING"} or expansion >= 58 or (expansion >= 50 and velocity_value >= 12):
+        verified = qstate in {"VERIFIED", "REALIZED"} or qscore >= 68
+        contextual_caution = direction_context in {"COUNTERTREND IMPULSE", "REVERSAL WATCH", "EARLY PRESSURE"}
+        if direction not in {"BULLISH", "BEARISH"} or not verified or contextual_caution:
+            tentative = f" · {direction} tentative" if direction in {"BULLISH", "BEARISH"} else " · direction unconfirmed"
+            return {"state": "BIG MOVE WATCH", "level": "BUILDING", "direction": direction, "visual": "AMBER",
+                    "blink": True, "message": f"Abnormal move pressure building{tentative} · {attack}"}
+        visual = "GREEN" if direction == "BULLISH" else "RED"
+        prefix = "STRONG " if move_risk == "HIGH" or expansion >= 76 else ""
+        return {"state": f"{prefix}{direction} MOVE BUILDING", "level": "HIGH" if prefix else "BUILDING",
+                "direction": direction, "visual": visual, "blink": True,
+                "message": f"{direction.title()} pressure verified · quality {qscore:.0f}/100 · {attack}"}
+
+    if expansion >= 46 or velocity_value >= 9:
+        return {"state": "WATCH", "level": "WATCH", "direction": direction, "visual": "AMBER",
+                "blink": velocity_value >= 12, "message": "Pressure forming — precaution watch"}
+    if previous_level in {"HIGH", "BUILDING"} and expansion >= 42 and conflict != "HIGH":
         return {"state": "WATCH", "level": "WATCH", "direction": direction, "visual": "AMBER",
                 "blink": False, "message": "Previous move pressure cooling — remain alert"}
-    return {
-        "state": "NORMAL", "level": "NORMAL", "direction": direction,
-        "visual": "GREY", "blink": False, "message": "No abnormal move build-up",
-    }
+    return {"state": "NORMAL", "level": "NORMAL", "direction": direction,
+            "visual": "GREY", "blink": False, "message": "No abnormal move build-up"}
 
 def _one_brain_direction(snapshot: Any) -> tuple[str, str]:
     simple = (getattr(snapshot, "metadata", {}) or {}).get("simple_brain") or {}
@@ -1266,101 +1277,135 @@ def _alerts(
     *, snapshot: Any, direction: str, expansion: float, velocity: float | None,
     system_status: str, alignment: str, coverage: float, conflict: str,
     fake_risk: str, liquidity: LiquidityIntelligence, move_radar: dict[str, Any],
-    direction_context: str, previous: dict[str, Any] | None,
+    direction_context: str, pressure_integrity: PressureIntegrity, previous: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], ...]:
+    """Generate *state changes*, not every raw module event.
+
+    Smart delivery later chooses one event.  Pattern/W-M evidence is embedded as
+    supportive context and never becomes a separate required alert lane.
+    """
     if not bool(getattr(getattr(snapshot, "market_session", None), "is_live", False)):
         return ()
     output: list[dict[str, Any]] = []
-    previous_expansion = _num((previous or {}).get("expansion_pressure"))
+    previous = previous or {}
+    previous_expansion = _num(previous.get("expansion_pressure"))
+    previous_liquidity = previous.get("liquidity") if isinstance(previous.get("liquidity"), dict) else {}
+    previous_radar = previous.get("move_radar") if isinstance(previous.get("move_radar"), dict) else {}
+    previous_integrity = previous.get("pressure_integrity") if isinstance(previous.get("pressure_integrity"), dict) else {}
     spot = _num((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
     stamp = getattr(snapshot, "created_at", None)
-    previous_liquidity = (previous or {}).get("liquidity") if isinstance((previous or {}).get("liquidity"), dict) else {}
-    previous_radar = (previous or {}).get("move_radar") if isinstance((previous or {}).get("move_radar"), dict) else {}
 
     def zone_text() -> str:
         zone = liquidity.primary_zone
         if zone is None:
             return ""
-        return f" · Target {zone.lower:.0f}-{zone.upper:.0f}"
+        role = getattr(liquidity, "zone_role", "LIQUIDITY ZONE")
+        return f" · {role.title()} {zone.lower:.0f}-{zone.upper:.0f}"
 
-    def context_text() -> str:
-        return f" · {direction_context}" if direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE", "BREAKOUT WATCH"} else ""
+    def support_text() -> str:
+        signals = list(pressure_integrity.supportive_signals or ())
+        return (" · Support: " + ", ".join(signals[:2])) if signals else ""
 
     def add(kind: str, priority: str, title: str, message: str, score: float | None = None) -> None:
         output.append({
-            "kind": kind,
-            "priority": priority,
-            "direction": direction,
-            "title": title,
-            "message": message,
+            "kind": kind, "priority": priority, "direction": direction,
+            "title": title, "message": message,
             "captured_at": stamp.isoformat() if stamp is not None else "",
-            "nifty_ltp": spot,
-            "score": round(expansion if score is None else score, 1),
+            "nifty_ltp": spot, "score": round(expansion if score is None else score, 1),
+            "pressure_quality": pressure_integrity.quality_state,
+            "pressure_quality_score": pressure_integrity.quality_score,
+            "move_attack_state": pressure_integrity.move_attack_state,
             "liquidity_bias": liquidity.hunt_bias,
             "liquidity_target": liquidity.primary_zone.to_dict() if liquidity.primary_zone else None,
             "sweep_outcome": liquidity.sweep_outcome,
         })
 
-    crossed_52 = expansion >= 52 and (previous_expansion is None or previous_expansion < 52)
-    crossed_60 = expansion >= 60 and (previous_expansion is None or previous_expansion < 60)
-    crossed_75 = expansion >= 75 and (previous_expansion is None or previous_expansion < 75)
-
     radar_state = str(move_radar.get("state") or "NORMAL")
     old_radar_state = str(previous_radar.get("state") or "NORMAL")
-    if (
-        (crossed_52 or (velocity is not None and velocity >= 14 and expansion >= 50))
-        and coverage >= 50 and conflict != "HIGH"
-        and radar_state != "NORMAL" and radar_state != old_radar_state
-    ):
-        label = direction if direction != "MIXED" else "DIRECTION UNCLEAR"
+    move_risk = pressure_integrity.move_risk_state
+    if radar_state != old_radar_state and radar_state != "NORMAL" and move_risk in {"WATCH", "BUILDING", "HIGH"}:
+        tentative = "direction unconfirmed" if pressure_integrity.quality_state == "UNVERIFIED" else pressure_integrity.quality_state
         add(
-            "BIG_MOVE_PRECAUTION", "WATCH", "Big move precaution",
-            f"{label} · {radar_state}{context_text()} · Expansion {expansion:.0f}/100{zone_text()}",
+            "BIG_MOVE_PRECAUTION", "WATCH", "Big move watch",
+            f"{direction if direction != 'MIXED' else 'DIRECTION UNCLEAR'} · {tentative} · "
+            f"Pressure {expansion:.0f}/100 · {pressure_integrity.move_attack_state}{zone_text()}{support_text()}",
         )
 
-    if crossed_60 and coverage >= 55 and conflict != "HIGH":
-        label = direction if direction != "MIXED" else "DIRECTION UNCLEAR"
-        add("PRESSURE_WATCH", "WATCH", "Pressure building", f"{label}{context_text()} · Expansion {expansion:.0f}/100 · {system_status}{zone_text()}")
-    if crossed_75 and coverage >= 65 and conflict != "HIGH" and direction_context not in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE"}:
-        add("STRONG_BUILDUP", "HIGH", "Strong move build-up", f"{direction} · Expansion {expansion:.0f}/100 · Coverage {coverage:.0f}%{zone_text()}")
+    qstate = pressure_integrity.quality_state
+    old_qstate = str(previous_integrity.get("quality_state") or "UNVERIFIED")
+    if qstate != old_qstate:
+        if qstate in {"VERIFIED", "REALIZED"}:
+            add("PRESSURE_VERIFIED", "HIGH", "Pressure verified",
+                f"{direction} pressure {qstate.lower()} · Quality {pressure_integrity.quality_score:.0f}/100"
+                f" · Families {pressure_integrity.family_confirmations} confirm{zone_text()}{support_text()}",
+                pressure_integrity.quality_score)
+        elif qstate == "ABSORPTION RISK":
+            add("PRESSURE_ABSORBED", "CAUTION", "Pressure absorbed / fake risk",
+                f"{direction} pressure high but price/barrier response weak · Quality {pressure_integrity.quality_score:.0f}/100"
+                f" · Fake-risk {pressure_integrity.fake_pressure_score:.0f}/100{zone_text()}",
+                pressure_integrity.fake_pressure_score)
+        elif qstate == "BUILD-UP FAILED":
+            add("BUILDUP_FAILED", "CAUTION", "Build-up failed",
+                f"Pressure failed before meaningful move · {direction} · Quality {pressure_integrity.quality_score:.0f}/100",
+                pressure_integrity.fake_pressure_score)
+        elif qstate == "EXHAUSTING":
+            add("MOVE_EXHAUSTING", "CAUTION", "Move pressure exhausting",
+                f"Earlier pressure already moved {pressure_integrity.best_progress_points:.1f} pts; now cooling · reversal watch",
+                pressure_integrity.quality_score)
+        elif qstate == "FLIP WATCH":
+            add("PRESSURE_FLIP_WATCH", "CAUTION", "Pressure flip watch",
+                f"Opposite {direction.lower()} pressure rising · old pressure losing control · confirmation pending",
+                pressure_integrity.quality_score)
+        elif qstate == "FLIP CONFIRMED":
+            add("PRESSURE_FLIP_CONFIRMED", "HIGH", "Pressure flip confirmed",
+                f"{direction} pressure now dominant · Quality {pressure_integrity.quality_score:.0f}/100"
+                f" · Families {pressure_integrity.family_confirmations} confirm{zone_text()}{support_text()}",
+                pressure_integrity.quality_score)
 
-    current_hunt = liquidity.upside_hunt_pressure if liquidity.hunt_bias == "UPSIDE" else liquidity.downside_hunt_pressure if liquidity.hunt_bias == "DOWNSIDE" else max(liquidity.upside_hunt_pressure, liquidity.downside_hunt_pressure)
-    old_hunt_bias = str((previous_liquidity or {}).get("hunt_bias") or "")
-    old_hunt_value = _num((previous_liquidity or {}).get("upside_hunt_pressure" if liquidity.hunt_bias == "UPSIDE" else "downside_hunt_pressure"), 0.0) or 0.0
-    if (
-        liquidity.hunt_bias in {"UPSIDE", "DOWNSIDE"}
-        and current_hunt >= 70 and liquidity.primary_zone is not None
-        and expansion >= 54 and coverage >= 55 and conflict != "HIGH"
-        and (old_hunt_bias != liquidity.hunt_bias or old_hunt_value < 70)
-    ):
-        add(
-            "LIQUIDITY_HUNT_WATCH", "HIGH", "Liquidity hunt watch",
-            f"{liquidity.hunt_bias} hunt {current_hunt:.0f}/100 · Reach {liquidity.reach_state}{zone_text()}",
-            current_hunt,
-        )
+    attack = pressure_integrity.move_attack_state
+    old_attack = str(previous_integrity.get("move_attack_state") or "NORMAL")
+    if attack != old_attack and attack in {"ATTACK", "BREAK / EXPANSION"}:
+        add("MOVE_ATTACK", "HIGH", "Barrier move attack",
+            f"{direction} · {attack} · Barrier {pressure_integrity.barrier_state}"
+            f" · attack {pressure_integrity.barrier_attack_score:.0f}/100{support_text()}",
+            pressure_integrity.barrier_attack_score)
+
+    current_hunt = (liquidity.upside_hunt_pressure if liquidity.hunt_bias == "UPSIDE"
+                    else liquidity.downside_hunt_pressure if liquidity.hunt_bias == "DOWNSIDE"
+                    else max(liquidity.upside_hunt_pressure, liquidity.downside_hunt_pressure))
+    old_hunt_bias = str(previous_liquidity.get("hunt_bias") or "")
+    old_hunt_value = _num(previous_liquidity.get("upside_hunt_pressure" if liquidity.hunt_bias == "UPSIDE" else "downside_hunt_pressure"), 0.0) or 0.0
+    if (liquidity.hunt_bias in {"UPSIDE", "DOWNSIDE"} and current_hunt >= 72
+            and liquidity.primary_zone is not None and expansion >= 54 and coverage >= 55
+            and conflict != "HIGH" and (old_hunt_bias != liquidity.hunt_bias or old_hunt_value < 72)):
+        add("LIQUIDITY_HUNT_WATCH", "HIGH", "Liquidity hunt watch",
+            f"{liquidity.hunt_bias} hunt {current_hunt:.0f}/100 · Reach {liquidity.reach_state}{zone_text()}", current_hunt)
 
     if liquidity.sweep_state not in {"NONE", "UPSIDE TARGET TESTING", "DOWNSIDE TARGET TESTING"}:
-        old_sweep = str((previous_liquidity or {}).get("sweep_state") or "NONE")
+        old_sweep = str(previous_liquidity.get("sweep_state") or "NONE")
         if old_sweep != liquidity.sweep_state:
-            add(
-                "LIQUIDITY_SWEEP", "HIGH", "Liquidity sweep / breach",
+            add("LIQUIDITY_SWEEP", "HIGH", "Liquidity sweep / breach",
                 f"{liquidity.sweep_state} · After sweep: {liquidity.sweep_outcome}",
-                max(liquidity.sweep_quality, expansion),
-            )
+                max(liquidity.sweep_quality, expansion))
 
     if alignment in {"ALIGNMENT WATCH", "STRONG EVIDENCE ALIGNMENT"} and fake_risk != "HIGH":
-        previous_alignment = str((previous or {}).get("one_brain_alignment") or "")
+        previous_alignment = str(previous.get("one_brain_alignment") or "")
         if alignment != previous_alignment:
-            add("ONE_BRAIN_ALIGNMENT", "HIGH" if alignment.startswith("STRONG") else "WATCH", "One Brain alignment", f"One Brain + Market Intelligence {direction} aligned · {alignment}{zone_text()}")
-    if alignment == "SYSTEM CONFLICT":
-        previous_alignment = str((previous or {}).get("one_brain_alignment") or "")
-        if previous_alignment != alignment:
-            add("SYSTEM_CONFLICT", "CAUTION", "System conflict", "One Brain and Market Intelligence direction disagree — do not chase")
-    if previous_expansion is not None and previous_expansion >= 72 and expansion <= previous_expansion - 20 and expansion < 60:
-        add("BUILDUP_FAILED", "CAUTION", "Build-up failed", f"Expansion pressure fell {previous_expansion:.0f} → {expansion:.0f}")
-    if velocity is not None and velocity >= 18 and expansion >= 52 and not any(item["kind"] in {"PRESSURE_WATCH", "STRONG_BUILDUP"} for item in output):
-        add("PRESSURE_ACCELERATION", "WATCH", "Pressure accelerating", f"{direction}{context_text()} · Expansion velocity +{velocity:.0f}{zone_text()}")
-    return tuple(output[:7])
+            add("ONE_BRAIN_ALIGNMENT", "HIGH" if alignment.startswith("STRONG") else "WATCH",
+                "One Brain alignment", f"One Brain + Market Intelligence {direction} aligned · {alignment}{zone_text()}")
+    if alignment == "SYSTEM CONFLICT" and str(previous.get("one_brain_alignment") or "") != alignment:
+        add("SYSTEM_CONFLICT", "CAUTION", "System conflict",
+            "One Brain and Market Intelligence direction disagree — do not chase")
+
+    # Keep the output bounded.  Delivery layer will choose only one story.
+    rank = {
+        "PRESSURE_FLIP_CONFIRMED": 110, "SYSTEM_CONFLICT": 105, "PRESSURE_ABSORBED": 102,
+        "BUILDUP_FAILED": 100, "LIQUIDITY_SWEEP": 98, "MOVE_EXHAUSTING": 96,
+        "PRESSURE_FLIP_WATCH": 94, "PRESSURE_VERIFIED": 92, "MOVE_ATTACK": 90,
+        "ONE_BRAIN_ALIGNMENT": 88, "LIQUIDITY_HUNT_WATCH": 84, "BIG_MOVE_PRECAUTION": 78,
+    }
+    output.sort(key=lambda item: rank.get(str(item.get("kind") or ""), 0), reverse=True)
+    return tuple(output[:6])
 
 def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None = None) -> MarketIntelligenceResult:
     """Calculate shadow-only Market Intelligence from one authoritative snapshot."""
@@ -1437,6 +1482,14 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         and direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE"}
         else conflict
     )
+    previous_integrity = (previous_mie or {}).get("pressure_integrity") if isinstance((previous_mie or {}).get("pressure_integrity"), dict) else {}
+    pressure_integrity = calculate_pressure_integrity(
+        snapshot, previous_snapshot,
+        direction=radar_direction, expansion_pressure=expansion, pressure_velocity=velocity,
+        persistence=persistence, coverage=coverage, conflict=radar_conflict, experts=expert_map,
+        breakout_quality=breakout_quality, reversal_quality=reversal_quality, structure_event=structure_event,
+        previous_integrity=previous_integrity,
+    )
     liquidity = calculate_liquidity_intelligence(
         snapshot, previous_snapshot,
         direction=direction, early_direction=radar_direction, direction_context=direction_context,
@@ -1452,10 +1505,15 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         snapshot, direction=radar_direction, expansion=expansion, velocity=velocity,
         persistence=persistence, coverage=coverage, conflict=radar_conflict,
         direction_context=direction_context, previous_radar=previous_radar,
+        pressure_integrity=pressure_integrity,
     )
     one_direction, action = _one_brain_direction(snapshot)
     alignment = _alignment(one_direction, direction, action, coverage, conflict, expansion)
     fake_risk = _fake_move_risk(direction, breakout_quality, expert_map, conflict)
+    if pressure_integrity.fake_pressure_score >= 68 or pressure_integrity.quality_state in {"ABSORPTION RISK", "BUILD-UP FAILED"}:
+        fake_risk = "HIGH"
+    elif pressure_integrity.real_pressure_score >= 72 and pressure_integrity.quality_state in {"VERIFIED", "REALIZED"}:
+        fake_risk = "LOW"
     if direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE"} and fake_risk == "LOW":
         fake_risk = "MEDIUM"
     status = _system_status(snapshot, direction, coverage, conflict, expansion, breakout_quality, reversal_quality)
@@ -1463,6 +1521,10 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         status = "WATCH"
     if direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE"} and status in {"CONDITIONS BUILDING", "CONDITIONS MET"}:
         status = "WATCH"
+    if pressure_integrity.quality_state in {"ABSORPTION RISK", "BUILD-UP FAILED", "FLIP WATCH"}:
+        status = "WATCH"
+    elif pressure_integrity.quality_state == "FLIP CONFIRMED" and coverage >= 58:
+        status = "CONDITIONS BUILDING"
 
     path5 = _aggregate(experts, regime, "5m")
     path15 = (bull, bear, rng, coverage)
@@ -1475,7 +1537,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         snapshot=snapshot, direction=radar_direction, expansion=expansion, velocity=velocity,
         system_status=status, alignment=alignment, coverage=coverage, conflict=radar_conflict,
         fake_risk=fake_risk, liquidity=liquidity, move_radar=move_radar,
-        direction_context=direction_context, previous=previous_mie,
+        direction_context=direction_context, pressure_integrity=pressure_integrity, previous=previous_mie,
     )
 
     reasons = tuple(dict.fromkeys([
@@ -1485,6 +1547,8 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         f"Fast direction {radar_direction} · confirmations {fast_confirmation_count} · edge {fast_signed_edge:+.1f}",
         f"15m context {dominant_context} · {direction_context}",
         f"Institutional pressure {institutional}",
+        f"Pressure quality {pressure_integrity.quality_state} {pressure_integrity.quality_score:.0f}/100 · attack {pressure_integrity.move_attack_state}",
+        *pressure_integrity.reasons,
         *liquidity.reasons,
         f"Evidence coverage {coverage:.0f}% · conflict {conflict}",
     ]))[:8]
@@ -1500,7 +1564,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         cautions.append("Market closed/reference data")
 
     return MarketIntelligenceResult(
-        engine="ONE_BRAIN_MARKET_INTELLIGENCE_V2_LIQUIDITY_RADAR",
+        engine="ONE_BRAIN_MARKET_INTELLIGENCE_V3_PRESSURE_INTEGRITY",
         mode="SHADOW_ONLY_ZERO_CORE_WEIGHT",
         status="READY" if coverage >= 45 else "PARTIAL",
         market_state=regime,
@@ -1524,6 +1588,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         reversal_direction=reversal_direction,
         reversal_quality=reversal_quality,
         institutional_pressure=institutional,
+        pressure_integrity=pressure_integrity,
         liquidity=liquidity,
         move_radar=move_radar,
         evidence_coverage=round(coverage, 1),

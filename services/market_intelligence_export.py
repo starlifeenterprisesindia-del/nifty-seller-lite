@@ -147,6 +147,7 @@ def build_market_intelligence_test_pack(
     alignments: list[dict[str, Any]] = []
     impulse_rows: list[dict[str, Any]] = []
     liquidity_rows: list[dict[str, Any]] = []
+    pressure_rows: list[dict[str, Any]] = []
     performance_rows: list[dict[str, Any]] = []
 
     for idx, wrapped in enumerate(parsed_samples):
@@ -158,7 +159,9 @@ def build_market_intelligence_test_pack(
         liquidity = mie.get("liquidity") if isinstance(mie.get("liquidity"), dict) else {}
         primary = liquidity.get("primary_zone") if isinstance(liquidity.get("primary_zone"), dict) else {}
         extension = liquidity.get("extension_zone") if isinstance(liquidity.get("extension_zone"), dict) else {}
+        next_hunt = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else {}
         radar = mie.get("move_radar") if isinstance(mie.get("move_radar"), dict) else {}
+        integrity = mie.get("pressure_integrity") if isinstance(mie.get("pressure_integrity"), dict) else {}
         base = {
             "timestamp": at,
             "app_version": body.get("version"),
@@ -194,7 +197,36 @@ def build_market_intelligence_test_pack(
             "one_brain_action": body.get("background_action"),
             "move_radar_state": radar.get("state"),
             "move_radar_level": radar.get("level"),
+            "pressure_quality_state": integrity.get("quality_state"),
+            "pressure_quality_score": integrity.get("quality_score"),
+            "real_pressure_score": integrity.get("real_pressure_score"),
+            "fake_pressure_score": integrity.get("fake_pressure_score"),
+            "move_risk_state": integrity.get("move_risk_state"),
+            "move_attack_state": integrity.get("move_attack_state"),
+            "price_response_state": integrity.get("price_response_state"),
+            "price_response_score": integrity.get("price_response_score"),
+            "pressure_efficiency": integrity.get("pressure_efficiency"),
+            "pressure_barrier_state": integrity.get("barrier_state"),
+            "pressure_barrier_attack": integrity.get("barrier_attack_score"),
+            "pressure_barrier_distance": integrity.get("barrier_distance_points"),
+            "pressure_barrier_break": integrity.get("barrier_break_pressure"),
+            "live_candle_force_state": integrity.get("live_candle_force_state"),
+            "live_candle_force_score": integrity.get("live_candle_force_score"),
+            "pressure_family_confirmations": integrity.get("family_confirmations"),
+            "pressure_family_oppositions": integrity.get("family_oppositions"),
+            "pressure_supportive_pattern_score": integrity.get("supportive_pattern_score"),
+            "pressure_supportive_signals": " | ".join(str(x) for x in (integrity.get("supportive_signals") or [])),
+            "pressure_flip_state": integrity.get("flip_state"),
+            "pressure_realized_move": integrity.get("realized_move"),
+            "pressure_progress_points": integrity.get("progress_points"),
+            "pressure_best_progress_points": integrity.get("best_progress_points"),
+            "pressure_realized_threshold_points": integrity.get("realized_threshold_points"),
             "liquidity_state": liquidity.get("state"),
+            "liquidity_zone_role": liquidity.get("zone_role"),
+            "next_hunt_lower": next_hunt.get("lower"),
+            "next_hunt_upper": next_hunt.get("upper"),
+            "next_hunt_attraction": next_hunt.get("attraction_score"),
+            "next_hunt_distance": next_hunt.get("distance_points"),
             "hunt_bias": liquidity.get("hunt_bias"),
             "hunt_strength": liquidity.get("hunt_strength"),
             "upside_hunt_pressure": liquidity.get("upside_hunt_pressure"),
@@ -235,6 +267,11 @@ def build_market_intelligence_test_pack(
         if expansion >= 50.0 or velocity is not None or str(mie.get("impulse_state") or "").upper() not in {"", "NORMAL"}:
             impulse_rows.append(dict(base))
 
+        quality_state = str(integrity.get("quality_state") or "UNVERIFIED").upper()
+        move_risk_state = str(integrity.get("move_risk_state") or "NORMAL").upper()
+        if integrity and (move_risk_state != "NORMAL" or quality_state != "UNVERIFIED"):
+            pressure_rows.append(dict(base))
+
         if primary or str(liquidity.get("hunt_bias") or "") not in {"", "UNCLEAR", "BALANCED"} or str(liquidity.get("sweep_state") or "NONE") != "NONE":
             liquidity_rows.append(dict(base))
 
@@ -250,6 +287,10 @@ def build_market_intelligence_test_pack(
                 "direction": mie.get("direction"),
                 "expansion_pressure": mie.get("expansion_pressure"),
                 "pressure_velocity": mie.get("pressure_velocity"),
+                "pressure_quality_state": integrity.get("quality_state"),
+                "pressure_quality_score": integrity.get("quality_score"),
+                "move_attack_state": integrity.get("move_attack_state"),
+                "fake_pressure_score": integrity.get("fake_pressure_score"),
                 "coverage": mie.get("evidence_coverage"),
                 "conflict": mie.get("evidence_conflict"),
                 "one_brain_alignment": mie.get("one_brain_alignment"),
@@ -298,7 +339,8 @@ This ZIP is post-hoc validation only. It does not call Dhan, does not change One
 Files:
 - market_intelligence_snapshots.csv: all recorded OB-MIE states/scores plus observed future spot movement at 5/15/30m.
 - impulse_move_review.csv: Move Radar / pressure-building observations for large-candle lead-time testing.
-- liquidity_hunt_review.csv: probable liquidity target, hunt pressure, reach score, sweep/breach outcome, acceptance/reclaim state and observed 5/15/30m movement.
+- pressure_integrity_review.csv: fast move-risk versus pressure quality, price response, barrier attack, supportive candle/W-M evidence, fake/real scores, realization and flip states.
+- liquidity_hunt_review.csv: current battle/next hunt zones, hunt pressure, reach score, sweep/breach outcome, acceptance/reclaim state and observed 5/15/30m movement.
 - one_brain_alignment.csv: One Brain + Market Intelligence alignment/conflict observations.
 - market_intelligence_alerts.csv: generated precaution/alignment/liquidity alerts.
 - expert_evidence.csv: per-family evidence, freshness and reliability.
@@ -311,8 +353,10 @@ Important:
 - Liquidity zones infer probable clustered interest; they do not reveal exact retail stop money or participant intent.
 - Future outcome columns are retrospective labels only and are never available to the live predictor at prediction time.
 - Missing evidence remains NO VOTE.
+- Move-risk warning is intentionally faster than direction verification. W/M and strong candles are supportive only and are never mandatory gates.
+- Pressure that already produced a meaningful move is tagged REALIZED/EXHAUSTING rather than falsely labelled fake only because it later reverses.
 - Early direction is a precaution/fast-family consensus; dominant 15m context remains separately recorded.
-- First liquidity breach is PENDING ACCEPTANCE; continuation requires follow-through or reclaim logic.
+- First liquidity breach is PENDING ACCEPTANCE; a reclaim starts as REVERSAL WATCH and needs follow-through before REVERSAL FAVORED.
 """
 
     output = io.BytesIO()
@@ -320,6 +364,7 @@ Important:
         archive.writestr("README.txt", readme)
         archive.writestr("market_intelligence_snapshots.csv", _csv_bytes(snapshots))
         archive.writestr("impulse_move_review.csv", _csv_bytes(impulse_rows))
+        archive.writestr("pressure_integrity_review.csv", _csv_bytes(pressure_rows))
         archive.writestr("liquidity_hunt_review.csv", _csv_bytes(liquidity_rows))
         archive.writestr("one_brain_alignment.csv", _csv_bytes(alignments))
         archive.writestr("market_intelligence_alerts.csv", _csv_bytes(alerts))

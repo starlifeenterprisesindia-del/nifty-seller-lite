@@ -42,6 +42,8 @@ class LiquidityIntelligence:
     downside_hunt_pressure: float
     primary_zone: LiquidityZone | None
     extension_zone: LiquidityZone | None
+    zone_role: str
+    next_hunt_zone: LiquidityZone | None
     reach_score: float
     reach_state: str
     path_clearance: float
@@ -59,6 +61,7 @@ class LiquidityIntelligence:
         data = asdict(self)
         data["primary_zone"] = self.primary_zone.to_dict() if self.primary_zone else None
         data["extension_zone"] = self.extension_zone.to_dict() if self.extension_zone else None
+        data["next_hunt_zone"] = self.next_hunt_zone.to_dict() if self.next_hunt_zone else None
         data["sweep_anchor_zone"] = self.sweep_anchor_zone.to_dict() if self.sweep_anchor_zone else None
         return data
 
@@ -448,15 +451,23 @@ def _sweep_state(
         if high > target.upper and close < target.lower:
             state = "UPSIDE SWEEP REJECTED"
             quality = 58.0 + min(24.0, reversal_quality * 0.24)
-            outcome = "REVERSAL FAVORED" if bear_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
+            outcome = "REVERSAL WATCH"
             acceptance = "REJECTED"
             reasons.append("Upside pool breached then closed back below zone")
         elif active_prior and close < target.lower:
-            state = "UPSIDE BREACH RECLAIMED"
-            quality = 60.0 + min(20.0, reversal_quality * 0.22)
-            outcome = "REVERSAL FAVORED" if bear_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
-            acceptance = "RECLAIMED"
-            reasons.append("Prior upside breach reclaimed below the original pool")
+            prior_reclaim = "RECLAIM" in previous_state or "REJECTED" in previous_state
+            if prior_reclaim and bear_pressure >= 52 and reversal_quality >= 55 and len(closes) >= 2 and closes[-2] < target.lower:
+                state = "UPSIDE RECLAIM FOLLOW-THROUGH"
+                quality = 64.0 + min(20.0, reversal_quality * 0.20)
+                outcome = "REVERSAL FAVORED"
+                acceptance = "REVERSAL CONFIRMED"
+                reasons.append("Upside breach reclaim held on follow-through completed close")
+            else:
+                state = "UPSIDE BREACH RECLAIMED"
+                quality = 60.0 + min(20.0, reversal_quality * 0.22)
+                outcome = "REVERSAL WATCH"
+                acceptance = "RECLAIMED"
+                reasons.append("Prior upside breach reclaimed; follow-through still required")
         elif close > target.upper:
             two_accept = len(closes) >= 2 and closes[-1] > target.upper and closes[-2] > target.upper
             clean_follow = low > target.lower and close >= op
@@ -483,15 +494,23 @@ def _sweep_state(
         if low < target.lower and close > target.upper:
             state = "DOWNSIDE SWEEP REJECTED"
             quality = 58.0 + min(24.0, reversal_quality * 0.24)
-            outcome = "REVERSAL FAVORED" if bull_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
+            outcome = "REVERSAL WATCH"
             acceptance = "REJECTED"
             reasons.append("Downside pool breached then closed back above zone")
         elif active_prior and close > target.upper:
-            state = "DOWNSIDE BREACH RECLAIMED"
-            quality = 60.0 + min(20.0, reversal_quality * 0.22)
-            outcome = "REVERSAL FAVORED" if bull_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
-            acceptance = "RECLAIMED"
-            reasons.append("Prior downside breach reclaimed above the original pool")
+            prior_reclaim = "RECLAIM" in previous_state or "REJECTED" in previous_state
+            if prior_reclaim and bull_pressure >= 52 and reversal_quality >= 55 and len(closes) >= 2 and closes[-2] > target.upper:
+                state = "DOWNSIDE RECLAIM FOLLOW-THROUGH"
+                quality = 64.0 + min(20.0, reversal_quality * 0.20)
+                outcome = "REVERSAL FAVORED"
+                acceptance = "REVERSAL CONFIRMED"
+                reasons.append("Downside breach reclaim held on follow-through completed close")
+            else:
+                state = "DOWNSIDE BREACH RECLAIMED"
+                quality = 60.0 + min(20.0, reversal_quality * 0.22)
+                outcome = "REVERSAL WATCH"
+                acceptance = "RECLAIMED"
+                reasons.append("Prior downside breach reclaimed; follow-through still required")
         elif close < target.lower:
             two_accept = len(closes) >= 2 and closes[-1] < target.lower and closes[-2] < target.lower
             clean_follow = high < target.upper and close <= op
@@ -540,7 +559,7 @@ def calculate_liquidity_intelligence(
         return LiquidityIntelligence(
             state="UNAVAILABLE", hunt_bias="UNCLEAR", hunt_strength="LOW",
             upside_hunt_pressure=0.0, downside_hunt_pressure=0.0,
-            primary_zone=None, extension_zone=None, reach_score=0.0,
+            primary_zone=None, extension_zone=None, zone_role="NO CLEAR ZONE", next_hunt_zone=None, reach_score=0.0,
             reach_state="UNCLEAR", path_clearance=0.0, sweep_state="NONE",
             sweep_outcome="UNCLEAR", sweep_quality=0.0,
             sweep_anchor_zone=None, sweep_anchor_at=None, acceptance_state="NONE", sweep_age_seconds=None,
@@ -646,6 +665,21 @@ def calculate_liquidity_intelligence(
     else:
         state = "NO CLEAR LIQUIDITY MAP"
 
+    # Distinguish a zone the price is already trading inside from the *next* pool.
+    # This avoids presenting the current battle area as if it were a future target.
+    if primary is None:
+        zone_role = "NO CLEAR ZONE"
+        next_hunt_zone = None
+    elif primary.lower <= spot <= primary.upper:
+        zone_role = "CURRENT BATTLE ZONE"
+        next_hunt_zone = extension if bias in {"UPSIDE", "DOWNSIDE"} else None
+    elif bias in {"UPSIDE", "DOWNSIDE"}:
+        zone_role = "NEXT HUNT ZONE"
+        next_hunt_zone = primary
+    else:
+        zone_role = "REFERENCE ZONE"
+        next_hunt_zone = None
+
     reasons: list[str] = []
     if primary is not None:
         reasons.append(
@@ -669,6 +703,8 @@ def calculate_liquidity_intelligence(
         downside_hunt_pressure=round(down_hunt, 1),
         primary_zone=primary,
         extension_zone=extension,
+        zone_role=zone_role,
+        next_hunt_zone=next_hunt_zone,
         reach_score=round(reach_score, 1),
         reach_state=reach_state,
         path_clearance=round(clearance, 1),
