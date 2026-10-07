@@ -127,8 +127,10 @@ def build_common_decision(
     )
     guidance = build_entry_guidance(plan, entry_ready=entry_allowed, live=snapshot.market_session.is_live)
 
-    direction_strength = float(simple.get("direction_strength") or 0.0)
-    entry_readiness = float(simple.get("entry_readiness") or 0.0)
+    # Presentation/confidence uses the bounded stability view; final action and
+    # candidate authority above still come from the raw Simple-Brain calculation.
+    direction_strength = float(simple.get("display_direction_strength", simple.get("direction_strength")) or 0.0)
+    entry_readiness = float(simple.get("display_entry_readiness", simple.get("entry_readiness")) or 0.0)
     plan_quality = float(getattr(plan, "quality_score", 0) or 0) if plan else 0.0
     confidence = round(direction_strength * .50 + entry_readiness * .35 + plan_quality * .15, 1)
     if not entry_allowed:

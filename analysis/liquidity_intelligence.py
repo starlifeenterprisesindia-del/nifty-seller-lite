@@ -11,6 +11,7 @@ participant intent.  Reach/hunt values are evidence scores, never probabilities.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from math import isfinite
 from typing import Any
 
@@ -47,6 +48,10 @@ class LiquidityIntelligence:
     sweep_state: str
     sweep_outcome: str
     sweep_quality: float
+    sweep_anchor_zone: LiquidityZone | None
+    sweep_anchor_at: str | None
+    acceptance_state: str
+    sweep_age_seconds: float | None
     reasons: tuple[str, ...]
     cautions: tuple[str, ...]
 
@@ -54,6 +59,7 @@ class LiquidityIntelligence:
         data = asdict(self)
         data["primary_zone"] = self.primary_zone.to_dict() if self.primary_zone else None
         data["extension_zone"] = self.extension_zone.to_dict() if self.extension_zone else None
+        data["sweep_anchor_zone"] = self.sweep_anchor_zone.to_dict() if self.sweep_anchor_zone else None
         return data
 
 
@@ -386,60 +392,132 @@ def _sweep_state(
     snapshot: Any,
     previous_mie: dict[str, Any] | None,
     *, direction: str,
+    early_direction: str,
     bull_pressure: float,
     bear_pressure: float,
     expansion_pressure: float,
     breakout_quality: float,
     reversal_quality: float,
-) -> tuple[str, str, float, tuple[str, ...]]:
+) -> tuple[str, str, float, tuple[str, ...], LiquidityZone | None, str | None, str, float | None]:
+    """Evaluate a liquidity interaction with post-breach acceptance memory.
+
+    A single close beyond a pool is now only a *breach pending acceptance*.
+    Continuation requires follow-through; a quick reclaim becomes reversal watch.
+    The exact pool that was breached is carried for a bounded five-minute window so
+    target recalculation cannot move the goalpost after the event.
+    """
     previous_liq = (previous_mie or {}).get("liquidity") if isinstance((previous_mie or {}).get("liquidity"), dict) else {}
-    target = _zone_from_dict((previous_liq or {}).get("primary_zone"))
+    previous_state = str((previous_liq or {}).get("sweep_state") or "NONE")
+    previous_anchor = _zone_from_dict((previous_liq or {}).get("sweep_anchor_zone"))
+    previous_anchor_at = (previous_liq or {}).get("sweep_anchor_at")
+    now = getattr(snapshot, "created_at", None)
+    age_seconds: float | None = None
+    anchor_valid = False
+    if previous_anchor is not None and previous_anchor_at and now is not None:
+        try:
+            stamp = datetime.fromisoformat(str(previous_anchor_at))
+            if stamp.tzinfo is None and getattr(now, "tzinfo", None) is not None:
+                stamp = stamp.replace(tzinfo=now.tzinfo)
+            age_seconds = max(0.0, (now - stamp).total_seconds())
+            anchor_valid = age_seconds <= 300.0
+        except (TypeError, ValueError):
+            anchor_valid = False
+
+    target = previous_anchor if anchor_valid else _zone_from_dict((previous_liq or {}).get("primary_zone"))
+    anchor_at = str(previous_anchor_at) if anchor_valid else (now.isoformat() if now is not None and target is not None else None)
     if target is None:
-        return "NONE", "UNCLEAR", 0.0, ()
-    frame = _completed(getattr(snapshot, "candles_1m", None), tail=3)
-    if frame.empty or not {"high", "low", "close"}.issubset(frame.columns):
-        return "NONE", "UNCLEAR", 0.0, ()
+        return "NONE", "UNCLEAR", 0.0, (), None, None, "NONE", None
+
+    frame = _completed(getattr(snapshot, "candles_1m", None), tail=4)
+    if frame.empty or not {"open", "high", "low", "close"}.issubset(frame.columns):
+        return "NONE", "UNCLEAR", 0.0, (), target, anchor_at, "NONE", age_seconds
     last = frame.iloc[-1]
-    high = _num(last.get("high")); low = _num(last.get("low")); close = _num(last.get("close"))
-    if None in (high, low, close):
-        return "NONE", "UNCLEAR", 0.0, ()
+    op = _num(last.get("open")); high = _num(last.get("high")); low = _num(last.get("low")); close = _num(last.get("close"))
+    if None in (op, high, low, close):
+        return "NONE", "UNCLEAR", 0.0, (), target, anchor_at, "NONE", age_seconds
+
+    closes = pd.to_numeric(frame["close"], errors="coerce").dropna().tolist()
     reasons: list[str] = []
     state = "NONE"
     outcome = "UNCLEAR"
+    acceptance = "NONE"
     quality = 0.0
-    if target.side == "UPSIDE" and high >= target.lower:
+    active_prior = any(token in previous_state for token in ("BREACH", "ACCEPTANCE", "RECLAIM", "TARGET TESTING")) and anchor_valid
+
+    if target.side == "UPSIDE" and (high >= target.lower or active_prior):
         if high > target.upper and close < target.lower:
             state = "UPSIDE SWEEP REJECTED"
-            quality = 55.0 + min(25.0, reversal_quality * 0.25)
-            outcome = "REVERSAL FAVORED" if bear_pressure >= 48 or reversal_quality >= 58 else "UNCLEAR"
+            quality = 58.0 + min(24.0, reversal_quality * 0.24)
+            outcome = "REVERSAL FAVORED" if bear_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
+            acceptance = "REJECTED"
             reasons.append("Upside pool breached then closed back below zone")
+        elif active_prior and close < target.lower:
+            state = "UPSIDE BREACH RECLAIMED"
+            quality = 60.0 + min(20.0, reversal_quality * 0.22)
+            outcome = "REVERSAL FAVORED" if bear_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
+            acceptance = "RECLAIMED"
+            reasons.append("Prior upside breach reclaimed below the original pool")
         elif close > target.upper:
-            state = "UPSIDE LIQUIDITY BREACHED"
-            quality = 48.0 + expansion_pressure * 0.22 + breakout_quality * 0.18
-            if direction == "BULLISH" and bull_pressure >= 58 and expansion_pressure >= 58:
-                outcome = "CONTINUATION FAVORED"
-            reasons.append("Price accepted above prior upside liquidity zone")
+            two_accept = len(closes) >= 2 and closes[-1] > target.upper and closes[-2] > target.upper
+            clean_follow = low > target.lower and close >= op
+            if active_prior and two_accept and clean_follow:
+                state = "UPSIDE ACCEPTANCE CONFIRMED"
+                quality = 55.0 + expansion_pressure * 0.18 + breakout_quality * 0.16
+                outcome = "CONTINUATION FAVORED" if early_direction == "BULLISH" and expansion_pressure >= 55 else "CONTINUATION WATCH"
+                acceptance = "ACCEPTED"
+                reasons.append("Two completed closes accepted above original upside pool")
+            else:
+                state = "UPSIDE LIQUIDITY BREACHED"
+                quality = 50.0 + expansion_pressure * 0.15 + breakout_quality * 0.12
+                outcome = "PENDING ACCEPTANCE"
+                acceptance = "PENDING"
+                reasons.append("Upside pool breached; follow-through close still required")
         else:
             state = "UPSIDE TARGET TESTING"
-            quality = 42.0
-            reasons.append("Price entered prior upside liquidity zone")
-    elif target.side == "DOWNSIDE" and low <= target.upper:
+            quality = 44.0
+            outcome = "PENDING ACCEPTANCE" if active_prior else "UNCLEAR"
+            acceptance = "PENDING" if active_prior else "TESTING"
+            reasons.append("Price entered original upside liquidity zone")
+
+    elif target.side == "DOWNSIDE" and (low <= target.upper or active_prior):
         if low < target.lower and close > target.upper:
             state = "DOWNSIDE SWEEP REJECTED"
-            quality = 55.0 + min(25.0, reversal_quality * 0.25)
-            outcome = "REVERSAL FAVORED" if bull_pressure >= 48 or reversal_quality >= 58 else "UNCLEAR"
+            quality = 58.0 + min(24.0, reversal_quality * 0.24)
+            outcome = "REVERSAL FAVORED" if bull_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
+            acceptance = "REJECTED"
             reasons.append("Downside pool breached then closed back above zone")
+        elif active_prior and close > target.upper:
+            state = "DOWNSIDE BREACH RECLAIMED"
+            quality = 60.0 + min(20.0, reversal_quality * 0.22)
+            outcome = "REVERSAL FAVORED" if bull_pressure >= 45 or reversal_quality >= 52 else "REVERSAL WATCH"
+            acceptance = "RECLAIMED"
+            reasons.append("Prior downside breach reclaimed above the original pool")
         elif close < target.lower:
-            state = "DOWNSIDE LIQUIDITY BREACHED"
-            quality = 48.0 + expansion_pressure * 0.22 + breakout_quality * 0.18
-            if direction == "BEARISH" and bear_pressure >= 58 and expansion_pressure >= 58:
-                outcome = "CONTINUATION FAVORED"
-            reasons.append("Price accepted below prior downside liquidity zone")
+            two_accept = len(closes) >= 2 and closes[-1] < target.lower and closes[-2] < target.lower
+            clean_follow = high < target.upper and close <= op
+            if active_prior and two_accept and clean_follow:
+                state = "DOWNSIDE ACCEPTANCE CONFIRMED"
+                quality = 55.0 + expansion_pressure * 0.18 + breakout_quality * 0.16
+                outcome = "CONTINUATION FAVORED" if early_direction == "BEARISH" and expansion_pressure >= 55 else "CONTINUATION WATCH"
+                acceptance = "ACCEPTED"
+                reasons.append("Two completed closes accepted below original downside pool")
+            else:
+                state = "DOWNSIDE LIQUIDITY BREACHED"
+                quality = 50.0 + expansion_pressure * 0.15 + breakout_quality * 0.12
+                outcome = "PENDING ACCEPTANCE"
+                acceptance = "PENDING"
+                reasons.append("Downside pool breached; follow-through close still required")
         else:
             state = "DOWNSIDE TARGET TESTING"
-            quality = 42.0
-            reasons.append("Price entered prior downside liquidity zone")
-    return state, outcome, round(_clamp(quality), 1), tuple(reasons[:3])
+            quality = 44.0
+            outcome = "PENDING ACCEPTANCE" if active_prior else "UNCLEAR"
+            acceptance = "PENDING" if active_prior else "TESTING"
+            reasons.append("Price entered original downside liquidity zone")
+
+    return (
+        state, outcome, round(_clamp(quality), 1), tuple(reasons[:3]),
+        target, anchor_at, acceptance, round(age_seconds, 1) if age_seconds is not None else None,
+    )
 
 
 def calculate_liquidity_intelligence(
@@ -447,6 +525,8 @@ def calculate_liquidity_intelligence(
     previous_snapshot: Any | None,
     *,
     direction: str,
+    early_direction: str = "MIXED",
+    direction_context: str = "MIXED",
     bull_pressure: float,
     bear_pressure: float,
     expansion_pressure: float,
@@ -463,6 +543,7 @@ def calculate_liquidity_intelligence(
             primary_zone=None, extension_zone=None, reach_score=0.0,
             reach_state="UNCLEAR", path_clearance=0.0, sweep_state="NONE",
             sweep_outcome="UNCLEAR", sweep_quality=0.0,
+            sweep_anchor_zone=None, sweep_anchor_at=None, acceptance_state="NONE", sweep_age_seconds=None,
             reasons=("Spot unavailable",), cautions=("Probable liquidity map unavailable",),
         )
 
@@ -485,11 +566,16 @@ def calculate_liquidity_intelligence(
     up_hunt = _clamp(bull_pressure * 0.38 + expansion_pressure * 0.22 + up_pull * 0.24 + up_clear * 0.16)
     down_hunt = _clamp(bear_pressure * 0.38 + expansion_pressure * 0.22 + down_pull * 0.24 + down_clear * 0.16)
 
-    if up_hunt >= 54 and up_hunt >= down_hunt + 9:
+    # Strong early-direction consensus may break a near-tie, but it never creates
+    # a target when the corresponding liquidity pressure is weak.  This is a state
+    # tie-break, not a second raw-evidence vote.
+    up_margin = 4.0 if early_direction == "BULLISH" and expansion_pressure >= 50 else 9.0
+    down_margin = 4.0 if early_direction == "BEARISH" and expansion_pressure >= 50 else 9.0
+    if up_hunt >= 54 and up_hunt >= down_hunt + up_margin:
         bias = "UPSIDE"
         primary, extension, clearance = up_zone, up_ext, up_clear
         hunt = up_hunt
-    elif down_hunt >= 54 and down_hunt >= up_hunt + 9:
+    elif down_hunt >= 54 and down_hunt >= up_hunt + down_margin:
         bias = "DOWNSIDE"
         primary, extension, clearance = down_zone, down_ext, down_clear
         hunt = down_hunt
@@ -527,10 +613,13 @@ def calculate_liquidity_intelligence(
     previous_mie = None
     if previous_snapshot is not None:
         previous_mie = (getattr(previous_snapshot, "metadata", {}) or {}).get("market_intelligence")
-    sweep_state, sweep_outcome, sweep_quality, sweep_reasons = _sweep_state(
+    (
+        sweep_state, sweep_outcome, sweep_quality, sweep_reasons, sweep_anchor_zone,
+        sweep_anchor_at, acceptance_state, sweep_age_seconds,
+    ) = _sweep_state(
         snapshot,
         previous_mie,
-        direction=direction,
+        direction=direction, early_direction=early_direction,
         bull_pressure=bull_pressure,
         bear_pressure=bear_pressure,
         expansion_pressure=expansion_pressure,
@@ -538,15 +627,15 @@ def calculate_liquidity_intelligence(
         reversal_quality=reversal_quality,
     )
 
-    # If no sweep has occurred yet, estimate what is currently favored *after* the
-    # selected zone using current acceptance/continuation evidence. This is explicitly
-    # a favored scenario, not a forecast certainty.
+    # Before a pool is actually breached, show only a LEAN.  "Favored" is reserved
+    # for post-breach acceptance/reclaim evidence so one candle cannot prematurely
+    # declare continuation.
     if sweep_outcome == "UNCLEAR" and primary is not None and bias in {"UPSIDE", "DOWNSIDE"}:
-        aligned = (bias == "UPSIDE" and direction == "BULLISH") or (bias == "DOWNSIDE" and direction == "BEARISH")
-        if aligned and expansion_pressure >= 65 and breakout_quality >= 58 and conflict != "HIGH":
-            sweep_outcome = "CONTINUATION FAVORED"
+        aligned = (bias == "UPSIDE" and early_direction == "BULLISH") or (bias == "DOWNSIDE" and early_direction == "BEARISH")
+        if aligned and expansion_pressure >= 65 and breakout_quality >= 58 and conflict != "HIGH" and direction_context == "WITH TREND":
+            sweep_outcome = "CONTINUATION LEAN"
         elif reversal_quality >= 68 and breakout_quality < 58:
-            sweep_outcome = "REVERSAL FAVORED"
+            sweep_outcome = "REVERSAL LEAN"
 
     if bias == "UPSIDE":
         state = "UPSIDE LIQUIDITY ATTRACTING"
@@ -586,6 +675,10 @@ def calculate_liquidity_intelligence(
         sweep_state=sweep_state,
         sweep_outcome=sweep_outcome,
         sweep_quality=sweep_quality,
+        sweep_anchor_zone=sweep_anchor_zone,
+        sweep_anchor_at=sweep_anchor_at,
+        acceptance_state=acceptance_state,
+        sweep_age_seconds=sweep_age_seconds,
         reasons=tuple(dict.fromkeys(reasons))[:6],
         cautions=tuple(cautions[:3]),
     )

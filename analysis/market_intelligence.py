@@ -89,6 +89,10 @@ class MarketIntelligenceResult:
     status: str
     market_state: str
     direction: str
+    early_direction: str
+    dominant_context: str
+    direction_context: str
+    fast_confirmation_count: int
     bull_pressure: float
     bear_pressure: float
     range_pressure: float
@@ -162,8 +166,17 @@ def _feed_freshness(snapshot: Any, *names: str) -> float:
             continue
         state = str(getattr(item, "use_state", "") or "").upper()
         ok = bool(getattr(item, "ok", False))
+        age = _num(getattr(item, "age_seconds", None))
         if ok and state == "LIVE":
-            values.append(1.0)
+            freshness = 1.0
+            if age is not None:
+                if age > 180:
+                    freshness = 0.35
+                elif age > 90:
+                    freshness = 0.60
+                elif age > 45:
+                    freshness = 0.82
+            values.append(freshness)
         elif ok and state in {"REFERENCE", "CAUTION"}:
             values.append(0.65)
         elif ok and state in {"STALE", "DELAYED"}:
@@ -734,6 +747,118 @@ def _provisional_regime(snapshot: Any, experts: Iterable[ExpertEvidence]) -> str
     return "TRANSITION" if ready >= 5 else "UNCERTAIN"
 
 
+def _dominant_context(snapshot: Any) -> str:
+    """15m structural context only; never a short-horizon veto by itself."""
+    pa = getattr(snapshot, "price_action", None)
+    p15 = getattr(pa, "fifteen_minute", None) if pa is not None else None
+    if p15 is None or str(getattr(p15, "status", "") or "").upper() != "READY":
+        return "MIXED"
+    event = str(getattr(p15, "event", "") or "").upper()
+    structure = str(getattr(p15, "structure", "") or "").upper()
+    if "BREAKDOWN CONFIRMED" in event:
+        return "BEARISH"
+    if "BREAKOUT CONFIRMED" in event:
+        return "BULLISH"
+    if "BEARISH" in structure and "BULLISH" not in structure:
+        return "BEARISH"
+    if "BULLISH" in structure and "BEARISH" not in structure:
+        return "BULLISH"
+    if "RANGE" in structure or "SIDEWAYS" in structure:
+        return "RANGE"
+    return "MIXED"
+
+
+def _fast_direction(experts: Iterable[ExpertEvidence]) -> tuple[str, int, float]:
+    """Independent-family short-horizon consensus used only for early warning.
+
+    Trend is intentionally excluded because its role is the slower 15m context.
+    The function counts families, not sub-indicators, preventing double voting.
+    """
+    fast_names = {
+        "Structure", "Futures", "Options Flow", "Barriers / Walls",
+        "Heavyweight Breadth", "Momentum Acceleration",
+    }
+    bull_count = bear_count = 0
+    signed = weight = 0.0
+    for expert in experts:
+        if expert.name not in fast_names or not expert.available:
+            continue
+        quality = _clamp(expert.reliability * expert.freshness, 0.0, 1.0)
+        if quality < 0.42:
+            continue
+        edge = float(expert.bullish) - float(expert.bearish)
+        if edge >= 12:
+            bull_count += 1
+        elif edge <= -12:
+            bear_count += 1
+        signed += edge * quality
+        weight += quality
+    score = signed / max(weight, 0.001)
+    if bull_count >= 3 and bull_count >= bear_count + 2 and score >= 10:
+        return "BULLISH", bull_count, round(score, 1)
+    if bear_count >= 3 and bear_count >= bull_count + 2 and score <= -10:
+        return "BEARISH", bear_count, round(score, 1)
+    return "MIXED", max(bull_count, bear_count), round(score, 1)
+
+
+def _direction_context(
+    *, early_direction: str, dominant_context: str, structure_event: str,
+    breakout_direction: str, breakout_quality: float, reversal_direction: str, reversal_quality: float,
+) -> str:
+    if early_direction not in {"BULLISH", "BEARISH"}:
+        return "MIXED"
+    if dominant_context in {"MIXED", "RANGE"}:
+        if breakout_direction == early_direction and breakout_quality >= 65:
+            return "BREAKOUT WATCH"
+        if reversal_direction == early_direction and reversal_quality >= 60:
+            return "REVERSAL WATCH"
+        return "EARLY PRESSURE"
+    if early_direction == dominant_context:
+        return "WITH TREND"
+    # Opposite fast pressure is informative but must not be promoted straight to a
+    # new trend. It remains a reversal/countertrend watch until acceptance proves it.
+    structural_support = (
+        (breakout_direction == early_direction and breakout_quality >= 62)
+        or (reversal_direction == early_direction and reversal_quality >= 58)
+        or structure_event in {"REVERSAL DEVELOPING", "LIQUIDITY SWEEP"}
+    )
+    return "REVERSAL WATCH" if structural_support else "COUNTERTREND IMPULSE"
+
+
+def _early_direction_override(
+    *, current_direction: str, fast_candidate: str, fast_count: int, fast_edge: float,
+    expansion: float, velocity: float | None, breakout_direction: str, breakout_quality: float,
+    reversal_direction: str, reversal_quality: float,
+) -> str:
+    """Return a conservative fast-direction overlay for precaution alerts.
+
+    A directional fast-family consensus is useful only when it is both broad and
+    *developing now*.  This extra gate was added after live shadow review showed
+    that a static fast consensus inside a range could point the wrong way for a few
+    snapshots.  Existing calibrated/slow direction remains untouched.
+    """
+    if current_direction in {"BULLISH", "BEARISH"} and fast_candidate in {current_direction, "MIXED"}:
+        return current_direction
+    if fast_candidate not in {"BULLISH", "BEARISH"}:
+        return current_direction if current_direction in {"BULLISH", "BEARISH"} else "MIXED"
+
+    velocity_value = float(velocity or 0.0)
+    fast_strong = fast_count >= 4 and abs(float(fast_edge)) >= 20.0
+    pressure_developing = velocity_value >= 12.0
+    aligned_breakout = breakout_direction == fast_candidate and breakout_quality >= 65.0
+    aligned_reversal = reversal_direction == fast_candidate and reversal_quality >= 60.0
+    opposite_structure = (
+        (breakout_direction in {"BULLISH", "BEARISH"} and breakout_direction != fast_candidate and breakout_quality >= 60.0)
+        or (reversal_direction in {"BULLISH", "BEARISH"} and reversal_direction != fast_candidate and reversal_quality >= 58.0)
+    )
+    expansion_override = expansion >= 72.0 and fast_count >= 5 and pressure_developing
+    if fast_strong and not opposite_structure and (
+        (pressure_developing and (aligned_breakout or aligned_reversal)) or expansion_override
+    ):
+        return fast_candidate
+    return current_direction if current_direction in {"BULLISH", "BEARISH"} else "MIXED"
+
+
 def _aggregate(experts: Iterable[ExpertEvidence], regime: str, horizon: str = "15m") -> tuple[float, float, float, float]:
     horizon_mult: dict[str, dict[str, float]] = {
         "5m": {"structure": 1.05, "trend": 0.72, "futures": 1.32, "options": 1.28, "barriers": 1.08, "breadth": 1.08, "volatility": 1.05, "momentum": 1.35},
@@ -1003,16 +1128,26 @@ def _move_radar(
     persistence: int,
     coverage: float,
     conflict: str,
+    direction_context: str = "MIXED",
+    previous_radar: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Human-facing precaution state; it never feeds a trading decision."""
+    """Human-facing precaution state with upgrade-fast / downgrade-slow hysteresis."""
     is_live = bool(getattr(getattr(snapshot, "market_session", None), "is_live", False))
     velocity_value = float(velocity or 0.0)
+    previous_radar = previous_radar or {}
+    previous_level = str(previous_radar.get("level") or "NORMAL").upper()
     if not is_live:
         return {
             "state": "NORMAL", "level": "REFERENCE", "direction": "MIXED",
             "visual": "GREY", "blink": False, "message": "Market closed / reference data",
         }
+
+    contextual_caution = direction_context in {"COUNTERTREND IMPULSE", "REVERSAL WATCH", "EARLY PRESSURE"}
     if expansion >= 76 and coverage >= 58 and conflict != "HIGH" and (persistence >= 1 or velocity_value >= 12):
+        if contextual_caution and direction in {"BULLISH", "BEARISH"}:
+            state = f"{direction} REVERSAL WATCH"
+            return {"state": state, "level": "HIGH", "direction": direction, "visual": "AMBER", "blink": True,
+                    "message": f"Strong {direction.lower()} pressure against dominant 15m context — confirmation required"}
         if direction == "BULLISH":
             state, visual, message = "STRONG BULLISH BUILD-UP", "GREEN", "Strong upside move pressure building"
         elif direction == "BEARISH":
@@ -1021,6 +1156,10 @@ def _move_radar(
             state, visual, message = "BIG MOVE HIGH PRESSURE", "AMBER", "Large-move pressure high; direction not confirmed"
         return {"state": state, "level": "HIGH", "direction": direction, "visual": visual, "blink": True, "message": message}
     if expansion >= 60 or (expansion >= 52 and velocity_value >= 14):
+        if contextual_caution and direction in {"BULLISH", "BEARISH"}:
+            return {"state": f"{direction} REVERSAL WATCH", "level": "BUILDING", "direction": direction,
+                    "visual": "AMBER", "blink": True,
+                    "message": f"{direction.title()} countertrend/reversal pressure developing — attention mode"}
         if direction == "BULLISH":
             state, visual, message = "BULLISH MOVE BUILDING", "GREEN", "Upside pressure developing — attention mode"
         elif direction == "BEARISH":
@@ -1034,6 +1173,11 @@ def _move_radar(
             "visual": "AMBER", "blink": velocity_value >= 12,
             "message": "Pressure forming — precaution watch",
         }
+    # Downgrade hysteresis: one softer snapshot does not immediately erase an
+    # active warning.  Real collapses are still surfaced by BUILDUP_FAILED alerts.
+    if previous_level in {"HIGH", "BUILDING"} and expansion >= 44 and conflict != "HIGH":
+        return {"state": "WATCH", "level": "WATCH", "direction": direction, "visual": "AMBER",
+                "blink": False, "message": "Previous move pressure cooling — remain alert"}
     return {
         "state": "NORMAL", "level": "NORMAL", "direction": direction,
         "visual": "GREY", "blink": False, "message": "No abnormal move build-up",
@@ -1122,7 +1266,7 @@ def _alerts(
     *, snapshot: Any, direction: str, expansion: float, velocity: float | None,
     system_status: str, alignment: str, coverage: float, conflict: str,
     fake_risk: str, liquidity: LiquidityIntelligence, move_radar: dict[str, Any],
-    previous: dict[str, Any] | None,
+    direction_context: str, previous: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], ...]:
     if not bool(getattr(getattr(snapshot, "market_session", None), "is_live", False)):
         return ()
@@ -1138,6 +1282,9 @@ def _alerts(
         if zone is None:
             return ""
         return f" · Target {zone.lower:.0f}-{zone.upper:.0f}"
+
+    def context_text() -> str:
+        return f" · {direction_context}" if direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE", "BREAKOUT WATCH"} else ""
 
     def add(kind: str, priority: str, title: str, message: str, score: float | None = None) -> None:
         output.append({
@@ -1168,13 +1315,13 @@ def _alerts(
         label = direction if direction != "MIXED" else "DIRECTION UNCLEAR"
         add(
             "BIG_MOVE_PRECAUTION", "WATCH", "Big move precaution",
-            f"{label} · {radar_state} · Expansion {expansion:.0f}/100{zone_text()}",
+            f"{label} · {radar_state}{context_text()} · Expansion {expansion:.0f}/100{zone_text()}",
         )
 
     if crossed_60 and coverage >= 55 and conflict != "HIGH":
         label = direction if direction != "MIXED" else "DIRECTION UNCLEAR"
-        add("PRESSURE_WATCH", "WATCH", "Pressure building", f"{label} · Expansion {expansion:.0f}/100 · {system_status}{zone_text()}")
-    if crossed_75 and coverage >= 65 and conflict != "HIGH":
+        add("PRESSURE_WATCH", "WATCH", "Pressure building", f"{label}{context_text()} · Expansion {expansion:.0f}/100 · {system_status}{zone_text()}")
+    if crossed_75 and coverage >= 65 and conflict != "HIGH" and direction_context not in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE"}:
         add("STRONG_BUILDUP", "HIGH", "Strong move build-up", f"{direction} · Expansion {expansion:.0f}/100 · Coverage {coverage:.0f}%{zone_text()}")
 
     current_hunt = liquidity.upside_hunt_pressure if liquidity.hunt_bias == "UPSIDE" else liquidity.downside_hunt_pressure if liquidity.hunt_bias == "DOWNSIDE" else max(liquidity.upside_hunt_pressure, liquidity.downside_hunt_pressure)
@@ -1212,7 +1359,7 @@ def _alerts(
     if previous_expansion is not None and previous_expansion >= 72 and expansion <= previous_expansion - 20 and expansion < 60:
         add("BUILDUP_FAILED", "CAUTION", "Build-up failed", f"Expansion pressure fell {previous_expansion:.0f} → {expansion:.0f}")
     if velocity is not None and velocity >= 18 and expansion >= 52 and not any(item["kind"] in {"PRESSURE_WATCH", "STRONG_BUILDUP"} for item in output):
-        add("PRESSURE_ACCELERATION", "WATCH", "Pressure accelerating", f"Expansion pressure velocity +{velocity:.0f} since prior snapshot{zone_text()}")
+        add("PRESSURE_ACCELERATION", "WATCH", "Pressure accelerating", f"{direction}{context_text()} · Expansion velocity +{velocity:.0f}{zone_text()}")
     return tuple(output[:7])
 
 def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None = None) -> MarketIntelligenceResult:
@@ -1231,6 +1378,8 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
     experts = tuple([*initial_experts, volatility_expert])
     regime = _provisional_regime(snapshot, experts)
     bull, bear, rng, coverage = _aggregate(experts, regime, "15m")
+    fast_candidate, fast_confirmation_count, fast_signed_edge = _fast_direction(experts)
+    dominant_context = _dominant_context(snapshot)
 
     # Direction requires a meaningful edge.  A high range score is not silently
     # converted into bullish/bearish direction.
@@ -1253,28 +1402,67 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         previous_mie = (getattr(previous_snapshot, "metadata", {}) or {}).get("market_intelligence")
     previous_expansion = _num((previous_mie or {}).get("expansion_pressure"))
     velocity = round(expansion - previous_expansion, 1) if previous_expansion is not None else None
-    previous_direction = str((previous_mie or {}).get("direction") or "")
+
+    # Early direction is a *precaution layer*, not a replacement for the slower
+    # calibrated 15m direction.  Live shadow review showed that a mere fast-family
+    # majority can be noisy inside ranges, so an override now requires breadth +
+    # velocity + structural support (or a very strong expansion state).
+    early_direction = _early_direction_override(
+        current_direction=direction, fast_candidate=fast_candidate,
+        fast_count=fast_confirmation_count, fast_edge=fast_signed_edge,
+        expansion=expansion, velocity=velocity,
+        breakout_direction=breakout_direction, breakout_quality=breakout_quality,
+        reversal_direction=reversal_direction, reversal_quality=reversal_quality,
+    )
+    early_gate = early_direction in {"BULLISH", "BEARISH"} and (
+        early_direction != direction or direction in {"BULLISH", "BEARISH"}
+    )
+    direction_context = _direction_context(
+        early_direction=early_direction, dominant_context=dominant_context, structure_event=structure_event,
+        breakout_direction=breakout_direction, breakout_quality=breakout_quality,
+        reversal_direction=reversal_direction, reversal_quality=reversal_quality,
+    )
+    radar_direction = early_direction if early_direction in {"BULLISH", "BEARISH"} else direction
+
+    previous_radar_direction = str((previous_mie or {}).get("early_direction") or (previous_mie or {}).get("direction") or "")
     previous_persistence = int((previous_mie or {}).get("pressure_persistence") or 0)
-    persistence = previous_persistence + 1 if previous_direction == direction and expansion >= 60 else 1 if expansion >= 60 else 0
+    persistence = previous_persistence + 1 if previous_radar_direction == radar_direction and expansion >= 60 else 1 if expansion >= 60 else 0
 
     conflict, conflict_score = _conflict(experts, direction)
+    # A strong fast-family consensus against the slow 15m context is expected
+    # conflict, not a reason to suppress a precaution alert.  Keep the real conflict
+    # score for display, but downgrade only the alert/radar gate to MEDIUM.
+    radar_conflict = (
+        "MEDIUM" if conflict == "HIGH" and fast_confirmation_count >= 3
+        and direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE"}
+        else conflict
+    )
     liquidity = calculate_liquidity_intelligence(
         snapshot, previous_snapshot,
-        direction=direction, bull_pressure=bull, bear_pressure=bear,
+        direction=direction, early_direction=radar_direction, direction_context=direction_context,
+        bull_pressure=bull, bear_pressure=bear,
         expansion_pressure=expansion, breakout_quality=breakout_quality,
         reversal_quality=reversal_quality, conflict=conflict,
     )
     institutional = _institutional_pressure(expert_map, snapshot)
-    impulse = _impulse_state(expansion, direction)
+    impulse = _impulse_state(expansion, radar_direction)
     potential = _move_potential(expansion)
+    previous_radar = (previous_mie or {}).get("move_radar") if isinstance((previous_mie or {}).get("move_radar"), dict) else {}
     move_radar = _move_radar(
-        snapshot, direction=direction, expansion=expansion, velocity=velocity,
-        persistence=persistence, coverage=coverage, conflict=conflict,
+        snapshot, direction=radar_direction, expansion=expansion, velocity=velocity,
+        persistence=persistence, coverage=coverage, conflict=radar_conflict,
+        direction_context=direction_context, previous_radar=previous_radar,
     )
     one_direction, action = _one_brain_direction(snapshot)
     alignment = _alignment(one_direction, direction, action, coverage, conflict, expansion)
     fake_risk = _fake_move_risk(direction, breakout_quality, expert_map, conflict)
+    if direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE"} and fake_risk == "LOW":
+        fake_risk = "MEDIUM"
     status = _system_status(snapshot, direction, coverage, conflict, expansion, breakout_quality, reversal_quality)
+    if direction == "MIXED" and radar_direction in {"BULLISH", "BEARISH"} and early_gate and fast_confirmation_count >= 3:
+        status = "WATCH"
+    if direction_context in {"REVERSAL WATCH", "COUNTERTREND IMPULSE", "EARLY PRESSURE"} and status in {"CONDITIONS BUILDING", "CONDITIONS MET"}:
+        status = "WATCH"
 
     path5 = _aggregate(experts, regime, "5m")
     path15 = (bull, bear, rng, coverage)
@@ -1284,15 +1472,18 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
     path_30m = PathEvidence(path30[0], path30[1], path30[2])
 
     alerts = _alerts(
-        snapshot=snapshot, direction=direction, expansion=expansion, velocity=velocity,
-        system_status=status, alignment=alignment, coverage=coverage, conflict=conflict,
-        fake_risk=fake_risk, liquidity=liquidity, move_radar=move_radar, previous=previous_mie,
+        snapshot=snapshot, direction=radar_direction, expansion=expansion, velocity=velocity,
+        system_status=status, alignment=alignment, coverage=coverage, conflict=radar_conflict,
+        fake_risk=fake_risk, liquidity=liquidity, move_radar=move_radar,
+        direction_context=direction_context, previous=previous_mie,
     )
 
     reasons = tuple(dict.fromkeys([
         *structure_reasons,
         *expansion_reasons,
         *volatility_reasons,
+        f"Fast direction {radar_direction} · confirmations {fast_confirmation_count} · edge {fast_signed_edge:+.1f}",
+        f"15m context {dominant_context} · {direction_context}",
         f"Institutional pressure {institutional}",
         *liquidity.reasons,
         f"Evidence coverage {coverage:.0f}% · conflict {conflict}",
@@ -1314,6 +1505,10 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         status="READY" if coverage >= 45 else "PARTIAL",
         market_state=regime,
         direction=direction,
+        early_direction=radar_direction,
+        dominant_context=dominant_context,
+        direction_context=direction_context,
+        fast_confirmation_count=int(fast_confirmation_count),
         bull_pressure=round(bull, 1),
         bear_pressure=round(bear, 1),
         range_pressure=round(rng, 1),
@@ -1341,7 +1536,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         path_30m=path_30m,
         one_brain_direction=one_direction,
         one_brain_alignment=alignment,
-        invalidation=_invalidation(snapshot, direction, structure_event),
+        invalidation=_invalidation(snapshot, radar_direction, structure_event),
         alerts=alerts,
         experts=experts,
         reasons=reasons,

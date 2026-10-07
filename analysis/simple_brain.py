@@ -471,6 +471,127 @@ def _direction_alignment(score_triplet: tuple[float, float, float], direction: s
     return score_triplet[2]
 
 
+def _option_triplet(item: Any) -> tuple[float, float, float, bool]:
+    """Current-snapshot option evidence with a low-weight window fallback.
+
+    When the composite flow score is temporarily zero while 1m/3m windows are
+    already READY, dropping the whole Options family causes a denominator cliff.
+    We therefore reuse only those *current* ready windows as reduced-quality
+    evidence.  No prior snapshot/stale option score is carried forward.
+    """
+    bull = max(0.0, _num(getattr(item, "bullish_score", 0.0)))
+    bear = max(0.0, _num(getattr(item, "bearish_score", 0.0)))
+    neutral = max(0.0, _num(getattr(item, "range_score", 0.0)))
+    if bull + bear + neutral > 0:
+        triplet = _normalise_triplet(bull, bear, neutral)
+        return triplet[0], triplet[1], triplet[2], False
+
+    signed = 0.0
+    weight = 0.0
+    neutral_weight = 0.0
+    weights = {60: 1.0, 180: 0.75, 300: 0.55}
+    for window in getattr(item, "windows", ()) or ():
+        if str(getattr(window, "status", "") or "").upper() != "READY":
+            continue
+        w = weights.get(int(getattr(window, "target_seconds", 0) or 0), 0.35)
+        bias = str(getattr(window, "bias", "") or "").upper()
+        if bias == "BULLISH":
+            signed += w
+        elif bias == "BEARISH":
+            signed -= w
+        else:
+            neutral_weight += w
+        weight += w
+    if weight <= 0:
+        return 0.0, 0.0, 0.0, False
+    directional = signed / weight
+    neutral_share = neutral_weight / weight
+    if directional >= 0.30:
+        strength = min(68.0, 52.0 + abs(directional) * 16.0)
+        return strength, max(10.0, 28.0 - abs(directional) * 10.0), max(12.0, 100.0 - strength - 18.0), True
+    if directional <= -0.30:
+        strength = min(68.0, 52.0 + abs(directional) * 16.0)
+        return max(10.0, 28.0 - abs(directional) * 10.0), strength, max(12.0, 100.0 - strength - 18.0), True
+    return 20.0, 20.0, 60.0 + min(10.0, neutral_share * 10.0), True
+
+
+def _option_quality(snapshot: Any) -> tuple[float, bool, int]:
+    """Return smooth *current-snapshot* quality for option-flow evidence.
+
+    READY/WARMING state no longer creates a binary denominator cliff.  Missing
+    evidence remains NO VOTE, and no stale option score is carried forward.
+    """
+    item = getattr(snapshot, "option_intelligence", None)
+    if item is None:
+        return 0.0, False, 0
+    status = str(getattr(item, "status", "") or "").upper()
+    confidence = _clamp(_num(getattr(item, "confidence", 0.0)))
+    ready_windows = sum(
+        str(getattr(window, "status", "") or "").upper() == "READY"
+        for window in (getattr(item, "windows", ()) or ())
+    )
+    score_total = sum(
+        max(0.0, _num(getattr(item, name, 0.0)))
+        for name in ("bullish_score", "bearish_score", "range_score")
+    )
+    if status in {"UNAVAILABLE", "MISSING"} or confidence <= 0 or (score_total <= 0 and ready_windows == 0):
+        return 0.0, False, ready_windows
+    if status == "READY":
+        quality = 0.75 + 0.25 * confidence / 100.0
+    elif status in {"WARMING UP", "PARTIAL", "CAUTION"}:
+        quality = 0.45 + 0.35 * confidence / 100.0
+    elif status == "REFERENCE ONLY":
+        quality = 0.32 + 0.30 * confidence / 100.0
+    else:
+        quality = 0.0
+    if ready_windows == 0:
+        quality *= 0.72
+    elif ready_windows == 1:
+        quality *= 0.86
+    # Window-only fallback is useful but intentionally lower confidence than a
+    # fully formed composite score.
+    if score_total <= 0 and ready_windows > 0:
+        quality *= 0.68
+    return round(_clamp(quality, 0.0, 1.0), 3), quality >= 0.25, ready_windows
+
+def _display_stable_value(current: float, previous: Any, *, max_step: float, bypass: bool) -> float:
+    """Bound user-facing score chattering without altering raw action calculations."""
+    current = float(current)
+    try:
+        old = float(previous)
+    except (TypeError, ValueError):
+        return round(current, 1)
+    if not isfinite(old) or bypass:
+        return round(current, 1)
+    delta = current - old
+    if abs(delta) <= 2.0:
+        return round(current, 1)
+    bounded = old + max(-max_step, min(max_step, delta))
+    # Keep only a small current contribution: the UI stays responsive while one
+    # transient evidence-availability change cannot print a 10-15 point jump.
+    blended = bounded * 0.85 + current * 0.15
+    return round(_clamp(blended), 1)
+
+
+def _display_bypass(snapshot: Any, regime: str, barrier: dict[str, Any], direction: str, previous_simple: dict[str, Any] | None) -> bool:
+    """True when a real structural event should bypass presentation hysteresis."""
+    if not previous_simple:
+        return True
+    previous_direction = str(previous_simple.get("direction") or "MIXED").upper()
+    previous_regime = str(previous_simple.get("regime") or "TRANSITION").upper()
+    barrier_state = str(barrier.get("state") or "UNKNOWN").upper()
+    event3 = str(getattr(getattr(snapshot.price_action, "three_minute", None), "event", "") or "").upper()
+    event15 = str(getattr(getattr(snapshot.price_action, "fifteen_minute", None), "event", "") or "").upper()
+    structural = any(token in f"{event3} {event15}" for token in ("BREAKOUT CONFIRMED", "BREAKDOWN CONFIRMED"))
+    if barrier_state == "BROKEN" or structural:
+        return True
+    if previous_direction in {"UP", "DOWN"} and direction in {"UP", "DOWN"} and previous_direction != direction:
+        return True
+    if previous_regime != str(regime).upper() and any(token in str(regime).upper() for token in ("BREAKOUT", "BREAKDOWN")):
+        return True
+    return False
+
+
 def calculate_simple_brain(
     snapshot: Any,
     future: dict[str, Any] | None = None,
@@ -481,25 +602,11 @@ def calculate_simple_brain(
     core = snapshot.core_evidence
     trend = _normalise_triplet(_num(core.bullish_score), _num(core.bearish_score), _num(core.range_score))
     options_obj = snapshot.option_intelligence
-    options_ready = (
-        str(getattr(options_obj, "status", "")).upper() == "READY"
-        and _num(getattr(options_obj, "confidence", 0.0)) > 0
-        and sum(
-            max(0.0, _num(value))
-            for value in (
-                getattr(options_obj, "bullish_score", 0.0),
-                getattr(options_obj, "bearish_score", 0.0),
-                getattr(options_obj, "range_score", 0.0),
-            )
-        ) > 0
-    )
+    option_quality, options_available, ready_option_windows = _option_quality(snapshot)
+    option_bull, option_bear, option_neutral, option_window_fallback = _option_triplet(options_obj)
     options = (
-        _normalise_triplet(
-            _num(options_obj.bullish_score),
-            _num(options_obj.bearish_score),
-            _num(options_obj.range_score),
-        )
-        if options_ready
+        _normalise_triplet(option_bull, option_bear, option_neutral)
+        if options_available
         else (0.0, 0.0, 0.0)
     )
     part_bull, part_bear, part_neutral, part_conf, part_notes = _participation(snapshot)
@@ -508,10 +615,11 @@ def calculate_simple_brain(
     # Direction is normalized by *available* core blocks.  Optional features do not
     # consume denominator weight and therefore cannot make a valid setup mathematically
     # incapable of reaching an entry threshold.
+    participation_quality = _clamp(part_conf / 75.0, 0.0, 1.0) if part_conf > 0 else 0.0
     blocks: list[tuple[str, tuple[float, float, float], float, bool]] = [
         ("Trend", trend, 40.0, _num(getattr(core, "confidence", 0.0)) > 0),
-        ("Options", options, 25.0, options_ready),
-        ("Participation", participation, 20.0, part_conf > 0),
+        ("Options", options, 25.0 * option_quality, options_available),
+        ("Participation", participation, 20.0 * participation_quality, part_conf > 0),
     ]
     available = sum(weight for _, _, weight, ready in blocks if ready) or 1.0
     bull = sum(scores[0] * weight for _, scores, weight, ready in blocks if ready) / available
@@ -537,9 +645,19 @@ def calculate_simple_brain(
     elif neutral >= 52 and neutral >= max(bull, bear) - 3:
         direction = "RANGE"
         direction_strength = neutral
-    elif regime_hint in {"UP", "DOWN"} and max(bull, bear) >= 48:
-        direction = regime_hint
-        direction_strength = bull if direction == "UP" else bear
+    elif regime_hint in {"UP", "DOWN"}:
+        # The old fallback tested max(bull, bear) and could therefore select the
+        # *opposite* regime hint with a low score (for example UP 32 vs DOWN 49
+        # merely because the 15m context was UP).  Require the hinted side itself
+        # to be credible and not materially weaker than the opposite side.
+        hinted = bull if regime_hint == "UP" else bear
+        opposite = bear if regime_hint == "UP" else bull
+        if hinted >= 48 and hinted >= opposite - 5:
+            direction = regime_hint
+            direction_strength = hinted
+        else:
+            direction = "MIXED"
+            direction_strength = max(bull, bear, neutral)
     else:
         direction = "MIXED"
         direction_strength = max(bull, bear, neutral)
@@ -563,17 +681,17 @@ def calculate_simple_brain(
     participation_align = _direction_alignment(participation, direction)
     barrier_score = _num(barrier.get("score"), 45.0)
     entry_parts: list[tuple[float, float]] = [(direction_strength, 45.0), (barrier_score, 15.0)]
-    if options_ready:
-        entry_parts.append((option_align, 25.0))
+    if options_available:
+        entry_parts.append((option_align, 25.0 * option_quality))
     if part_conf > 0:
-        entry_parts.append((participation_align, 15.0))
+        entry_parts.append((participation_align, 15.0 * participation_quality))
     entry_weight = sum(weight for _, weight in entry_parts) or 1.0
     entry_readiness = round(
         _clamp(sum(value * weight for value, weight in entry_parts) / entry_weight),
         1,
     )
     evidence_coverage = round(entry_weight, 1)
-    confirmation_blocks = int(options_ready) + int(part_conf > 0)
+    confirmation_blocks = int(option_quality >= 0.55) + int(participation_quality >= 0.55)
 
     # RSI is a chase-risk modifier only.  It never flips direction by itself.
     rsi = _num(getattr(snapshot.indicators.three_minute, "rsi14", None), -1.0)
@@ -620,7 +738,7 @@ def calculate_simple_brain(
         final_action = "WAIT"
         instruction = "Direction clear nahi — no trade"
     elif direction == "RANGE":
-        if not options_ready or part_conf <= 0:
+        if option_quality < 0.72 or participation_quality < 0.55:
             entry_state = "DATA WAIT"
             final_action = "WAIT"
             instruction = "Range trade ke liye Options + Participation confirmation pending"
@@ -662,6 +780,18 @@ def calculate_simple_brain(
         final_action = "WAIT"
         instruction = "Direction hai, entry alignment abhi weak hai"
 
+    raw_direction_strength = round(direction_strength, 1)
+    raw_entry_readiness = round(entry_readiness, 1)
+    bypass_stability = _display_bypass(snapshot, regime, barrier, direction, previous_simple)
+    previous_display_strength = (previous_simple or {}).get("display_direction_strength", (previous_simple or {}).get("direction_strength"))
+    previous_display_entry = (previous_simple or {}).get("display_entry_readiness", (previous_simple or {}).get("entry_readiness"))
+    display_direction_strength = _display_stable_value(
+        raw_direction_strength, previous_display_strength, max_step=6.0, bypass=bypass_stability
+    )
+    display_entry_readiness = _display_stable_value(
+        raw_entry_readiness, previous_display_entry, max_step=7.0, bypass=bypass_stability or barrier_state == "BROKEN"
+    )
+
     reasons = [
         f"Trend B/D/N {trend[0]:.0f}/{trend[1]:.0f}/{trend[2]:.0f}",
         f"Options B/D/N {options[0]:.0f}/{options[1]:.0f}/{options[2]:.0f}",
@@ -672,18 +802,25 @@ def calculate_simple_brain(
         "engine": "SIMPLE_ONE_BRAIN_V1",
         "regime": regime,
         "direction": direction,
-        "direction_strength": round(direction_strength, 1),
+        "direction_strength": raw_direction_strength,
+        "raw_direction_strength": raw_direction_strength,
+        "display_direction_strength": display_direction_strength,
         "scores": {"up": bull, "down": bear, "range": neutral},
         "blocks": {
             "trend": {"weight": 40, "bullish": trend[0], "bearish": trend[1], "neutral": trend[2], "available": True},
-            "options": {"weight": 25, "bullish": options[0], "bearish": options[1], "neutral": options[2], "confidence": _num(options_obj.confidence), "available": options_ready},
-            "participation": {"weight": 20, "bullish": participation[0], "bearish": participation[1], "neutral": participation[2], "confidence": part_conf, "available": part_conf > 0},
+            "options": {"weight": round(25.0 * option_quality, 2), "bullish": options[0], "bearish": options[1], "neutral": options[2], "confidence": _num(options_obj.confidence), "quality": round(option_quality * 100.0, 1), "available": options_available},
+            "participation": {"weight": round(20.0 * participation_quality, 2), "bullish": participation[0], "bearish": participation[1], "neutral": participation[2], "confidence": part_conf, "quality": round(participation_quality * 100.0, 1), "available": part_conf > 0},
             "barrier_entry": {"weight": 15, **barrier},
         },
         "preferred_strategies": preferred,
         "candidate_action": action,
-        "entry_readiness": round(entry_readiness, 1),
+        "entry_readiness": raw_entry_readiness,
+        "raw_entry_readiness": raw_entry_readiness,
+        "display_entry_readiness": display_entry_readiness,
         "evidence_coverage": evidence_coverage,
+        "option_quality": round(option_quality * 100.0, 1),
+        "option_window_fallback": bool(option_window_fallback),
+        "participation_quality": round(participation_quality * 100.0, 1),
         "confirmation_blocks": confirmation_blocks,
         "entry_state": entry_state,
         "final_action": final_action,

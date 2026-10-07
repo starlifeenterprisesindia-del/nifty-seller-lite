@@ -165,6 +165,10 @@ def build_market_intelligence_test_pack(
             "spot": body.get("spot"),
             "market_state": mie.get("market_state"),
             "direction": mie.get("direction"),
+            "early_direction": mie.get("early_direction"),
+            "dominant_context": mie.get("dominant_context"),
+            "direction_context": mie.get("direction_context"),
+            "fast_confirmation_count": mie.get("fast_confirmation_count"),
             "bull_pressure": mie.get("bull_pressure"),
             "bear_pressure": mie.get("bear_pressure"),
             "range_pressure": mie.get("range_pressure"),
@@ -208,6 +212,10 @@ def build_market_intelligence_test_pack(
             "sweep_state": liquidity.get("sweep_state"),
             "sweep_outcome": liquidity.get("sweep_outcome"),
             "sweep_quality": liquidity.get("sweep_quality"),
+            "acceptance_state": liquidity.get("acceptance_state"),
+            "sweep_age_seconds": liquidity.get("sweep_age_seconds"),
+            "sweep_anchor_lower": ((liquidity.get("sweep_anchor_zone") or {}).get("lower") if isinstance(liquidity.get("sweep_anchor_zone"), dict) else None),
+            "sweep_anchor_upper": ((liquidity.get("sweep_anchor_zone") or {}).get("upper") if isinstance(liquidity.get("sweep_anchor_zone"), dict) else None),
             "invalidation": mie.get("invalidation"),
             **_path_fields("path_5m", mie.get("path_5m")),
             **_path_fields("path_15m", mie.get("path_15m")),
@@ -290,7 +298,7 @@ This ZIP is post-hoc validation only. It does not call Dhan, does not change One
 Files:
 - market_intelligence_snapshots.csv: all recorded OB-MIE states/scores plus observed future spot movement at 5/15/30m.
 - impulse_move_review.csv: Move Radar / pressure-building observations for large-candle lead-time testing.
-- liquidity_hunt_review.csv: probable liquidity target, hunt pressure, reach score, sweep/breach outcome and observed 5/15/30m movement.
+- liquidity_hunt_review.csv: probable liquidity target, hunt pressure, reach score, sweep/breach outcome, acceptance/reclaim state and observed 5/15/30m movement.
 - one_brain_alignment.csv: One Brain + Market Intelligence alignment/conflict observations.
 - market_intelligence_alerts.csv: generated precaution/alignment/liquidity alerts.
 - expert_evidence.csv: per-family evidence, freshness and reliability.
@@ -303,6 +311,8 @@ Important:
 - Liquidity zones infer probable clustered interest; they do not reveal exact retail stop money or participant intent.
 - Future outcome columns are retrospective labels only and are never available to the live predictor at prediction time.
 - Missing evidence remains NO VOTE.
+- Early direction is a precaution/fast-family consensus; dominant 15m context remains separately recorded.
+- First liquidity breach is PENDING ACCEPTANCE; continuation requires follow-through or reclaim logic.
 """
 
     output = io.BytesIO()
