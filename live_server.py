@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import resource
 import tempfile
 import threading
@@ -8,8 +9,14 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, time as wall_time
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+# Compact GitHub package: pure-Python analysis/services/ui modules live in one zip.
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v268.zip")
+if _RUNTIME_BUNDLE.exists() and str(_RUNTIME_BUNDLE) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_BUNDLE))
 
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse

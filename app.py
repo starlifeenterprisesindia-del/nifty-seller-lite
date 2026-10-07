@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import gc
 import threading
@@ -10,6 +11,11 @@ from html import escape
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+# Compact GitHub package: pure-Python analysis/services/ui modules live in one zip.
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v268.zip")
+if _RUNTIME_BUNDLE.exists() and str(_RUNTIME_BUNDLE) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_BUNDLE))
 
 import streamlit as st
 
@@ -1541,8 +1547,8 @@ _remember_runtime_control(
     "market_alert_sound_enabled",
     bool(st.session_state.get("market_alert_sound_enabled", False)),
 )
-process_combined_signal_alerts(snapshot, live_server_url, live_server_api_key)
 process_market_intelligence_alerts(snapshot, live_server_url, live_server_api_key)
+process_combined_signal_alerts(snapshot, live_server_url, live_server_api_key)
 
 
 def render_market_decision_reason_panel() -> None:
