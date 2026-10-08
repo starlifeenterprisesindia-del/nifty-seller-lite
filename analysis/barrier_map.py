@@ -118,15 +118,19 @@ def _build_anchors(
     return anchors
 
 
-def _clusters(anchors: Iterable[_Anchor], *, side: str, width: float, spot: float) -> list[_Cluster]:
+def _clusters(
+    anchors: Iterable[_Anchor],
+    *,
+    side: str,
+    width: float,
+    spot: float,
+    confirmation_spot: float | None = None,
+) -> list[_Cluster]:
     relevant = [item for item in anchors if item.side == side]
-    # Keep a level only while spot is below/inside a resistance zone or above/inside a
-    # support zone. Once a completed move clears the zone, the next barrier is promoted.
-    allowance = width / 2.0
-    if side == "RESISTANCE":
-        relevant = [item for item in relevant if item.price >= spot - allowance]
-    else:
-        relevant = [item for item in relevant if item.price <= spot + allowance]
+    # Build confluence zones first; only then decide whether the completed 3-minute close
+    # has cleared the *whole zone*.  Filtering individual anchors before clustering can
+    # make a multi-source R1/S1 shrink or jump while price is still inside the same zone.
+    reference = float(confirmation_spot if confirmation_spot is not None else spot)
     relevant.sort(key=lambda item: item.price)
     if not relevant:
         return []
@@ -164,8 +168,10 @@ def _clusters(anchors: Iterable[_Anchor], *, side: str, width: float, spot: floa
         )
 
     if side == "RESISTANCE":
+        result = [item for item in result if reference <= item.upper]
         result.sort(key=lambda item: max(0.0, item.lower - spot))
     else:
+        result = [item for item in result if reference >= item.lower]
         result.sort(key=lambda item: max(0.0, spot - item.upper))
     return result
 
@@ -238,8 +244,10 @@ def _reaction_score(
         return None, False, False
     source = source.copy().tail(120).reset_index(drop=True)
     atr = max(5.0, float(atr_reference or 20.0))
-    reactions: list[float] = []
+    reactions: list[tuple[float, float]] = []
+    touch_ratios: list[float] = []
     recent_touch = False
+    total_rows = max(1, len(source))
     for index in range(len(source)):
         row = source.iloc[index]
         if cluster.side == "RESISTANCE":
@@ -257,12 +265,23 @@ def _reaction_score(
             excursion = max(0.0, cluster.lower - float(future["low"].min()))
         else:
             excursion = max(0.0, float(future["high"].max()) - cluster.upper)
-        reactions.append(excursion / atr)
+        ratio = excursion / atr
+        # Modest recency weighting: an old touch still matters, but the latest reaction
+        # has more influence on today's barrier quality.  The 0.35 floor prevents a
+        # single fresh bar from erasing useful earlier evidence.
+        recency = 0.35 + 0.65 * ((index + 1) / total_rows)
+        reactions.append((ratio, recency))
+        touch_ratios.append(ratio)
     if not reactions:
         return None, recent_touch, False
-    average = sum(reactions) / len(reactions)
+    total_weight = sum(weight for _, weight in reactions)
+    average = sum(value * weight for value, weight in reactions) / max(total_weight, 1e-9)
     score = clamp(average / 0.85 * 100.0, 0.0, 100.0)
-    weakening = len(reactions) >= 2 and reactions[-1] < reactions[0] * 0.60
+    if len(touch_ratios) >= 2:
+        prior = sum(touch_ratios[:-1]) / len(touch_ratios[:-1])
+        weakening = touch_ratios[-1] < prior * 0.60
+    else:
+        weakening = False
     return score, recent_touch, weakening
 
 
@@ -571,6 +590,7 @@ def _barrier_level(
     cluster: _Cluster,
     label: str,
     spot: float,
+    confirmation_spot: float,
     candles_1m: pd.DataFrame,
     price_action: PriceActionBundle,
     core: CoreMarketEvidence,
@@ -615,7 +635,22 @@ def _barrier_level(
 
     inside = cluster.lower <= spot <= cluster.upper
     hold_margin = strength - break_pressure
-    if inside:
+    awaiting_close = (
+        cluster.side == "RESISTANCE"
+        and spot > cluster.upper
+        and confirmation_spot <= cluster.upper
+    ) or (
+        cluster.side == "SUPPORT"
+        and spot < cluster.lower
+        and confirmation_spot >= cluster.lower
+    )
+    if awaiting_close:
+        state = (
+            "ABOVE ZONE / AWAITING 3M CLOSE"
+            if cluster.side == "RESISTANCE"
+            else "BELOW ZONE / AWAITING 3M CLOSE"
+        )
+    elif inside:
         state = "TESTING"
     elif distance <= CONFIG.pretouch_warning_distance_points and hold_margin >= 15:
         state = "HOLDING / STRONG"
@@ -709,11 +744,17 @@ def _range_context(
     else:
         state = "RANGE WEAK"
 
-    difference = resistance.break_pressure - support.break_pressure
+    # Compare *net vulnerability*, not raw break pressure alone.  A 70 break score
+    # against a 90-strength resistance is materially different from 65 pressure against
+    # a 30-strength support.
+    upside_vulnerability = resistance.break_pressure - resistance.strength
+    downside_vulnerability = support.break_pressure - support.strength
+    difference = upside_vulnerability - downside_vulnerability
     breakout_bias = "UPSIDE RISK" if difference >= 10 else "DOWNSIDE RISK" if difference <= -10 else "BALANCED"
     explanation = (
         f"Current probable range {lower:,.0f}–{upper:,.0f}; price range ke {position:.0f}% position par hai. "
-        f"Range confidence {confidence:.0f}/100; break bias {breakout_bias}."
+        f"Range confidence {confidence:.0f}/100; break bias {breakout_bias}. "
+        f"Net vulnerability UP {upside_vulnerability:+.0f}, DOWN {downside_vulnerability:+.0f}."
     )
     return BarrierRangeContext(
         lower=round(lower, 2),
@@ -747,7 +788,6 @@ def calculate_barrier_map(
     vix: VixContext,
     option_history: list[dict],
 ) -> BarrierMap:
-    del indicators  # levels already contain EMA-derived structural zones.
     if spot <= 0:
         empty_speed = MarketSpeedContext(0.0, "UNAVAILABLE", "MIXED", None, None, None, None, None, None, 0.0, (), "UNAVAILABLE")
         empty_range = BarrierRangeContext(None, None, 0.0, None, "UNRESOLVED", None, None, None, None, "UNRESOLVED", "Spot unavailable.")
@@ -773,14 +813,20 @@ def calculate_barrier_map(
 
     anchors = _build_anchors(levels=levels, options=options, price_action=price_action)
     width = _zone_width(levels)
-    resistance_clusters = _clusters(anchors, side="RESISTANCE", width=width, spot=spot)
-    support_clusters = _clusters(anchors, side="SUPPORT", width=width, spot=spot)
+    confirmation_spot = _number(getattr(indicators.three_minute, "close", None)) or spot
+    resistance_clusters = _clusters(
+        anchors, side="RESISTANCE", width=width, spot=spot, confirmation_spot=confirmation_spot
+    )
+    support_clusters = _clusters(
+        anchors, side="SUPPORT", width=width, spot=spot, confirmation_spot=confirmation_spot
+    )
 
     resistance_levels = [
         _barrier_level(
             cluster=cluster,
             label=f"R{index + 1}",
             spot=spot,
+            confirmation_spot=confirmation_spot,
             candles_1m=candles_1m,
             price_action=price_action,
             core=core,
@@ -796,6 +842,7 @@ def calculate_barrier_map(
             cluster=cluster,
             label=f"S{index + 1}",
             spot=spot,
+            confirmation_spot=confirmation_spot,
             candles_1m=candles_1m,
             price_action=price_action,
             core=core,

@@ -967,20 +967,27 @@ def _structure_event(snapshot: Any, bull: float, bear: float, range_score: float
     support = getattr(barrier, "nearest_support", None) if barrier is not None else None
     up_break = float(getattr(resistance, "break_pressure", 0.0) or 0.0) if resistance is not None else 0.0
     down_break = float(getattr(support, "break_pressure", 0.0) or 0.0) if support is not None else 0.0
+    up_strength = float(getattr(resistance, "strength", 0.0) or 0.0) if resistance is not None else 0.0
+    down_strength = float(getattr(support, "strength", 0.0) or 0.0) if support is not None else 0.0
+    up_vulnerability = up_break - up_strength if resistance is not None else -100.0
+    down_vulnerability = down_break - down_strength if support is not None else -100.0
+    range_bias = str(getattr(getattr(barrier, "trading_range", None), "breakout_bias", "") or "").upper()
     event_text = " ".join(
         str(getattr(item, "event", "") or "").upper()
         for item in ((pa.three_minute, pa.fifteen_minute) if pa is not None else ())
     )
     breakout_direction = "MIXED"
     breakout_quality = max(up_break, down_break) * 0.45
-    if up_break >= down_break + 8:
+    # Stay consistent with the Barrier Map: direction is based on net vulnerability
+    # (Break Pressure - Strength), while raw break pressure still contributes to quality.
+    if range_bias == "UPSIDE RISK" or up_vulnerability >= down_vulnerability + 10:
         breakout_direction = "BULLISH"
         breakout_quality += bull * 0.35 + max(0.0, 100.0 - range_score) * 0.20
-        reasons.append(f"Upside break pressure {up_break:.0f}")
-    elif down_break >= up_break + 8:
+        reasons.append(f"Upside net barrier vulnerability {up_vulnerability:+.0f}")
+    elif range_bias == "DOWNSIDE RISK" or down_vulnerability >= up_vulnerability + 10:
         breakout_direction = "BEARISH"
         breakout_quality += bear * 0.35 + max(0.0, 100.0 - range_score) * 0.20
-        reasons.append(f"Downside break pressure {down_break:.0f}")
+        reasons.append(f"Downside net barrier vulnerability {down_vulnerability:+.0f}")
     else:
         breakout_quality += max(bull, bear) * 0.20
     if "BREAKOUT" in event_text and breakout_direction == "BULLISH":

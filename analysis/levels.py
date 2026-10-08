@@ -126,6 +126,37 @@ def _merge_candidates(
     return merged
 
 
+
+
+def _confirmed_zone_side(raw: _MergedZone, completed_3m: pd.DataFrame) -> str:
+    """Return SUPPORT/RESISTANCE using completed-close acceptance, not live spot.
+
+    A zone changes role only after a completed 3-minute close accepts beyond the far
+    edge.  While the latest close is inside the zone, retain the side from the most
+    recent completed close that was outside the zone.  This gives deterministic
+    role-reversal behaviour without adding mutable state.
+    """
+
+    if completed_3m.empty:
+        return "SUPPORT" if raw.midpoint <= 0 else "RESISTANCE"
+    closes = pd.to_numeric(completed_3m["close"], errors="coerce").dropna().tolist()
+    if not closes:
+        return "RESISTANCE"
+    current = float(closes[-1])
+    if current > raw.upper:
+        return "SUPPORT"
+    if current < raw.lower:
+        return "RESISTANCE"
+    for value in reversed(closes[:-1]):
+        value = float(value)
+        if value > raw.upper:
+            return "SUPPORT"
+        if value < raw.lower:
+            return "RESISTANCE"
+    # Startup/fallback when the available completed history begins inside the zone.
+    return "SUPPORT" if current >= raw.midpoint else "RESISTANCE"
+
+
 def _level_status(
     side: str,
     lower: float,
@@ -227,6 +258,10 @@ def calculate_levels(
             status="CANDLES UNAVAILABLE",
         )
 
+    # Live spot is used for distance/status, but level *side* promotion must wait for
+    # the newest completed 3-minute close.  This prevents a transient wick/tick above
+    # resistance (or below support) from instantly turning R1 into support and
+    # promoting R2/S2 before the move is confirmed.
     price = float(
         current_price if current_price is not None else three.iloc[-1]["close"]
     )
@@ -285,10 +320,15 @@ def calculate_levels(
     )
 
     merged = _merge_candidates(candidates, width)
-    supports_raw = [item for item in merged if item.midpoint <= price]
-    resistances_raw = [item for item in merged if item.midpoint > price]
-    supports_raw.sort(key=lambda item: price - item.midpoint)
-    resistances_raw.sort(key=lambda item: item.midpoint - price)
+    # Classification is completed-close acceptance based; ordering/distance remains
+    # live-spot based.  A zone does not flip role merely because the completed close is
+    # somewhere inside it.  This keeps One Brain, trade-plan, patterns, pre-touch and UI
+    # on the same confirmed barrier identity until the far edge is actually accepted.
+    role_map = {id(item): _confirmed_zone_side(item, three) for item in merged}
+    supports_raw = [item for item in merged if role_map[id(item)] == "SUPPORT"]
+    resistances_raw = [item for item in merged if role_map[id(item)] == "RESISTANCE"]
+    supports_raw.sort(key=lambda item: max(0.0, price - item.midpoint))
+    resistances_raw.sort(key=lambda item: max(0.0, item.midpoint - price))
     last_candle = three.iloc[-1] if not three.empty else None
 
     supports = [
