@@ -214,6 +214,7 @@ def render_market_intelligence(snapshot: Any) -> None:
     direction = str(item.get("direction") or "MIXED")
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
     integrity = item.get("pressure_integrity") if isinstance(item.get("pressure_integrity"), dict) else {}
+    institutional = item.get("institutional_window") if isinstance(item.get("institutional_window"), dict) else {}
     zone = liquidity.get("primary_zone") if isinstance(liquidity, dict) else None
     target = _zone_text(zone if isinstance(zone, dict) else None)
     zone_role = str(liquidity.get("zone_role") or "LIQUIDITY ZONE")
@@ -221,9 +222,13 @@ def render_market_intelligence(snapshot: Any) -> None:
     next_hunt_text = _zone_text(next_hunt) if next_hunt else "—"
     hunt_bias = str(liquidity.get("hunt_bias") or "UNCLEAR") if isinstance(liquidity, dict) else "UNCLEAR"
     hunt_strength = str(liquidity.get("hunt_strength") or "LOW") if isinstance(liquidity, dict) else "LOW"
+    money = liquidity.get("money_concentration") if isinstance(liquidity.get("money_concentration"), dict) else {}
+    money_bias = str(money.get("bias") or "UNCLEAR")
+    money_score = max(_num(money.get("upside_score")), _num(money.get("downside_score"))) if money else 0.0
     sweep_outcome = str(liquidity.get("sweep_outcome") or "UNCLEAR") if isinstance(liquidity, dict) else "UNCLEAR"
     reach = str(liquidity.get("reach_state") or "UNCLEAR") if isinstance(liquidity, dict) else "UNCLEAR"
     alignment = str(item.get("one_brain_alignment") or "NO CLEAR ALIGNMENT")
+    institutional = item.get("institutional_window") if isinstance(item.get("institutional_window"), dict) else {}
     pressure = _num(item.get("expansion_pressure"))
     velocity = item.get("pressure_velocity")
     velocity_marker = "↑↑" if velocity is not None and _num(velocity) >= 14 else "↑" if velocity is not None and _num(velocity) >= 5 else ""
@@ -251,6 +256,27 @@ def render_market_intelligence(snapshot: Any) -> None:
             st.warning("⚠️ SYSTEM CONFLICT · One Brain aur Market Intelligence opposite hain — chase mat karo")
         elif str(liquidity.get("sweep_state") or "NONE") not in {"NONE", "UPSIDE TARGET TESTING", "DOWNSIDE TARGET TESTING"}:
             st.info(f"🔥 {liquidity.get('sweep_state')} · {sweep_outcome}")
+
+        if institutional:
+            iw_state = str(institutional.get("state") or "CLOSED").upper()
+            iw_dir = str(institutional.get("direction") or "MIXED").upper()
+            iw_score = _num(institutional.get("opportunity_score"))
+            iw_ready = int(_num(institutional.get("gates_ready")))
+            iw_missing = [str(x) for x in (institutional.get("missing_gates") or []) if str(x).strip()]
+            iw_icon = "🟢" if iw_state == "STRONG" else "🔵" if iw_state == "OPEN" else "🟠" if iw_state == "FORMING" else "⚪"
+            iw_path = institutional.get("path_clearance") if isinstance(institutional.get("path_clearance"), dict) else {}
+            iw_opp = institutional.get("opposition_weakness") if isinstance(institutional.get("opposition_weakness"), dict) else {}
+            iw_trigger = institutional.get("trigger_readiness") if isinstance(institutional.get("trigger_readiness"), dict) else {}
+            iw_pressure = institutional.get("pressure_effectiveness") if isinstance(institutional.get("pressure_effectiveness"), dict) else {}
+            st.markdown(
+                f"**{iw_icon} Institutional Opportunity Window · {iw_state} · {_direction_icon(iw_dir)} {iw_dir}**\n\n"
+                f"{iw_ready}/6 core gates · Opportunity {iw_score:.0f}/100 · "
+                f"Path {iw_path.get('state', '—')} · Opposition {iw_opp.get('state', '—')} · "
+                f"Trigger {iw_trigger.get('state', '—')} · Pressure {iw_pressure.get('state', '—')} · "
+                f"💰 Magnet {money_bias} {money_score:.0f}/100"
+            )
+            if iw_missing and iw_state not in {"OPEN", "STRONG"}:
+                st.caption("Window missing: " + ", ".join(iw_missing[:3]) + ("…" if len(iw_missing) > 3 else ""))
 
         _render_story_grid([
             ("5m", _path_text(item.get("path_5m"))),
@@ -293,6 +319,37 @@ def render_market_intelligence(snapshot: Any) -> None:
             f"Fast families: {int(_num(item.get('fast_confirmation_count')))}"
         )
 
+        if institutional:
+            st.markdown("**🏦 Institutional Opportunity Window — research detail**")
+            i1, i2, i3, i4 = st.columns(4)
+            i1.metric("Window", str(institutional.get("state") or "CLOSED"))
+            i2.metric("Opportunity", f"{_num(institutional.get('opportunity_score')):.0f}/100")
+            i3.metric("Core gates", f"{int(_num(institutional.get('gates_ready')))}/6")
+            i4.metric("Data safety", str(institutional.get("data_safety_state") or "—"))
+            gate_rows = []
+            for key, label in (
+                ("directional_edge", "Directional Edge"),
+                ("opposition_weakness", "Opposition Weakness"),
+                ("path_clearance", "Path Clearance"),
+                ("participation_capacity", "Participation Capacity Proxy"),
+                ("trigger_readiness", "Trigger Readiness"),
+                ("pressure_effectiveness", "Pressure Effectiveness"),
+            ):
+                gate = institutional.get(key) if isinstance(institutional.get(key), dict) else {}
+                gate_rows.append({
+                    "Gate": label,
+                    "Ready": "YES" if gate.get("passed") else "NO",
+                    "Score": "—" if gate.get("score") is None else f"{_num(gate.get('score')):.1f}",
+                    "State": gate.get("state") or "NO VOTE",
+                    "Why": gate.get("reason") or "",
+                })
+            st.dataframe(gate_rows, hide_index=True, width="stretch")
+            support = [str(x) for x in (institutional.get("supportive_signals") or []) if str(x).strip()]
+            if support:
+                st.caption("Supportive only: " + ", ".join(support))
+            for caution in institutional.get("cautions") or ():
+                st.caption("Institutional Window caution: " + str(caution))
+
         if isinstance(liquidity, dict):
             st.markdown("**Liquidity / Stop-Cascade research**")
             l1, l2, l3, l4 = st.columns(4)
@@ -306,6 +363,21 @@ def render_market_intelligence(snapshot: Any) -> None:
                 f"Sweep: {liquidity.get('sweep_state', 'NONE')} · Outcome: {sweep_outcome} · "
                 f"Acceptance: {liquidity.get('acceptance_state', 'NONE')}"
             )
+            if money:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Liquidity Magnet", money_bias)
+                m2.metric("Upside money proxy", f"{_num(money.get('upside_score')):.0f}/100")
+                m3.metric("Downside money proxy", f"{_num(money.get('downside_score')):.0f}/100")
+                m4.metric("Magnet confidence", f"{_num(money.get('confidence')):.0f}/100")
+                primary_money = money.get("primary_zone") if isinstance(money.get("primary_zone"), dict) else None
+                if primary_money:
+                    st.caption(
+                        f"Strongest visible option concentration near {float(primary_money.get('strike') or 0):,.0f} · "
+                        f"OI {float(primary_money.get('oi') or 0):,.0f} · "
+                        f"OI add {float(primary_money.get('oi_change') or 0):,.0f} · "
+                        f"Volume {float(primary_money.get('volume') or 0):,.0f}. "
+                        "Ye exact rupee money/hidden stop quantity nahi hai."
+                    )
             for reason in liquidity.get("reasons") or ():
                 st.caption("• " + str(reason))
 
@@ -362,6 +434,8 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     rank = {
         "PRESSURE_FLIP_CONFIRMED": 110,
         "SYSTEM_CONFLICT": 106,
+        "INSTITUTIONAL_WINDOW_STRONG": 103,
+        "INSTITUTIONAL_WINDOW_OPEN": 99,
         "PRESSURE_ABSORBED": 104,
         "BUILDUP_FAILED": 102,
         "LIQUIDITY_SWEEP": 100,
@@ -404,7 +478,7 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     }
     direction_flip = direction in {"BULLISH", "BEARISH"} and last_dir in {"BULLISH", "BEARISH"} and direction != last_dir
     strong_upgrade = (
-        kind in {"ONE_BRAIN_ALIGNMENT", "PRESSURE_VERIFIED", "MOVE_ATTACK"}
+        kind in {"ONE_BRAIN_ALIGNMENT", "PRESSURE_VERIFIED", "MOVE_ATTACK", "INSTITUTIONAL_WINDOW_OPEN", "INSTITUTIONAL_WINDOW_STRONG"}
         and current_rank > last_rank
         and score >= last_score + 8
     )
@@ -443,6 +517,14 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
             if names and (direction == "MIXED" or cdir == direction):
                 confirm_line = f"\nSupport: {names[:180]}"
 
+    iw_line = ""
+    if institutional:
+        iw_state = str(institutional.get("state") or "CLOSED")
+        iw_score = _num(institutional.get("opportunity_score"))
+        iw_ready = int(_num(institutional.get("gates_ready")))
+        if iw_state in {"OPEN", "STRONG"} or kind.startswith("INSTITUTIONAL_WINDOW"):
+            iw_line = f"\nInstitutional Window: {iw_state} · {iw_ready}/6 gates · {iw_score:.0f}/100"
+
     if alignment in {"STRONG EVIDENCE ALIGNMENT", "ALIGNMENT WATCH", "DIRECTION ALIGNED"}:
         one_brain_text = "ALIGNED"
     elif alignment == "SYSTEM CONFLICT":
@@ -468,12 +550,15 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         "liquidity_bias": liquidity.get("hunt_bias"),
         "liquidity_target": zone,
         "sweep_outcome": liquidity.get("sweep_outcome"),
+        "institutional_window_state": institutional.get("state") if institutional else None,
+        "institutional_window_score": institutional.get("opportunity_score") if institutional else None,
+        "institutional_window_gates": institutional.get("gates_ready") if institutional else None,
         "message": (
             f"🧠 ONE BRAIN MARKET INTELLIGENCE\n"
             f"{icon} {row.get('title', kind)} · {direction}\n"
             f"Move {expansion:.0f}/100 · Quality {integrity.get('quality_state', 'UNVERIFIED')} "
             f"{_num(integrity.get('quality_score')):.0f}/100 · Coverage {coverage:.0f}%"
-            f"{target_line}{sweep_line}{confirm_line}\n"
+            f"{target_line}{sweep_line}{confirm_line}{iw_line}\n"
             f"One Brain: {one_brain_text} · Status: {item.get('system_status', 'WATCH')}\n"
             "Precaution/shadow alert · automatic order nahi."
         ),

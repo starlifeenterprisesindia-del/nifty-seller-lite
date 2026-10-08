@@ -86,7 +86,8 @@ def _timeline_view(rows: list[dict[str, Any]]) -> pd.DataFrame:
             "S1": None if not s1 else f"{_fmt(s1.get('lower'),0)}–{_fmt(s1.get('upper'),0)}",
             "CE Wall": ce.get("strike"), "PE Wall": pe.get("strike"), "Option Bias": row.get("option_bias"),
             "MI Pressure": row.get("mi_pressure"), "MI Quality": row.get("mi_quality_state"),
-            "Move Radar": row.get("mi_radar_state"), "MI Alignment": row.get("mi_alignment"),
+            "Move Radar": row.get("mi_radar_state"), "Institutional Window": row.get("mi_institutional_window_state"),
+            "IW Score": row.get("mi_institutional_window_score"), "MI Alignment": row.get("mi_alignment"),
         })
     return pd.DataFrame(view)
 
@@ -142,6 +143,9 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
     i2.metric("Pressure verified", stats.get("pressure_verified_or_realized_samples", 0))
     i3.metric("Pressure flips", stats.get("pressure_flip_samples", 0))
     i4.metric("Absorption risk", stats.get("absorption_risk_samples", 0))
+    iw1, iw2 = st.columns(2)
+    iw1.metric("Institutional Window forming", stats.get("institutional_window_forming_samples", 0))
+    iw2.metric("Institutional Window open/strong", stats.get("institutional_window_open_or_strong_samples", 0))
 
     step = st.slider("Replay step", 0, len(rows) - 1, len(rows) - 1, key="phase3_replay_step")
     selected = rows[int(step)]
@@ -157,7 +161,10 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
     st.caption(
         f"MI: {selected.get('mi_direction') or '—'} · Pressure {_fmt(selected.get('mi_pressure'),0)} · "
         f"Quality {selected.get('mi_quality_state') or '—'} {_fmt(selected.get('mi_quality_score'),0)} · "
-        f"Radar {selected.get('mi_radar_state') or '—'} · Sync {selected.get('snapshot_sync_state') or '—'}"
+        f"Radar {selected.get('mi_radar_state') or '—'} · "
+        f"Institutional Window {selected.get('mi_institutional_window_state') or '—'} "
+        f"{_fmt(selected.get('mi_institutional_window_score'),0)} · "
+        f"Sync {selected.get('snapshot_sync_state') or '—'}"
     )
 
     r1, s1 = selected.get("r1") or {}, selected.get("s1") or {}
@@ -185,6 +192,11 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
                 "Move Risk": row.get("mi_risk_state"), "Move Radar": row.get("mi_radar_state"),
                 "Alignment": row.get("mi_alignment"), "Hunt": row.get("mi_hunt_bias"),
                 "Next Hunt Low": row.get("mi_next_hunt_lower"), "Next Hunt High": row.get("mi_next_hunt_upper"),
+                "Institutional Window": row.get("mi_institutional_window_state"),
+                "IW Direction": row.get("mi_institutional_window_direction"),
+                "IW Score": row.get("mi_institutional_window_score"),
+                "IW Gates": row.get("mi_institutional_window_gates"),
+                "IW Data Safety": row.get("mi_institutional_window_data_safety"),
                 "Data Sync": row.get("snapshot_sync_state"),
             })
         st.dataframe(pd.DataFrame(intelligence_rows), hide_index=True, width="stretch")

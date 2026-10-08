@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.71.0_OBSERVABILITY_REPLAY_STATE_HARDENING"
+    version: str = "2.73.0_LIQUIDITY_MAGNET_SMART_ENTRY_ADVISOR"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5

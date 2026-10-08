@@ -1,8 +1,8 @@
-# Architecture — V2.71 Observability / Replay / State Hardening
+# Architecture — V2.73 Liquidity Magnet + Smart Entry Advisor
 
 ## Canonical live path — unchanged
 
-`services/snapshot_service.py` builds one authoritative `MarketSnapshot`. The protected operational brain remains:
+`services/snapshot_service.py` builds one authoritative `MarketSnapshot`. The protected operational One Brain remains:
 
 1. Trend / Regime — 40%
 2. Options Flow — 25%
@@ -11,61 +11,55 @@
 
 Available evidence is normalized; missing evidence is NO VOTE. Market Intelligence has zero One Brain weight.
 
-## New diagnostic lane — zero live decision weight
+## Market Intelligence — Institutional Opportunity Window
 
-`analysis/snapshot_integrity.py` consumes only the existing `feed_status` already present in the snapshot. It reports:
+`analysis/institutional_window.py` remains a shadow-only, zero-network sub-engine. Six independent gates remain: Directional Edge, Opposition Weakness, Path Clearance, Participation Capacity Proxy, Trigger Readiness and Pressure Effectiveness. `OPEN` requires 6/6 + live data safety. W/M and strong candles are supportive only.
 
-- core decision feeds LIVE count
-- context feeds LIVE count
-- source-age values where the broker supplies them
-- timestamped live-feed age skew
-- GOOD / CAUTION / LIMITED / REFERENCE diagnostic state
+## Liquidity Magnet / Money Concentration
 
-Request-time option-chain data without an exchange timestamp is explicitly labelled instead of receiving a fake age. This diagnostic never gates One Brain in v2.71.
+`analysis/liquidity_intelligence.py` now adds a separate observable concentration layer using the already-fetched option chain:
 
-## Latency observability
+- UPSIDE proxy: CE strikes at/above spot
+- DOWNSIDE proxy: PE strikes at/below spot
+- inputs: OI, positive day OI change, traded volume
+- outputs: side scores, confidence, strongest visible strike/zone, `UPSIDE / DOWNSIDE / BALANCED`
 
-SnapshotService already records stage timings with `perf_mark`. V2.71 keeps that critical-path mechanism unchanged and improves presentation only:
+The layer intentionally does **not** claim exact rupee capital, retail stops, hidden orders or participant intent. Large OI may represent attraction, resistance/support, hedging inventory or other positioning, so Path Clearance and Trigger evidence remain required.
 
-- current pipeline/build/finalize timing
-- P50/P95 session latency
-- top three slow stages
-- refresh-budget status
-- feed freshness + Snapshot Integrity state
+Institutional Window uses Money Magnet only as a bounded path-quality modifier. It does not add a seventh gate or another One Brain vote. A strong opposite magnet blocks the `STRONG` quality upgrade.
 
-No second timer-heavy pipeline and no extra API request are added.
+## Premium Calculator — Smart Entry Advisor
 
-## Replay/calibration lane — on demand only
+`analysis/smart_entry_advisor.py` is a display/advisory layer for `Plan new entry` mode. It reuses:
 
-Persistent Day Memory already uses Railway SQLite. V2.71 extends its explicit replay projection to include the Market Intelligence state that was recorded at that minute:
+- current executable bid/ask
+- independent Strike Entry Planner barrier/retest state
+- existing premium scenario engine
+- structural target/invalidation context
+- Pressure Integrity
+- Institutional Window
+- Liquidity Magnet
 
-- Move Radar
-- Move Pressure / velocity
-- Pressure Quality
-- Move Attack / Move Risk
-- One Brain alignment
-- liquidity hunt direction / next hunt zone
-- snapshot sync state
+It separates:
 
-`analysis/session_calibration.py` generates descriptive post-market summaries from retrospective labels. It never reconstructs an earlier signal using future information, never auto-tunes a threshold and never feeds results into the live predictor.
+1. **Price Quality** — preferred entry zone, acceptable zone, no-chase boundary and risk/reward context.
+2. **Move Urgency** — whether waiting for the ideal premium risks missing a move already accelerating.
 
-## State management
+Status flow is intentionally simple: `REFERENCE ONLY / WAIT / ARMED / ENTRY CONDITIONS MET / FAST MOVE / NO CHASE / CANCEL`.
 
-High-value durable session history stays in SQLite through Day Memory. Small same-day runtime JSON stores remain bounded and local. In 2.71, Big Player/activity state gains process-safe locking around the already atomic read-modify-write cycle. Option state, discipline state and context stores already use hardened persistence patterns.
+For SELL setups the same-expiry protective hedge remains mandatory in the independent planner; the advisor shows current/preferred/minimum net credit. E2/E3 are conditional only and never automatic averaging.
 
-A wholesale Redis/Postgres migration is intentionally deferred until multi-user/multi-replica production architecture requires it; adding an external service during single-user live validation would add complexity and failure modes without improving signal quality.
+`Already entered — actual fill` mode remains separate and continues to use the user's actual fill/NIFTY inputs for existing P&L, R1/R2/S1/S2 and SL/Target calculations.
 
-## Pressure Integrity rules retained
+## Recorded-data validation
 
-- early Move Radar must not wait for W/M or candle completion
-- W/M and strong candles are supportive only
-- high pressure is not a trade signal
-- pressure that already produced a move is REALIZED, not retroactively fake
-- opposite pressure begins with FLIP WATCH before FLIP CONFIRMED
-- liquidity reclaim starts as REVERSAL WATCH before stronger follow-through
+New Market Intelligence snapshots automatically include Money Concentration inside `liquidity`. Test Pack exports explicit Money Concentration columns. Historical evidence can reconstruct the proxy from option rows recorded at that exact timestamp. Replay/calibration never uses future labels as live inputs.
 
-## Golden Rule
+## Performance / Golden Rule
 
-**Observability must observe; it must not become another trading brain.**
+- zero additional Dhan/API calls
+- Money Concentration is bounded to the existing compact option chain
+- Smart Entry Advisor performs bounded local calculations only
+- protected One Brain, Execution Guard, Trade Plan, Position Guardian, Snapshot Service and Pressure Integrity files remain unchanged from v2.72
 
-V2.71 adds no Dhan request, does not change protected One Brain weights/calculations, and keeps expensive replay/calibration outside the live critical path.
+**These layers improve interpretation and entry planning; they do not become a second trading brain.**

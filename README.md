@@ -1,4 +1,4 @@
-# Nifty Seller Lite 2.71 — Observability + Replay + State Hardening
+# Nifty Seller Lite 2.73 — Liquidity Magnet + Smart Entry Advisor
 
 Read-only NIFTY options decision-support app with one operational path:
 
@@ -6,33 +6,37 @@ Read-only NIFTY options decision-support app with one operational path:
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
 
-## 2.71 highlights
+## 2.73 highlights
 
-- **Zero-weight Snapshot Integrity diagnostic:** reads the already-built feed statuses and reports core-feed coverage, request/source-age information and timestamped age skew. It never changes One Brain or adds a broker request.
-- **Latency Budget visibility:** existing stage timings are surfaced as top bottlenecks, P50/P95 pipeline timing and refresh-budget health so optimization can target measured bottlenecks instead of guessing.
-- **Post-market calibration summary:** Market Intelligence Test Pack now includes `calibration_summary.json` and `latency_summary.json`. These are descriptive post-hoc diagnostics only; no threshold auto-tuning and no accuracy/win-rate claim.
-- **Replay expanded with Market Intelligence:** the existing on-demand Railway SQLite replay can now show recorded Move Radar, pressure quality, Move Attack, alignment, hunt direction and snapshot sync state alongside One Brain/barriers/options.
-- **Runtime state hardening:** Big Player/activity JSON state now uses the same process-safe lock + atomic replace pattern already used by other bounded state stores. Persistent Day Memory remains SQLite.
-- **No UI bloat:** live main screen only adds a small Data Sync status. Deep replay/calibration/performance details remain collapsed/on-demand.
-- **No extra Dhan/API calls:** all live diagnostics reuse the current MarketSnapshot. Calibration/replay run only on saved data after explicit user action.
+- **Liquidity Magnet / Money Concentration:** Market Intelligence now compares visible option-chain concentration above vs below spot using existing OI, positive OI change and volume. Output is `UPSIDE / DOWNSIDE / BALANCED` plus 0–100 concentration scores. This is a proxy, not exact rupee money or proof of stop hunting.
+- **Institutional Window integration:** Money Magnet alignment is a bounded Path Clearance modifier. Strong opposite concentration prevents a `STRONG` upgrade; six-gate `OPEN` logic remains intact.
+- **Recorded-data validation:** new snapshots save Money Concentration inside the Liquidity payload. Older recorded sessions can backfill it from same-timestamp option rows; future outcomes are never inputs. Calibration adds descriptive Money Concentration diagnostics.
+- **Smart Entry Advisor:** Premium Calculator → `Plan new entry` now gives one-glance `Current / Best Entry / Acceptable / No Chase` plus `WAIT / ARMED / ENTRY CONDITIONS MET / FAST MOVE / NO CHASE / CANCEL` status.
+- **Price Quality vs Move Urgency:** a better premium is preferred when time allows, but a genuinely accelerating move can mark the current executable price acceptable so the app does not wait for a perfect retest and miss the movement.
+- **Defined-risk SELL context:** current/preferred/minimum net credit is shown with the selected hedge.
+- **Simple default UI, full detail preserved:** planner, ladder, invalidation, scores, IV/time and existing R1/R2/S1/S2 + SL/Target calculations remain available in collapsed detail.
+- **W/M + Strong Candle stay supportive only:** neither is mandatory for Institutional Window or Smart Entry Advisor.
+- **Zero extra Dhan/API calls.**
 
-## 2.70 foundation retained
+## 2.72/2.71/2.70 foundation retained
 
-- Pressure Integrity Engine: UNVERIFIED / BUILDING / VERIFIED / REALIZED / ABSORPTION RISK / BUILD-UP FAILED / EXHAUSTING / FLIP WATCH / FLIP CONFIRMED.
-- Move Attack state and fake-vs-real pressure handling.
-- W/M and strong candles are supportive only; never mandatory gates for early Move Radar warning.
-- Current Battle Zone vs Next Hunt Zone liquidity wording.
+- Institutional Opportunity Window with six gates and smart state-change alerts.
+- Snapshot Integrity + latency observability + on-demand replay/calibration.
+- Pressure Integrity: real/fake/absorbed/exhausting/flip states.
+- Move Attack and Big Move Radar.
+- Current Battle Zone vs Next Hunt Zone.
 - Smart Alert controller with one primary Market Intelligence Telegram voice.
-- WAIT presentation stages without loosening the actual One Brain gate.
+- Durable Day Memory on SQLite and hardened bounded runtime state stores.
 
 ## Safety/performance rules
 
-- no new broker/API request for diagnostics
+- no new broker/API request for Liquidity Magnet or Smart Entry Advisor
 - no future data in live calculations
 - no automatic threshold tuning
-- replay/calibration is on-demand and post-market
-- no duplicate evidence weighting
-- protected One Brain decision/risk files remain unchanged in 2.71
+- replay/calibration is on-demand/post-market
+- no duplicate evidence weighting into One Brain
+- Money Concentration uses visible option positioning/trading data only
+- protected One Brain decision/risk files remain unchanged from 2.72
 
 ## Run
 

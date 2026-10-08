@@ -18,10 +18,10 @@ from analysis.sl_target_planner import (
     stop_reference,
     stop_spot_price,
 )
-from analysis.premium_entry_planner import build_premium_entry_plan
+from analysis.smart_entry_advisor import build_smart_entry_advisor
 from analysis.iv_delta_display import compute_iv_delta_payload
 from models import MarketSnapshot
-from ui.strike_entry import render_strike_entry
+from ui.strike_entry import prepare_strike_entry, render_strike_entry_result, reset_strike_entry_state, strike_entry_state_key
 
 
 def _number(value: Any) -> float:
@@ -34,6 +34,49 @@ def _number(value: Any) -> float:
 def _money(value: float) -> str:
     sign = "+" if value > 0 else ""
     return f"{sign}₹{value:,.0f}"
+
+
+def _premium_zone(low: float | None, high: float | None) -> str:
+    if low is None or high is None:
+        return "—"
+    return f"₹{low:,.2f} – ₹{high:,.2f}"
+
+
+def _render_smart_entry_advisor(advisor: Any, *, side: str, position: str, strike: float) -> None:
+    """One-glance default view; calculations remain available below."""
+    st.markdown("### 🎯 Smart Entry Advisor")
+    st.caption(f"{strike:,.0f} {side} · {position} · price + timing + no-chase advisory")
+    if advisor.status_tone == "SUCCESS":
+        st.success(f"**{advisor.status}**")
+    elif advisor.status_tone == "DANGER":
+        st.error(f"**{advisor.status}**")
+    elif advisor.status_tone == "REFERENCE":
+        st.info(f"**{advisor.status}**")
+    else:
+        st.warning(f"**{advisor.status}**")
+
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Current executable", f"₹{advisor.current_executable_premium:,.2f}")
+    a2.metric("Best entry zone", _premium_zone(advisor.preferred_low, advisor.preferred_high))
+    a3.metric("Acceptable", _premium_zone(advisor.acceptable_low, advisor.acceptable_high))
+    chase = "—"
+    if advisor.no_chase_level is not None:
+        chase = f"{advisor.no_chase_relation.title()} ₹{advisor.no_chase_level:,.2f}"
+    a4.metric("No chase", chase)
+
+    b1, b2, b3 = st.columns(3)
+    b1.metric("Entry price", advisor.price_quality_state)
+    b2.metric("Move urgency", advisor.move_urgency_state)
+    b3.metric("Institutional Window", advisor.institutional_state)
+
+    reason_text = " · ".join(str(x) for x in advisor.reasons[:3])
+    if reason_text:
+        st.caption("Why: " + reason_text)
+    magnet_score = "—" if advisor.liquidity_magnet_score is None else f"{advisor.liquidity_magnet_score:.0f}/100"
+    st.caption(
+        f"Liquidity Magnet: {advisor.liquidity_magnet_bias} {magnet_score} · "
+        f"Price quality {advisor.price_quality_score:.0f}/100 · Move urgency {advisor.move_urgency_score:.0f}/100"
+    )
 
 
 def _contract_row(snapshot: MarketSnapshot, side: str, strike: float) -> pd.Series | None:
@@ -176,72 +219,137 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
         st.warning("Selected strike ka premium available nahi hai.")
         return
     quality = str(row.get("greeks_quality", ""))
-    if quality and quality not in {"READY", "IV WARNING"}:
-        st.warning(f"Current premium ₹{chain_price:,.2f}; Greeks invalid/unavailable hain. Future premium calculation blocked; live bid/ask broker par check karo.")
-        return
+    projection_blocked = bool(quality and quality not in {"READY", "IV WARNING"})
+    if projection_blocked:
+        st.warning(
+            f"Current premium ₹{chain_price:,.2f}; Greeks invalid/unavailable hain. "
+            "Smart Entry Advisor book/barrier context dikha sakta hai, lekin future premium/SL-target projection blocked rahegi."
+        )
     if quality == "IV WARNING":
         st.warning("CE/PE IV difference: neeche premiums sirf conditional scenarios hain, verified entry/SL prices nahi. Automatic retest estimate disabled; source values force-match nahi ki gayi.")
     chain_state = snapshot.feed_status.get("option_chain")
     feed_state = str(getattr(chain_state, "use_state", "UNAVAILABLE") or "UNAVAILABLE").upper()
 
     expiry_info = expiry_context(captured_at=snapshot.created_at, expiry=snapshot.expiry)
-    p1, p2, p3, p4 = st.columns(4)
-    p1.metric("Current premium", f"₹{chain_price:,.2f}")
-    entry_premium = p2.number_input(
-        "Entry premium",
-        min_value=0.05,
-        value=float(chain_price),
-        step=0.05,
-        key=f"spc2_entry_{side}_{int(strike)}",
+    planner_mode = st.selectbox(
+        "Calculator mode",
+        ["Plan new entry", "Already entered — actual fill"],
+        key="spc_planner_mode",
     )
-    entry_spot = p3.number_input(
-        "Entry NIFTY",
-        min_value=1.0,
-        value=float(live_spot),
-        step=1.0,
-        key="spc2_entry_spot",
-    )
-    lots = p4.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
     lot_size = int(snapshot.risk_profile.lot_size)
+    advisor = None
+    planner_result = None
+    hedge = None
 
-    planner_mode = st.selectbox("Calculator mode", ["Plan new entry", "Already entered — actual fill"], key="spc_planner_mode")
     if planner_mode == "Plan new entry":
-        render_strike_entry(snapshot, side, position, strike, lots)
-    else:
-        st.caption("Entry premium/NIFTY above are your actual-fill inputs; planner does not overwrite them.")
+        q1, q2, q3, q4 = st.columns(4)
+        q1.metric("Current premium", f"₹{chain_price:,.2f}")
+        q2.metric("Current NIFTY", f"{live_spot:,.2f}")
+        lots = q3.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
+        q4.metric("Expiry / Time", expiry_info.label)
 
-    entry_count = st.select_slider(
-        "Entry parts",
-        options=(1, 2, 3),
-        value=min(3, int(lots)),
-        help="Optional price ladder only; not an entry signal or automatic averaging.",
-        key="spc2_entry_parts",
-    )
-    entry_plan = build_premium_entry_plan(
-        position=position,
-        current_premium=chain_price,
-        bid=_cell(row, "top_bid_price") or None,
-        ask=_cell(row, "top_ask_price") or None,
-        total_lots=int(lots),
-        entries=int(entry_count),
-    )
-    ec1, ec2 = st.columns(2)
-    ec1.metric("Indicative ladder price (not best entry)", f"₹{entry_plan.best_entry_premium:,.2f}")
-    ec2.metric(f"{len(entry_plan.entries)}-part estimated average", f"₹{entry_plan.average_premium:,.2f}")
-    st.dataframe(
-        [
-            {
-                "Entry": f"E{item.entry_no}",
-                "Premium": f"₹{item.premium:,.2f}",
-                "Lots": item.lots,
-                "Kab": item.condition,
-            }
-            for item in entry_plan.entries
-        ],
-        width="stretch",
-        hide_index=True,
-    )
-    st.warning(entry_plan.warning)
+        planner_result, hedge = prepare_strike_entry(
+            snapshot, side, position, strike, lots, compact=True
+        )
+        if planner_result is None:
+            st.warning("Planner setup unavailable — quantity/protective hedge check karo.")
+            return
+        advisor = build_smart_entry_advisor(
+            snapshot,
+            side=side,
+            position=position,
+            strike=float(strike),
+            lots=int(lots),
+            planner=planner_result,
+            hedge_strike=hedge,
+        )
+        _render_smart_entry_advisor(advisor, side=side, position=position, strike=float(strike))
+
+        entry_spot = (
+            float(live_spot)
+            if advisor.status.startswith("FAST MOVE") or not advisor.spot_zone
+            else float(sum(advisor.spot_zone) / 2.0)
+        )
+        entry_premium = float(advisor.reference_entry)
+
+        with st.expander("Advanced Entry Detail", expanded=False):
+            st.caption(
+                "Useful detail hidden nahi hai — planner, ladder, net credit, structural invalidation aur exact scores yahan hain."
+            )
+            render_strike_entry_result(planner_result, hedge, show_reset_note=False)
+            reset_key = strike_entry_state_key(snapshot, side, position, strike, hedge) + "_compact_reset"
+            if st.button("Reset / re-plan selected strike", key=reset_key):
+                reset_strike_entry_state(snapshot, side, position, strike, hedge)
+                st.rerun()
+            e1, e2, e3 = st.columns(3)
+            e1.metric("Planned entry used", f"₹{entry_premium:,.2f}")
+            e2.metric("Price quality", f"{advisor.price_quality_score:.0f}/100")
+            e3.metric("Move urgency", f"{advisor.move_urgency_score:.0f}/100")
+            if advisor.ladder:
+                st.dataframe(
+                    [
+                        {
+                            "Entry": f"E{x.entry_no}",
+                            "Premium": f"₹{x.premium:,.2f}",
+                            "Lots": x.lots,
+                            "Condition": x.condition,
+                        }
+                        for x in advisor.ladder
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
+                st.caption("E2/E3 automatic averaging nahi — setup invalid ho to remaining entries CANCEL.")
+            if position == "SELL" and hedge is not None:
+                n1, n2, n3 = st.columns(3)
+                n1.metric(
+                    "Current net credit",
+                    "—" if advisor.current_net_credit is None else f"₹{advisor.current_net_credit:,.2f}",
+                )
+                n2.metric(
+                    "Preferred net credit",
+                    _premium_zone(advisor.preferred_net_credit_low, advisor.preferred_net_credit_high),
+                )
+                n3.metric(
+                    "Minimum credit",
+                    "—" if advisor.minimum_net_credit is None else f"≥ ₹{advisor.minimum_net_credit:,.2f}",
+                )
+            override = st.checkbox(
+                "Projection ke liye planned entry premium manually override karo",
+                value=False,
+                key=f"spc2_plan_override_{side}_{position}_{int(strike)}",
+            )
+            if override:
+                entry_premium = st.number_input(
+                    "Planned entry premium",
+                    min_value=0.05,
+                    value=float(advisor.reference_entry),
+                    step=0.05,
+                    key=f"spc2_plan_entry_{side}_{position}_{int(strike)}",
+                )
+            st.caption(
+                "Default projections latest preferred/acceptable entry logic use karte hain. "
+                "W/M aur strong candle supportive only hain, mandatory nahi."
+            )
+    else:
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Current premium", f"₹{chain_price:,.2f}")
+        entry_premium = p2.number_input(
+            "Actual fill premium",
+            min_value=0.05,
+            value=float(chain_price),
+            step=0.05,
+            key=f"spc2_entry_{side}_{int(strike)}",
+        )
+        entry_spot = p3.number_input(
+            "Actual entry NIFTY",
+            min_value=1.0,
+            value=float(live_spot),
+            step=1.0,
+            key="spc2_entry_spot",
+        )
+        lots = p4.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots_actual")
+        st.caption("Actual-fill mode: calculator tumhari real entry ko use karega; Smart Entry Advisor is mode me entry rewrite nahi karta.")
 
     h1, h2 = st.columns(2)
     holding = h1.selectbox(
@@ -370,7 +478,14 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
         float(manual_upper or 0),
         float(iv_change),
     )
-    calculate = st.button("Calculate Premium at R1/R2/S1/S2", type="primary", width="stretch")
+    calculate = st.button(
+        "Calculate Premium at R1/R2/S1/S2",
+        type="primary",
+        width="stretch",
+        disabled=projection_blocked,
+    )
+    if projection_blocked:
+        st.caption("Detailed future-premium projection ke liye valid Greeks/IV quality required hai; koi value invent nahi ki gayi.")
     bundle = None
     if calculate:
         try:
