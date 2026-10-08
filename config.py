@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.73.0_LIQUIDITY_MAGNET_SMART_ENTRY_ADVISOR"
+    version: str = "2.74.0_RESEARCH_JOURNAL_VALIDATION_ENGINE"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -175,7 +175,7 @@ class AppConfig:
     simple_entry_watch_score: float = 54.0
     simple_execution_required_confirmations: int = 1
     simple_decision_journal_interval_seconds: int = 60
-    simple_decision_journal_start: time = time(9, 30)
+    simple_decision_journal_start: time = time(9, 15)
     simple_decision_journal_end: time = time(15, 0)
     ai_move_tracker_interval_seconds: int = 180
     ai_move_tracker_max_minutes: int = 30
@@ -280,14 +280,20 @@ class AppConfig:
 
     # Automatic read-only forward journal. It never sends broker orders.
     shadow_journal_path: str = "data/shadow_journal.json"
-    shadow_journal_max_trades_per_day: int = 5
+    # Validation lanes are intentionally more permissive than live execution because
+    # they are paper-only research samples.  They never place broker orders and do not
+    # change One-Brain calculations.
+    shadow_journal_max_trades_per_day: int = 25
+    shadow_journal_max_ob_trades_per_day: int = 25
+    shadow_journal_max_mi_trades_per_day: int = 25
     shadow_journal_min_confidence: float = 50.0
     shadow_journal_min_strategy_score: float = 55.0
     shadow_journal_min_option_confidence: float = 55.0
     # Experimental paper entries still need enough credit to survive estimated
     # charges and one observed-quote slippage step.  This is not an execution rule.
     shadow_journal_min_sell_credit_points: float = 4.0
-    shadow_journal_cooldown_minutes: int = 20
+    shadow_journal_cooldown_minutes: int = 5
+    shadow_journal_research_cooldown_minutes: int = 5
     shadow_journal_estimated_charges_per_trade: float = 40.0
 
     @property

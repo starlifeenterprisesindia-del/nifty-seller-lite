@@ -10,10 +10,17 @@ from typing import Any, Iterator
 
 from analysis.position_guardian import create_trade_record, calculate_position_guardian
 from analysis.execution_guard import calculate_execution_guard
-from analysis.decision import _entry_alignment_blocker
 from config import CONFIG
 from models import DisciplineState, MarketSnapshot
 from services.github_journal import GitHubJsonJournal
+from services.journal_research import (
+    classify_alignment,
+    diagnose_closed_trade,
+    freeze_market_context,
+    market_intelligence_candidate,
+    normalize_direction,
+    setup_direction,
+)
 
 try:
     import fcntl
@@ -44,6 +51,19 @@ class ShadowJournalStore:
     def _locked(self) -> Iterator[None]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+", encoding="utf-8") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def _decision_locked(self) -> Iterator[None]:
+        path = self.path.with_suffix(".decisions.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+", encoding="utf-8") as handle:
             if fcntl is not None:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
@@ -97,7 +117,7 @@ class ShadowJournalStore:
             data = self._read_local()
             return [dict(item) for item in data["entries"] if isinstance(item, dict)]
 
-    def load_decisions(self) -> list[dict[str, Any]]:
+    def _read_decisions_unlocked(self) -> list[dict[str, Any]]:
         path = self.path.with_suffix(".decisions.json")
         try:
             data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
@@ -105,12 +125,20 @@ class ShadowJournalStore:
             return []
         return [dict(item) for item in data if isinstance(item, dict)] if isinstance(data, list) else []
 
-    def _save_decisions(self, rows: list[dict[str, Any]]) -> None:
+    def load_decisions(self) -> list[dict[str, Any]]:
+        with self._decision_locked():
+            return self._read_decisions_unlocked()
+
+    def _save_decisions_unlocked(self, rows: list[dict[str, Any]]) -> None:
         path = self.path.with_suffix(".decisions.json")
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(rows[-2500:], sort_keys=True, separators=(",", ":")), encoding="utf-8")
         os.replace(temporary, path)
+
+    def _save_decisions(self, rows: list[dict[str, Any]]) -> None:
+        with self._decision_locked():
+            self._save_decisions_unlocked(rows)
 
     def save(self, entries: list[dict[str, Any]], *, sync_cloud: bool = True) -> None:
         data = {"schema_version": self.SCHEMA_VERSION, "entries": entries[-500:]}
@@ -126,16 +154,18 @@ class ShadowJournalStore:
                     self.last_error = f"Cloud save failed: {type(exc).__name__}; saved locally"
 
     def record_check(self, snapshot, reason):
-        """Record every meaningful One-Brain observation, including WAIT outcomes.
+        """Record One-Brain decisions plus shadow-intelligence context atomically.
 
-        Trade P&L remains in ``shadow_journal.json``.  This decision journal is the
-        missing learning lane: it records WAIT/READY/TTAKE observations and backfills
-        5m/15m/30m spot outcomes as later snapshots arrive.
+        The Decision Journal is independent from Paper Trades.  It records live
+        WAIT/READY/ENTRY observations from 09:15 and backfills 5m/15m/30m spot
+        outcomes.  The full read-update-write is held under one process lock so a
+        second Streamlit/server writer cannot silently overwrite fresh rows.
         """
         self.last_checked = snapshot.created_at.isoformat()
         self.last_blocker = reason
         simple = snapshot.metadata.get("simple_brain") or {}
         common = snapshot.metadata.get("common_decision") or {}
+        context = freeze_market_context(snapshot)
         spot = snapshot.levels.current_price
         if spot is None:
             spot = snapshot.nifty_quote.get("last_price")
@@ -149,75 +179,89 @@ class ShadowJournalStore:
             and CONFIG.simple_decision_journal_start <= local_clock <= CONFIG.simple_decision_journal_end
         )
 
-        # Decision reasons are stored only in the bounded Decision Journal below.
-        # The old parallel *.signals.json file duplicated the same WAIT/READY state,
-        # added extra disk I/O, and could disagree with Railway-persistent decisions.
-
-        # Full decision journal: bounded, one row/minute or immediately on a state
-        # change.  Later snapshots backfill missed-move outcomes.
         try:
-            decisions = self.load_decisions()
-            now = snapshot.created_at
-            market_session = getattr(snapshot, "market_session", None)
-            session_live = bool(getattr(market_session, "is_live", True))
-            if spot is not None and session_live:
-                for row in decisions:
-                    try:
-                        opened = datetime.fromisoformat(str(row.get("at")))
-                        if opened.tzinfo is None and now.tzinfo is not None:
-                            opened = opened.replace(tzinfo=now.tzinfo)
-                        age_min = (now - opened).total_seconds() / 60.0
-                        base = float(row.get("spot"))
-                    except (TypeError, ValueError):
-                        continue
-                    for horizon in (5, 15, 30):
-                        key = f"outcome_{horizon}m_points"
-                        if row.get(key) is None and age_min >= horizon:
-                            row[key] = round(spot - base, 2)
-                            row[f"outcome_{horizon}m_label"] = (
-                                "UP" if spot - base >= 5 else "DOWN" if spot - base <= -5 else "RANGE"
-                            )
+            with self._decision_locked():
+                decisions = self._read_decisions_unlocked()
+                now = snapshot.created_at
+                market_session = getattr(snapshot, "market_session", None)
+                session_live = bool(getattr(market_session, "is_live", True))
+                changed_rows = False
+                if spot is not None and session_live:
+                    for row in decisions:
+                        try:
+                            opened = datetime.fromisoformat(str(row.get("at")))
+                            if opened.tzinfo is None and now.tzinfo is not None:
+                                opened = opened.replace(tzinfo=now.tzinfo)
+                            age_min = (now - opened).total_seconds() / 60.0
+                            base = float(row.get("spot"))
+                        except (TypeError, ValueError):
+                            continue
+                        for horizon in (5, 15, 30):
+                            key = f"outcome_{horizon}m_points"
+                            if row.get(key) is None and age_min >= horizon:
+                                move = spot - base
+                                row[key] = round(move, 2)
+                                row[f"outcome_{horizon}m_label"] = (
+                                    "UP" if move >= 5 else "DOWN" if move <= -5 else "RANGE"
+                                )
+                                changed_rows = True
 
-            current = {
-                "at": now.isoformat(),
-                "session_date": now.date().isoformat(),
-                "session_live": session_live,
-                "spot": spot,
-                "regime": str(simple.get("regime") or ""),
-                "direction": str(simple.get("direction") or snapshot.decision.market_direction),
-                "direction_strength": round(float(simple.get("direction_strength") or 0.0), 1),
-                "entry_readiness": round(float(simple.get("entry_readiness") or 0.0), 1),
-                "entry_state": str(simple.get("entry_state") or ""),
-                "candidate_action": str(simple.get("candidate_action") or snapshot.trade_plan.selected_setup),
-                "final_action": str(common.get("final_action") or simple.get("final_action") or "WAIT"),
-                "trigger": str(simple.get("trigger") or ""),
-                "reason": reason,
-                "option_bias": snapshot.option_intelligence.market_bias,
-                "option_confidence": snapshot.option_intelligence.confidence,
-                "big_player": f"{snapshot.big_player_activity.direction} {snapshot.big_player_activity.score:.0f}",
-                "barrier_state": str(((simple.get("blocks") or {}).get("barrier_entry") or {}).get("state") or ""),
-                "outcome_5m_points": None,
-                "outcome_15m_points": None,
-                "outcome_30m_points": None,
-            }
-            last = decisions[-1] if decisions else None
-            append = last is None
-            if last is not None:
-                try:
-                    previous_at = datetime.fromisoformat(str(last.get("at")))
-                    if previous_at.tzinfo is None and now.tzinfo is not None:
-                        previous_at = previous_at.replace(tzinfo=now.tzinfo)
-                    elapsed = (now - previous_at).total_seconds()
-                except (TypeError, ValueError):
-                    elapsed = CONFIG.simple_decision_journal_interval_seconds
-                changed = any(
-                    str(last.get(key) or "") != str(current.get(key) or "")
-                    for key in ("regime", "direction", "entry_state", "candidate_action", "final_action", "barrier_state")
-                )
-                append = changed or elapsed >= CONFIG.simple_decision_journal_interval_seconds
-            if journal_open and append:
-                decisions.append(current)
-            self._save_decisions(decisions)
+                current = {
+                    "at": now.isoformat(),
+                    "session_date": now.date().isoformat(),
+                    "session_live": session_live,
+                    "spot": spot,
+                    "regime": str(simple.get("regime") or ""),
+                    "direction": str(simple.get("direction") or snapshot.decision.market_direction),
+                    "direction_strength": round(float(simple.get("direction_strength") or 0.0), 1),
+                    "entry_readiness": round(float(simple.get("entry_readiness") or 0.0), 1),
+                    "entry_state": str(simple.get("entry_state") or ""),
+                    "candidate_action": str(simple.get("candidate_action") or snapshot.trade_plan.selected_setup),
+                    "final_action": str(common.get("final_action") or simple.get("final_action") or "WAIT"),
+                    "trigger": str(simple.get("trigger") or ""),
+                    "reason": reason,
+                    "option_bias": snapshot.option_intelligence.market_bias,
+                    "option_confidence": snapshot.option_intelligence.confidence,
+                    "big_player": f"{snapshot.big_player_activity.direction} {snapshot.big_player_activity.score:.0f}",
+                    "barrier_state": str(((simple.get("blocks") or {}).get("barrier_entry") or {}).get("state") or ""),
+                    "mi_window_state": context.get("institutional_window_state"),
+                    "mi_window_score": context.get("institutional_window_score"),
+                    "pressure_quality_state": context.get("pressure_quality_state"),
+                    "pressure_quality_score": context.get("pressure_quality_score"),
+                    "liquidity_magnet_bias": context.get("liquidity_magnet_bias"),
+                    "liquidity_magnet_confidence": context.get("liquidity_magnet_confidence"),
+                    "mi_direction": context.get("mi_direction"),
+                    "ob_mi_alignment": classify_alignment(
+                        normalize_direction(simple.get("direction")), context.get("mi_direction")
+                    ),
+                    "outcome_5m_points": None,
+                    "outcome_15m_points": None,
+                    "outcome_30m_points": None,
+                }
+                last = decisions[-1] if decisions else None
+                append = last is None
+                if last is not None:
+                    try:
+                        previous_at = datetime.fromisoformat(str(last.get("at")))
+                        if previous_at.tzinfo is None and now.tzinfo is not None:
+                            previous_at = previous_at.replace(tzinfo=now.tzinfo)
+                        elapsed = (now - previous_at).total_seconds()
+                    except (TypeError, ValueError):
+                        elapsed = CONFIG.simple_decision_journal_interval_seconds
+                    state_changed = any(
+                        str(last.get(key) or "") != str(current.get(key) or "")
+                        for key in (
+                            "regime", "direction", "entry_state", "candidate_action",
+                            "final_action", "barrier_state", "mi_window_state",
+                            "pressure_quality_state", "liquidity_magnet_bias",
+                        )
+                    )
+                    append = state_changed or elapsed >= CONFIG.simple_decision_journal_interval_seconds
+                if journal_open and session_live and append:
+                    decisions.append(current)
+                    changed_rows = True
+                if changed_rows:
+                    self._save_decisions_unlocked(decisions)
         except (OSError, ValueError, TypeError) as exc:
             self.last_error = f"Decision journal failed: {type(exc).__name__}"
 
@@ -287,6 +331,7 @@ def _close_open_entries(
         if guardian.status in {"TARGET ALERT", "EXIT ALERT"} and pnl is not None:
             gross = float(pnl)
             charges = float(CONFIG.shadow_journal_estimated_charges_per_trade)
+            net = gross - charges
             entry["status"] = "CLOSED"
             entry["outcome"] = guardian.instruction
             entry["closed_at"] = snapshot.created_at.isoformat()
@@ -294,116 +339,335 @@ def _close_open_entries(
             entry["exit_debit_points"] = guardian.current_debit_points
             entry["gross_pnl_rupees"] = round(gross, 2)
             entry["estimated_charges_rupees"] = round(charges, 2)
-            entry["net_pnl_rupees"] = round(gross - charges, 2)
+            entry["net_pnl_rupees"] = round(net, 2)
+            entry["estimated_net_pnl_rupees"] = round(net, 2)
+            current_spot = (
+                float(snapshot.levels.current_price)
+                if snapshot.levels.current_price is not None
+                else None
+            )
+            diagnosis = diagnose_closed_trade(
+                entry,
+                exit_context=freeze_market_context(snapshot),
+                current_spot=current_spot,
+                gross_pnl=gross,
+                net_pnl=net,
+                outcome=guardian.instruction,
+                closed_at=snapshot.created_at,
+            )
+            entry.update(diagnosis)
             changed = True
             cloud_changed = True
     return changed, cloud_changed
 
 
-def _eligible(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[bool, str]:
-    action = snapshot.trade_plan.selected_setup
-    common = snapshot.metadata.get("common_decision") or {}
-    if not common.get("entry_allowed") or common.get("final_action") != action:
-        reasons = common.get("blockers") or ["Common Current/Future gate is not ready"]
-        return False, "Common Gate: " + str(reasons[0])
-    today = snapshot.created_at.date().isoformat()
-    today_entries = [item for item in entries if str(item.get("session_date")) == today]
-    if len(today_entries) >= CONFIG.shadow_journal_max_trades_per_day:
-        return False, "Daily 5-trade paper cap reached"
-    if not snapshot.market_session.is_live:
-        return False, "Market is not live"
-    if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
-        return False, "No concrete One-Brain strategy"
-    simple = snapshot.metadata.get("simple_brain") or {}
-    if simple:
-        if float(simple.get("direction_strength") or 0) < CONFIG.simple_direction_min_strength:
-            return False, "Simple Brain direction below minimum strength"
-        if float(simple.get("entry_readiness") or 0) < CONFIG.simple_entry_ready_score:
-            return False, "Simple Brain entry trigger not ready"
-    else:
-        if float(common.get("trade_confidence") or 0) < CONFIG.shadow_journal_min_confidence:
-            return False, "Common trade confidence below threshold"
-        if _strategy_score(snapshot, action) < CONFIG.shadow_journal_min_strategy_score:
-            return False, "Strategy score below threshold"
-    selected_plan = {
+def _backfill_trade_spot_outcomes(entries: list[dict[str, Any]], snapshot: MarketSnapshot) -> bool:
+    """Attach 5m/15m/30m spot outcomes to every research paper entry.
+
+    This uses only later authoritative snapshots and never feeds back into a live score.
+    """
+    if not snapshot.market_session.is_live or snapshot.levels.current_price is None:
+        return False
+    changed = False
+    now = snapshot.created_at
+    spot = float(snapshot.levels.current_price)
+    for entry in entries:
+        try:
+            opened = datetime.fromisoformat(str(entry.get("opened_at") or ""))
+            if opened.tzinfo is None and now.tzinfo is not None:
+                opened = opened.replace(tzinfo=now.tzinfo)
+            base = float(entry.get("entry_spot"))
+            age_min = (now - opened).total_seconds() / 60.0
+        except (TypeError, ValueError):
+            continue
+        direction = normalize_direction(entry.get("signal_direction") or setup_direction(entry.get("setup")))
+        for horizon in (5, 15, 30):
+            key = f"spot_outcome_{horizon}m_points"
+            if entry.get(key) is not None or age_min < horizon:
+                continue
+            raw_move = round(spot - base, 2)
+            directional = raw_move if direction == "BULLISH" else -raw_move if direction == "BEARISH" else abs(raw_move)
+            entry[key] = raw_move
+            entry[f"directional_outcome_{horizon}m_points"] = round(directional, 2)
+            entry[f"directional_outcome_{horizon}m_label"] = (
+                "FAVORED" if directional >= 5 else "ADVERSE" if directional <= -5 else "RANGE"
+            )
+            changed = True
+    return changed
+
+
+_CONCRETE_SETUPS = {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}
+
+
+def _selected_plan(snapshot: MarketSnapshot, action: str):
+    return {
         "CE BUY": snapshot.trade_plan.ce_buy,
         "PE BUY": snapshot.trade_plan.pe_buy,
         "CE SELL": snapshot.trade_plan.ce_sell,
         "PE SELL": snapshot.trade_plan.pe_sell,
         "IRON CONDOR": snapshot.trade_plan.iron_condor,
-    }.get(action)
-    if selected_plan is None or not selected_plan.available:
-        return False, "Protected paper plan is unavailable"
-    if simple:
-        if str(simple.get("final_action") or "WAIT") != action:
-            return False, str(simple.get("instruction") or "Simple Brain trigger pending")
-    else:
-        alignment_blocker = _entry_alignment_blocker(
-            setup=action, price_action=snapshot.price_action, levels=snapshot.levels,
-            volume=snapshot.volume, patterns=snapshot.patterns,
-        )
-        if alignment_blocker:
-            return False, alignment_blocker
-    if (
-        action in {"CE SELL", "PE SELL", "IRON CONDOR"}
-        and float(selected_plan.estimated_credit_points or 0.0)
-        < CONFIG.shadow_journal_min_sell_credit_points
-    ):
-        return False, (
-            "Protected credit below experimental journal minimum "
-            f"{CONFIG.shadow_journal_min_sell_credit_points:.1f} pts"
-        )
-    if snapshot.execution_guard.allowed_lots < 1:
-        return False, "One-lot defined risk exceeds configured paper risk budget"
-    now_time = snapshot.created_at.timetz().replace(tzinfo=None)
-    if not snapshot.risk_profile.entry_start <= now_time <= snapshot.risk_profile.entry_end:
-        return False, "Outside configured paper entry window"
-    for feed_name in ("quotes", "candles", "option_chain"):
-        feed = snapshot.feed_status.get(feed_name)
-        if feed is None or feed.use_state != "LIVE":
-            return False, f"{feed_name} is not confirmed live"
-    progression = snapshot.feed_status.get("price_progression")
-    if progression is not None and not progression.ok:
-        return False, "NIFTY price series is flatlined / not progressing"
-    ready_windows = sum(
-        item.status == "READY" for item in snapshot.option_intelligence.windows
+    }.get(str(action or "").upper())
+
+
+def _entry_lane(item: dict[str, Any]) -> str:
+    lane = str(item.get("validation_lane") or "").upper().strip()
+    if lane:
+        return lane
+    # Legacy shadow rows were One-Brain paper samples.
+    return "ONE BRAIN"
+
+
+def _lane_cap(lane: str) -> int:
+    return (
+        int(CONFIG.shadow_journal_max_mi_trades_per_day)
+        if lane == "MARKET INTELLIGENCE"
+        else int(CONFIG.shadow_journal_max_ob_trades_per_day)
     )
-    if snapshot.option_intelligence.status == "UNAVAILABLE" or ready_windows < 1:
-        return False, "Option flow unavailable"
-    if any(
-        str(item.get("status") or "").upper() == "OPEN"
-        and str(item.get("setup") or "").upper() == action
-        for item in today_entries
-    ):
-        return False, "Same strategy already open"
-    if today_entries:
+
+
+def _lane_rows(entries: list[dict[str, Any]], snapshot: MarketSnapshot, lane: str) -> list[dict[str, Any]]:
+    today = snapshot.created_at.date().isoformat()
+    return [
+        item for item in entries
+        if str(item.get("session_date") or "") == today and _entry_lane(item) == lane
+    ]
+
+
+def _cooldown_ready(rows: list[dict[str, Any]], snapshot: MarketSnapshot) -> tuple[bool, str]:
+    if not rows:
+        return True, "READY"
+    timestamps: list[datetime] = []
+    for item in rows:
         try:
-            latest = max(datetime.fromisoformat(str(item["opened_at"])) for item in today_entries)
-            if snapshot.created_at - latest < timedelta(minutes=CONFIG.shadow_journal_cooldown_minutes):
-                return False, "Shadow cooldown active"
-        except (KeyError, TypeError, ValueError):
-            pass
+            opened = datetime.fromisoformat(str(item.get("opened_at") or ""))
+            if opened.tzinfo is None and snapshot.created_at.tzinfo is not None:
+                opened = opened.replace(tzinfo=snapshot.created_at.tzinfo)
+            timestamps.append(opened)
+        except (TypeError, ValueError):
+            continue
+    if not timestamps:
+        return True, "READY"
+    elapsed = snapshot.created_at - max(timestamps)
+    minimum = timedelta(minutes=CONFIG.shadow_journal_research_cooldown_minutes)
+    if elapsed < minimum:
+        wait = max(0.0, (minimum - elapsed).total_seconds() / 60.0)
+        return False, f"Research cooldown active ({wait:.1f}m remaining)"
     return True, "READY"
 
 
-def _paper_snapshot(snapshot):
-    """Select a test candidate on a copy; never mutate the real AI/position."""
+def _one_brain_candidate(snapshot: MarketSnapshot) -> dict[str, Any] | None:
+    simple = snapshot.metadata.get("simple_brain") or {}
     common = snapshot.metadata.get("common_decision") or {}
-    action = str(common.get("final_action") or "WAIT")
-    if action not in {"CE BUY", "PE BUY", "CE SELL", "PE SELL", "IRON CONDOR"}:
-        return snapshot
+    if simple:
+        action = str(simple.get("final_action") or "WAIT").upper()
+        direction_strength = float(simple.get("direction_strength") or 0.0)
+        entry_readiness = float(simple.get("entry_readiness") or 0.0)
+        if action not in _CONCRETE_SETUPS:
+            return None
+        if direction_strength < CONFIG.simple_direction_min_strength:
+            return None
+        if entry_readiness < CONFIG.simple_entry_ready_score:
+            return None
+        return {
+            "source": "ONE BRAIN",
+            "trigger_type": "ONE BRAIN",
+            "trigger_state": str(simple.get("entry_state") or "ENTRY READY"),
+            "direction": setup_direction(action),
+            "setup": action,
+            "trigger_score": round(entry_readiness, 1),
+            "direction_strength": round(direction_strength, 1),
+            "reason": (
+                f"One Brain {action} · direction {direction_strength:.0f}/100 "
+                f"(floor {CONFIG.simple_direction_min_strength:.0f}) · entry {entry_readiness:.0f}/100 "
+                f"(floor {CONFIG.simple_entry_ready_score:.0f})"
+            ),
+        }
+
+    action = str(common.get("final_action") or "WAIT").upper()
+    if action not in _CONCRETE_SETUPS or not common.get("entry_allowed"):
+        return None
+    score = float(common.get("trade_confidence") or snapshot.decision.decision_confidence or 0.0)
+    return {
+        "source": "ONE BRAIN",
+        "trigger_type": "LEGACY COMMON",
+        "trigger_state": "ENTRY READY",
+        "direction": setup_direction(action),
+        "setup": action,
+        "trigger_score": round(score, 1),
+        "direction_strength": round(score, 1),
+        "reason": f"Common One-Brain gate allowed {action} · confidence {score:.0f}/100",
+    }
+
+
+def _research_paper_snapshot(snapshot: MarketSnapshot, candidate: dict[str, Any]) -> MarketSnapshot:
+    """Build a paper-only execution guard on a copy, independent of real day lock."""
+    action = str(candidate["setup"]).upper()
     plan = replace(snapshot.trade_plan, selected_setup=action)
+    paper_discipline = DisciplineState(
+        session_date=snapshot.created_at.date().isoformat(),
+        trades_taken=0,
+        day_locked=False,
+        last_outcome="RESEARCH",
+        last_action="",
+        signal_history=(),
+        status="READY",
+        trade_record=None,
+    )
+    research_simple = {
+        "candidate_action": action,
+        "final_action": action,
+        "entry_readiness": float(candidate.get("trigger_score") or 100.0),
+        "instruction": str(candidate.get("reason") or "Research paper trigger ready"),
+    }
     guard = calculate_execution_guard(
-        decision=snapshot.decision, trade_plan=plan, market_session=snapshot.market_session,
-        option_intelligence=snapshot.option_intelligence, price_action=snapshot.price_action,
-        risk_profile=snapshot.risk_profile, discipline_state=snapshot.discipline_state,
-        feed_status=snapshot.feed_status, as_of=snapshot.created_at,
+        decision=snapshot.decision,
+        trade_plan=plan,
+        market_session=snapshot.market_session,
+        option_intelligence=snapshot.option_intelligence,
+        price_action=snapshot.price_action,
+        risk_profile=snapshot.risk_profile,
+        discipline_state=paper_discipline,
+        feed_status=snapshot.feed_status,
+        as_of=snapshot.created_at,
         big_player=snapshot.big_player_activity,
         selected_setup_override=action,
         final_action_override=action,
-        simple_brain=snapshot.metadata.get("simple_brain") or None,
+        simple_brain=research_simple,
     )
     return replace(snapshot, trade_plan=plan, execution_guard=guard)
+
+
+def _research_eligible(
+    entries: list[dict[str, Any]],
+    snapshot: MarketSnapshot,
+    candidate: dict[str, Any] | None,
+    lane: str,
+) -> tuple[bool, str, MarketSnapshot | None]:
+    if candidate is None:
+        if lane == "MARKET INTELLIGENCE":
+            return False, "No MI Window/verified-pressure paper trigger", None
+        return False, "One Brain thresholds / final action not ready", None
+    if not snapshot.market_session.is_live:
+        return False, "Market is not live", None
+    rows = _lane_rows(entries, snapshot, lane)
+    cap = _lane_cap(lane)
+    if len(rows) >= cap:
+        return False, f"{lane} daily paper cap {cap} reached", None
+    cooldown_ok, cooldown_reason = _cooldown_ready(rows, snapshot)
+    if not cooldown_ok:
+        return False, cooldown_reason, None
+    action = str(candidate.get("setup") or "").upper()
+    if action not in _CONCRETE_SETUPS:
+        return False, "No concrete protected setup", None
+    selected_plan = _selected_plan(snapshot, action)
+    if selected_plan is None or not selected_plan.available:
+        return False, f"{action} protected plan unavailable", None
+    paper_snapshot = _research_paper_snapshot(snapshot, candidate)
+    if paper_snapshot.execution_guard.readiness != "ENTRY READY":
+        blockers = paper_snapshot.execution_guard.blockers or ("Research execution guard not ready",)
+        return False, str(blockers[0]), paper_snapshot
+    if paper_snapshot.execution_guard.allowed_lots < 1:
+        return False, "One-lot defined risk exceeds configured paper budget", paper_snapshot
+    return True, "READY", paper_snapshot
+
+
+def _score_band(value: float) -> str:
+    if value < 50:
+        return "<50"
+    if value < 55:
+        return "50–54"
+    if value < 60:
+        return "55–59"
+    if value < 70:
+        return "60–69"
+    return "70+"
+
+
+def _make_research_record(
+    snapshot: MarketSnapshot,
+    paper_snapshot: MarketSnapshot,
+    candidate: dict[str, Any],
+    *,
+    lane: str,
+    sequence: int,
+    alignment_state: str,
+) -> dict[str, Any]:
+    action = str(candidate["setup"]).upper()
+    record = create_trade_record(
+        captured_at=paper_snapshot.created_at,
+        decision=paper_snapshot.decision,
+        trade_plan=paper_snapshot.trade_plan,
+        execution_guard=paper_snapshot.execution_guard,
+        lots=1,
+        lot_size=paper_snapshot.risk_profile.lot_size,
+        spot=paper_snapshot.levels.current_price,
+        # The research lane intentionally tests a signal independently from the real
+        # one-trade/day discipline, but the paper guard above must still be ENTRY READY.
+        allow_paper_candidate=True,
+    )
+    context = freeze_market_context(snapshot)
+    plan = _selected_plan(paper_snapshot, action)
+    trigger_score = float(candidate.get("trigger_score") or 0.0)
+    prefix = "OB" if lane == "ONE BRAIN" else "MI"
+    entry_reasons = [str(candidate.get("reason") or "Research paper trigger")]
+    if plan is not None:
+        entry_reasons.extend(str(x) for x in (plan.reasons or ())[:3])
+    if lane == "ONE BRAIN":
+        entry_reasons.extend(str(x) for x in snapshot.decision.reasons[:2])
+    else:
+        mie = snapshot.metadata.get("market_intelligence") or {}
+        entry_reasons.extend(str(x) for x in (mie.get("reasons") or [])[:2])
+
+    record.update(
+        {
+            "journal_type": "RESEARCH VALIDATION",
+            "validation_lane": lane,
+            "signal_source": lane,
+            "trigger_type": str(candidate.get("trigger_type") or lane),
+            "trigger_state": str(candidate.get("trigger_state") or ""),
+            "trigger_score": round(trigger_score, 1),
+            "signal_direction": normalize_direction(candidate.get("direction") or setup_direction(action)),
+            "alignment_state": alignment_state,
+            "real_ai_action": str((snapshot.metadata.get("simple_brain") or {}).get("final_action") or snapshot.decision.final_action),
+            "qualification": (
+                "ONE BRAIN VALIDATION"
+                if lane == "ONE BRAIN"
+                else f"MI {str(candidate.get('trigger_type') or 'RESEARCH')} VALIDATION"
+            ),
+            "counts_for_ai_accuracy": lane == "ONE BRAIN",
+            "candidate_warning": "None",
+            "trade_id": f"SH-{prefix}-{snapshot.created_at:%Y%m%d-%H%M%S}-{sequence}",
+            "session_date": snapshot.created_at.date().isoformat(),
+            "setup": action,
+            "action": action,
+            "decision_confidence": round(
+                float(candidate.get("direction_strength") or trigger_score or snapshot.decision.decision_confidence), 1
+            ),
+            "strategy_score": round(_strategy_score(snapshot, action), 1),
+            "score_band": _score_band(trigger_score),
+            "big_player_direction": snapshot.big_player_activity.direction,
+            "big_player_score": snapshot.big_player_activity.score,
+            "big_player_confirmations": snapshot.big_player_activity.confirmation_count,
+            "oi_basis": snapshot.option_intelligence.basis,
+            "oi_bias": snapshot.option_intelligence.market_bias,
+            "oi_confidence": snapshot.option_intelligence.confidence,
+            "oi_persistence": snapshot.option_intelligence.persistence,
+            "entry_reasons": list(dict.fromkeys(x for x in entry_reasons if x))[:8],
+            "entry_context": context,
+            "ob_direction_floor": CONFIG.simple_direction_min_strength,
+            "ob_entry_ready_floor": CONFIG.simple_entry_ready_score,
+            "paper_trade_cap_lane": _lane_cap(lane),
+            "paper_trade_cooldown_minutes": CONFIG.shadow_journal_research_cooldown_minutes,
+            "sample_note": "Paper validation sample; overlapping signals are correlated and are not independent statistical trials",
+            "mfe_rupees": 0.0,
+            "mae_rupees": 0.0,
+            "last_pnl_rupees": 0.0,
+            "spot_outcome_5m_points": None,
+            "spot_outcome_15m_points": None,
+            "spot_outcome_30m_points": None,
+        }
+    )
+    return record
 
 
 def process_auto_shadow_journal(
@@ -412,76 +676,65 @@ def process_auto_shadow_journal(
     *,
     enabled: bool,
 ) -> list[dict[str, Any]]:
+    """Observe/score two independent paper lanes without touching core decisions.
+
+    ONE BRAIN lane: concrete Simple-Brain final action, direction >=54 and entry
+    readiness >=62 (current config values), then the existing protected-plan/risk/data
+    guard must be ENTRY READY.
+
+    MARKET INTELLIGENCE lane: Institutional Window OPEN/STRONG 6/6 with live-data
+    safety, or VERIFIED/REALIZED pressure with barrier/attack support.  The lane maps
+    BULLISH -> PE SELL and BEARISH -> CE SELL, reusing the already-built protected
+    plans. Liquidity Magnet is context only and never creates a trade by itself.
+    """
     entries = store.load(refresh_cloud=False)
     if store.local_read_failed:
         return entries
+
     changed, cloud_changed = _close_open_entries(entries, snapshot)
-    snapshot = _paper_snapshot(snapshot)
-    eligible, reason = _eligible(entries, snapshot)
-    store.record_check(snapshot, reason if enabled else "Auto paper journal OFF")
-    if enabled and eligible:
-        record = create_trade_record(
-            captured_at=snapshot.created_at,
-            decision=snapshot.decision,
-            trade_plan=snapshot.trade_plan,
-            execution_guard=snapshot.execution_guard,
-            lots=1,
-            lot_size=snapshot.risk_profile.lot_size,
-            spot=snapshot.levels.current_price,
-            allow_paper_candidate=(
-                snapshot.execution_guard.readiness != "ENTRY READY"
-            ),
-        )
-        action = snapshot.trade_plan.selected_setup
-        simple = snapshot.metadata.get("simple_brain") or {}
-        alignment_warning = None if simple else _entry_alignment_blocker(
-            setup=action, price_action=snapshot.price_action, levels=snapshot.levels,
-            volume=snapshot.volume, patterns=snapshot.patterns,
-        )
-        qualified = bool(
-            (float(simple.get("direction_strength") or snapshot.decision.decision_confidence) >= 60)
-            and (float(simple.get("entry_readiness") or _strategy_score(snapshot, action)) >= 60)
-            and not alignment_warning
-            and snapshot.option_intelligence.status != "UNAVAILABLE"
-        )
-        record.update(
-            {
-                "journal_type": "AUTO SHADOW",
-                "real_ai_action": snapshot.decision.final_action,
-                "qualification": (
-                    "QUALIFIED SIMPLE-BRAIN PAPER"
-                    if qualified
-                    else "EXPERIMENTAL SIMPLE-BRAIN"
-                ),
-                "counts_for_ai_accuracy": qualified,
-                "candidate_warning": alignment_warning or "None",
-                "trade_id": f"SH-{snapshot.created_at:%Y%m%d-%H%M%S}-{len(entries)+1}",
-                "session_date": snapshot.created_at.date().isoformat(),
-                "setup": action,
-                "action": action,
-                "decision_confidence": snapshot.decision.decision_confidence,
-                "strategy_score": _strategy_score(snapshot, action),
-                "score_band": "45–49" if _strategy_score(snapshot, action) < 50 else "50–54" if _strategy_score(snapshot, action) < 55 else "55–59" if _strategy_score(snapshot, action) < 60 else "60+",
-                "big_player_direction": snapshot.big_player_activity.direction,
-                "big_player_score": snapshot.big_player_activity.score,
-                "big_player_confirmations": snapshot.big_player_activity.confirmation_count,
-                "oi_basis": snapshot.option_intelligence.basis,
-                "oi_bias": snapshot.option_intelligence.market_bias,
-                "oi_confidence": snapshot.option_intelligence.confidence,
-                "oi_persistence": snapshot.option_intelligence.persistence,
-                "entry_reasons": list(snapshot.decision.reasons)
-                + list(snapshot.big_player_activity.reasons)
-                + list(snapshot.option_intelligence.reasons),
-                "mfe_rupees": 0.0,
-                "mae_rupees": 0.0,
-                "last_pnl_rupees": 0.0,
-            }
-        )
-        entries.append(record)
+    if _backfill_trade_spot_outcomes(entries, snapshot):
         changed = True
-        cloud_changed = True
+
+    ob_candidate = _one_brain_candidate(snapshot)
+    mi_candidate = market_intelligence_candidate(snapshot)
+    ob_ok, ob_reason, ob_snapshot = _research_eligible(
+        entries, snapshot, ob_candidate, "ONE BRAIN"
+    )
+    mi_ok, mi_reason, mi_snapshot = _research_eligible(
+        entries, snapshot, mi_candidate, "MARKET INTELLIGENCE"
+    )
+
+    active_ob_direction = ob_candidate.get("direction") if ob_candidate else "MIXED"
+    active_mi_direction = mi_candidate.get("direction") if mi_candidate else "MIXED"
+    alignment_state = classify_alignment(active_ob_direction, active_mi_direction)
+    status_reason = f"OB: {ob_reason} | MI: {mi_reason}"
+    store.record_check(snapshot, status_reason if enabled else f"Auto paper trades OFF | {status_reason}")
+
+    if enabled:
+        candidates = (
+            ("ONE BRAIN", ob_candidate, ob_ok, ob_snapshot),
+            ("MARKET INTELLIGENCE", mi_candidate, mi_ok, mi_snapshot),
+        )
+        for lane, candidate, eligible, paper_snapshot in candidates:
+            if not eligible or candidate is None or paper_snapshot is None:
+                continue
+            try:
+                record = _make_research_record(
+                    snapshot,
+                    paper_snapshot,
+                    candidate,
+                    lane=lane,
+                    sequence=len(entries) + 1,
+                    alignment_state=alignment_state,
+                )
+                entries.append(record)
+                changed = True
+                cloud_changed = True
+            except (ValueError, TypeError) as exc:
+                store.last_error = f"{lane} paper record failed: {type(exc).__name__}: {exc}"[:240]
+
     if changed:
-        # Intraday mark-to-market remains local to avoid a GitHub commit every
-        # refresh. New and closed paper trades are mirrored to cloud.
+        # Mark-to-market/outcome backfills remain local between actual trade state
+        # changes. New/closed paper rows keep the existing durability sync behavior.
         store.save(entries, sync_cloud=cloud_changed)
     return entries

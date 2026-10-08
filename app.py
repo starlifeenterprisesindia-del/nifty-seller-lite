@@ -700,11 +700,16 @@ with st.sidebar:
     else:
         st.error("Dhan credentials missing")
     shadow_journal_enabled = _persistent_toggle(
-        "Auto Shadow Journal ON",
+        "Auto Paper Trades ON",
         "auto_shadow_journal_enabled",
         default=True,
-        help="Maximum 5 paper trades/day; no broker orders.",
+        help=(
+            "Decision Journal live WAIT/READY/ENTRY observations ko 09:15–15:00 automatically "
+            "record karta hai. Yeh toggle One Brain aur Market Intelligence ke research paper trades "
+            "enable/disable karta hai; koi broker order nahi hota."
+        ),
     )
+    st.caption("Decision Journal: AUTO · 09:15–15:00 · Paper lanes: One Brain + Market Intelligence")
 
     # Snapshot controls use durable state keys. Auto refresh is built inside a
     # fragment, so the main workspace remains mounted while processing happens.
@@ -1726,7 +1731,7 @@ with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") a
                     record_trade=discipline_store.mark_trade,
                 )
 
-        with persistent_panel("🧪 Auto Shadow Journal", "panel_shadow_journal_open") as panel_open:
+        with persistent_panel("🧪 Decision + Paper Journal", "panel_shadow_journal_open") as panel_open:
             if panel_open:
                 render_shadow_journal_status(shadow_entries, shadow_journal_store, view_snapshot)
                 render_auto_shadow_journal(

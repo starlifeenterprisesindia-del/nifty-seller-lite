@@ -39,6 +39,23 @@ def _decision_rows(store=None) -> list[dict[str, Any]]:
     return sorted(merged.values(), key=lambda row: str(row.get("at") or ""))
 
 
+def _lane(item: dict[str, Any]) -> str:
+    return str(item.get("validation_lane") or "ONE BRAIN").upper()
+
+
+def _lane_stats(rows: list[dict[str, Any]], lane: str) -> dict[str, Any]:
+    lane_rows = [x for x in rows if _lane(x) == lane]
+    closed = [x for x in lane_rows if str(x.get("status") or "").upper() == "CLOSED"]
+    opened = [x for x in lane_rows if str(x.get("status") or "").upper() == "OPEN"]
+    wins = sum(float(x.get("net_pnl_rupees") or 0.0) > 0 for x in closed)
+    losses = sum(float(x.get("net_pnl_rupees") or 0.0) < 0 for x in closed)
+    net = sum(float(x.get("net_pnl_rupees") or 0.0) for x in closed)
+    return {
+        "total": len(lane_rows), "closed": len(closed), "open": len(opened),
+        "wins": wins, "losses": losses, "net": net,
+    }
+
+
 def render_shadow_journal_status(entries: list[dict[str, Any]], store=None, snapshot=None) -> None:
     decisions = _decision_rows(store)
     report = st.session_state.get("day_memory_report") or {}
@@ -47,28 +64,37 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None, snap
     journal_error = str(st.session_state.get("day_memory_error") or "")
     sample_age = report.get("last_sample_age_seconds") if isinstance(report, dict) else None
     persistent_rows = int(coverage.get("app_decision_rows") or 0)
-    if journal_error and not report:
+    snapshot_day = str(getattr(getattr(snapshot, "created_at", None), "date", lambda: "")()) if snapshot is not None else ""
+    local_today_count = sum(1 for row in decisions if str(row.get("session_date") or "") == snapshot_day)
+    if journal_error and not report and not local_today_count:
         feed_label, feed_kind = "WARMING / RETRY", "warning"
     elif not market_live:
         feed_label, feed_kind = "REFERENCE — SESSION CLOSED", "info"
     elif sample_age is not None and float(sample_age) <= 180:
         feed_label, feed_kind = "LIVE / RECENT", "success"
+    elif local_today_count and not report:
+        feed_label, feed_kind = "LOCAL RECORDING · RAILWAY WARMING", "success"
     elif report:
         feed_label, feed_kind = "STALE / GAP", "warning"
     else:
         feed_label, feed_kind = "WARMING UP", "info"
+
     today = (
-        str(getattr(store, "last_checked", ""))[:10]
+        snapshot_day[:10]
+        or str(getattr(store, "last_checked", ""))[:10]
         or str(report.get("day") or "")[:10]
         or (str(decisions[-1].get("session_date") or "") if decisions else "")
     )
     current = [item for item in entries if str(item.get("session_date")) == today]
+    ob = _lane_stats(current, "ONE BRAIN")
+    mi = _lane_stats(current, "MARKET INTELLIGENCE")
     open_items = [item for item in current if str(item.get("status")).upper() == "OPEN"]
+
     with st.container(border=True):
-        st.markdown("**🧪 Auto Shadow Journal**")
+        st.markdown("**🧪 AI Validation Journal — Decisions + Paper Trades**")
         health_text = (
-            f"Journal Feed: **{feed_label}** · Railway decisions {persistent_rows} · "
-            f"last sample age {'—' if sample_age is None else f'{float(sample_age):.0f}s'}"
+            f"Journal Feed: **{feed_label}** · local decisions {len([row for row in decisions if str(row.get('session_date')) == today])} · "
+            f"Railway decisions {persistent_rows} · last sample age {'—' if sample_age is None else f'{float(sample_age):.0f}s'}"
         )
         if feed_kind == "success":
             st.success(health_text)
@@ -82,10 +108,16 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None, snap
         ]
         cols = st.columns(5)
         cols[0].metric("Live decisions", len(today_decisions))
-        cols[1].metric("Paper trades", len(current))
-        cols[2].metric("Open paper", len(open_items))
-        cols[3].metric("Direction floor", f"{CONFIG.simple_direction_min_strength:.0f}%")
-        cols[4].metric("Entry ready", f"{CONFIG.simple_entry_ready_score:.0f}%")
+        cols[1].metric("OB paper", ob["total"])
+        cols[2].metric("MI paper", mi["total"])
+        cols[3].metric("Open paper", len(open_items))
+        cols[4].metric("OB floors", f"{CONFIG.simple_direction_min_strength:.0f}/{CONFIG.simple_entry_ready_score:.0f}")
+        st.caption(
+            f"Paper caps: One Brain {CONFIG.shadow_journal_max_ob_trades_per_day}/day · "
+            f"Market Intelligence {CONFIG.shadow_journal_max_mi_trades_per_day}/day · "
+            f"research cooldown {CONFIG.shadow_journal_research_cooldown_minutes}m. "
+            "MI uses existing snapshots/protected plans; no broker order is placed."
+        )
         if coverage.get("app_session_status"):
             st.caption(
                 f"Railway journal: {coverage.get('app_session_status')} · "
@@ -96,11 +128,11 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None, snap
 
 
 def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
-    st.subheader("🧪 Auto Journal — Decisions + Paper Trades")
+    st.subheader("🧪 AI Validation Journal — One Brain + Market Intelligence")
     st.caption(
-        "v2.48 Simple One-Brain har meaningful WAIT/READY/ENTRY decision record karta hai. "
-        "Paper P&L sirf actual gate-passed protected setups ka hota hai; decision journal "
-        "5m/15m/30m baad missed-move outcome bhi backfill karta hai. Koi broker order nahi."
+        "Decision Journal 09:15–15:00 WAIT/READY/ENTRY evidence record karta hai. Executable paper trades configured "
+        "entry window me separate One Brain aur Market Intelligence lanes me bante hain. MI Window OPEN/STRONG 6/6 "
+        "ya verified/realized pressure + attack support trigger ho sakta hai; Liquidity Magnet akela trade nahi banata."
     )
     if store is not None:
         decisions = _decision_rows(store)
@@ -111,65 +143,74 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
         latest_time = latest_at[11:19] if len(latest_at) >= 19 else (latest_at or "—")
         persistent_rows = int(coverage.get("app_decision_rows") or 0)
         st.caption(
-            f"Decision Journal: {'RECORDED' if today_decisions else 'NO ROWS'} · "
-            f"today {len(today_decisions)} · Railway persistent {persistent_rows} · latest {latest_time}"
+            f"Decision Journal: {'RECORDED' if today_decisions else 'NO ROWS'} · today {len(today_decisions)} · "
+            f"Railway persistent {persistent_rows} · latest {latest_time}"
         )
-        if entries:
-            st.caption(
-                f"Paper Trade Journal: {len([x for x in entries if str(x.get('session_date')) == session_date])} "
-                "gate-passed simulation(s)."
-            )
-        else:
-            st.caption("Paper Trade Journal: 0 gate-passed trades — WAIT/READY decisions are still recorded above.")
         if store.last_error:
             st.warning(store.last_error)
         else:
-            st.caption("Decision history and paper-trade history are separate; neither places broker orders.")
-        # WAIT/READY reasons now live in the single Decision Journal below.
-        decisions = _decision_rows(store)
-        with st.expander("Decision Journal — WAIT bhi record hota hai", expanded=True):
-            today_decisions = [row for row in decisions if str(row.get("session_date")) == session_date]
+            st.caption("Decision rows, One Brain paper trades and MI paper trades are validation records only; none places broker orders.")
+        with st.expander("Decision Journal — WAIT + Intelligence context", expanded=False):
             if today_decisions:
-                st.dataframe(pd.DataFrame(today_decisions[-120:]), width="stretch", hide_index=True)
+                st.dataframe(pd.DataFrame(today_decisions[-180:]), width="stretch", hide_index=True)
             else:
                 st.info(
-                    "Is date par live app-decision record nahi mila. Agar app/token market hours me active "
-                    "nahi tha to yeh expected hai; missing session ko trading bug nahi maana jayega."
+                    "Is date par Decision Journal row nahi mili. Live market me 09:15–15:00 ke beech fresh snapshots "
+                    "aane chahiye; Diagnostics me exact blocker check karo."
                 )
-    dates = sorted({session_date, *(str(x.get("session_date")) for x in entries)}, reverse=True)
+
+    dates = sorted({session_date, *(str(x.get("session_date")) for x in entries if x.get("session_date"))}, reverse=True)
     selected_date = st.selectbox("Journal date", dates, key="shadow_history_date")
     today = [item for item in entries if str(item.get("session_date")) == selected_date]
-    qualified = [item for item in today if bool(item.get("counts_for_ai_accuracy"))]
-    experimental = [item for item in today if not bool(item.get("counts_for_ai_accuracy"))]
-    closed = [item for item in qualified if str(item.get("status")).upper() == "CLOSED"]
-    open_items = [item for item in today if str(item.get("status")).upper() == "OPEN"]
-    net = sum(float(item.get("net_pnl_rupees") or 0.0) for item in closed)
-    wins = sum(float(item.get("net_pnl_rupees") or 0.0) > 0 for item in closed)
+    ob = _lane_stats(today, "ONE BRAIN")
+    mi = _lane_stats(today, "MARKET INTELLIGENCE")
+    aligned = [x for x in today if str(x.get("alignment_state") or "").upper() == "ALIGNED"]
+    conflict = [x for x in today if str(x.get("alignment_state") or "").upper() == "CONFLICT"]
+    aligned_closed = [x for x in aligned if str(x.get("status") or "").upper() == "CLOSED"]
+    aligned_net = sum(float(x.get("net_pnl_rupees") or 0.0) for x in aligned_closed)
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Qualified / Experimental", f"{len(qualified)} / {len(experimental)}")
-    c2.metric("Open", len(open_items))
-    c3.metric("Closed", len(closed))
-    c4.metric("Wins", wins)
-    c5.metric("Qualified Net P&L", f"₹{net:,.0f}")
+    c1.metric("One Brain", f"{ob['total']} ({ob['wins']}W/{ob['losses']}L)")
+    c2.metric("OB est. Net", f"₹{ob['net']:,.0f}")
+    c3.metric("Market Intelligence", f"{mi['total']} ({mi['wins']}W/{mi['losses']}L)")
+    c4.metric("MI est. Net", f"₹{mi['net']:,.0f}")
+    c5.metric("Aligned / Conflict", f"{len(aligned)} / {len(conflict)}")
+    if aligned_closed:
+        st.caption(f"Aligned closed samples: {len(aligned_closed)} · estimated net ₹{aligned_net:,.0f}.")
 
-    all_closed = [item for item in entries if str(item.get("status")).upper() == "CLOSED"]
-    if len(all_closed) >= 20:
-        wins_all = sum(float(item.get("net_pnl_rupees") or 0.0) > 0 for item in all_closed)
-        avg_net = sum(float(item.get("net_pnl_rupees") or 0.0) for item in all_closed) / len(all_closed)
-        st.info(
-            f"Recorded calibration ({len(all_closed)} closed paper samples): "
-            f"win rate {wins_all / len(all_closed) * 100:.1f}% · average net ₹{avg_net:,.0f}. "
-            "Yeh historical paper result hai, future profit guarantee nahi."
-        )
-    else:
-        st.caption(f"Historical success rate: insufficient samples ({len(all_closed)}/20 closed paper trades).")
+    with st.expander("Research trigger breakdown", expanded=False):
+        breakdown = []
+        for trigger in ("ONE BRAIN", "INSTITUTIONAL WINDOW", "PRESSURE INTEGRITY"):
+            subset = [x for x in today if str(x.get("trigger_type") or "").upper() == trigger]
+            closed_subset = [x for x in subset if str(x.get("status") or "").upper() == "CLOSED"]
+            wins_subset = sum(float(x.get("net_pnl_rupees") or 0.0) > 0 for x in closed_subset)
+            losses_subset = sum(float(x.get("net_pnl_rupees") or 0.0) < 0 for x in closed_subset)
+            net_subset = sum(float(x.get("net_pnl_rupees") or 0.0) for x in closed_subset)
+            breakdown.append({
+                "Trigger": trigger, "Samples": len(subset), "Closed": len(closed_subset),
+                "Wins": wins_subset, "Losses": losses_subset, "Est. Net ₹": round(net_subset, 2),
+            })
+        st.dataframe(pd.DataFrame(breakdown), width="stretch", hide_index=True)
+
+    # Never mix lanes when showing historical performance.
+    for lane, label in (("ONE BRAIN", "One Brain"), ("MARKET INTELLIGENCE", "Market Intelligence")):
+        lane_closed = [
+            x for x in entries
+            if _lane(x) == lane and str(x.get("status") or "").upper() == "CLOSED"
+        ]
+        if len(lane_closed) >= 20:
+            wins = sum(float(x.get("net_pnl_rupees") or 0.0) > 0 for x in lane_closed)
+            avg_net = sum(float(x.get("net_pnl_rupees") or 0.0) for x in lane_closed) / len(lane_closed)
+            st.info(
+                f"{label} calibration ({len(lane_closed)} closed paper samples): win rate "
+                f"{wins / len(lane_closed) * 100:.1f}% · average estimated net ₹{avg_net:,.0f}. "
+                "Overlapping samples correlated ho sakte hain; future result guarantee nahi."
+            )
+        else:
+            st.caption(f"{label} calibration: insufficient samples ({len(lane_closed)}/20 closed).")
 
     if not today:
-        st.info(
-            "Aaj abhi koi Simple One-Brain gate-passed paper trade record nahi hua. "
-            "WAIT/READY decisions upar Decision Journal me phir bhi record hote hain."
-        )
+        st.info("Is date par abhi koi executable paper-validation trade record nahi hua; Decision Journal phir bhi upar record ho sakta hai.")
         return
 
     rows = []
@@ -178,56 +219,76 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
         rows.append(
             {
                 "Time": opened[11:19] if len(opened) >= 19 else opened,
+                "Source": _lane(item),
+                "Trigger": item.get("trigger_type") or "LEGACY",
+                "State": item.get("trigger_state") or "—",
+                "Direction": item.get("signal_direction") or "—",
                 "Strategy": item.get("setup"),
-                "Confidence": item.get("decision_confidence"),
-                "Strategy score": item.get("strategy_score"),
-                "Score band": item.get("score_band", "LEGACY"),
-                "Qualification": item.get("qualification") or "LEGACY",
-                "Exact blocker/warning": item.get("candidate_warning") or "—",
-                "OI bias": item.get("oi_bias"),
-                "Big Player": f"{item.get('big_player_direction')} {float(item.get('big_player_score') or 0):.0f}",
+                "Score": item.get("trigger_score") or item.get("decision_confidence"),
+                "Alignment": item.get("alignment_state") or "—",
                 "Status": item.get("status"),
                 "Outcome": item.get("outcome") or "MONITORING",
                 "MFE ₹": item.get("mfe_rupees"),
                 "MAE ₹": item.get("mae_rupees"),
-                "Net P&L ₹": item.get("net_pnl_rupees"),
+                "Est. Net ₹": item.get("net_pnl_rupees"),
+                "Why result": item.get("diagnosis_summary") or "Monitoring",
             }
         )
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
+    items = list(reversed(today))
     labels = [
-        f"{str(item.get('opened_at') or '')[11:19]} · {item.get('setup')} · {item.get('trade_id')}"
-        for item in reversed(today)
+        f"{str(item.get('opened_at') or '')[11:19]} · {_lane(item)} · {item.get('setup')} · {item.get('trade_id')}"
+        for item in items
     ]
-    selected = st.selectbox("Trade ka complete reason", labels, key="shadow_trade_detail")
-    selected_item = list(reversed(today))[labels.index(selected)]
+    selected = st.selectbox("Trade ka complete audit", labels, key="shadow_trade_detail")
+    selected_item = items[labels.index(selected)]
     st.write("**Kyun liya:**")
     for reason in selected_item.get("entry_reasons") or ("Reason unavailable",):
         st.write(f"• {reason}")
+    if selected_item.get("diagnosis_summary"):
+        st.write("**Result / likely reason:**")
+        st.write(selected_item.get("diagnosis_summary"))
+        for reason in selected_item.get("diagnosis_factors") or ():
+            st.write(f"• {reason}")
+        st.caption(selected_item.get("diagnosis_basis") or "")
+    outcome_cols = st.columns(3)
+    outcome_cols[0].metric("5m directional", selected_item.get("directional_outcome_5m_points") if selected_item.get("directional_outcome_5m_points") is not None else "—")
+    outcome_cols[1].metric("15m directional", selected_item.get("directional_outcome_15m_points") if selected_item.get("directional_outcome_15m_points") is not None else "—")
+    outcome_cols[2].metric("30m directional", selected_item.get("directional_outcome_30m_points") if selected_item.get("directional_outcome_30m_points") is not None else "—")
     if selected_item.get("legs"):
         st.dataframe(pd.DataFrame(selected_item["legs"]), width="stretch", hide_index=True)
-
-    # Downloads live in the single Checks & Downloads Centre.
+    with st.expander("Entry evidence snapshot", expanded=False):
+        context = selected_item.get("entry_context") or {}
+        if context:
+            st.json(context)
+        else:
+            st.caption("Legacy row — compact entry intelligence context unavailable.")
 
 
 def render_shadow_journal_download(entries: list[dict[str, Any]], session_date: str, store=None) -> None:
-    """Download one useful journal even when no paper trade was approved."""
+    """Expose decision and paper-validation records separately for post-market review."""
     decisions = _decision_rows(store)
     decision_rows = [row for row in decisions if str(row.get("session_date")) == session_date]
-    if decision_rows:
+    paper_rows = [item for item in entries if str(item.get("session_date")) == session_date]
+    c1, c2 = st.columns(2)
+    with c1:
         csv = pd.DataFrame(decision_rows).to_csv(index=False).encode("utf-8")
-        label = "Download Decision Journal CSV"
-        filename = f"nifty_decision_journal_{session_date}.csv"
-    else:
-        rows = [item for item in entries if str(item.get("session_date")) == session_date]
-        csv = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
-        label = "Download Shadow Journal CSV"
-        filename = f"auto_shadow_journal_{session_date}.csv"
-    st.download_button(
-        label,
-        data=csv,
-        file_name=filename,
-        mime="text/csv",
-        width="stretch",
-    )
-
+        st.download_button(
+            "Download Decision Journal CSV",
+            data=csv,
+            file_name=f"nifty_decision_journal_{session_date}.csv",
+            mime="text/csv",
+            width="stretch",
+            disabled=not bool(decision_rows),
+        )
+    with c2:
+        csv = pd.DataFrame(paper_rows).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download AI Paper Validation CSV",
+            data=csv,
+            file_name=f"ai_paper_validation_{session_date}.csv",
+            mime="text/csv",
+            width="stretch",
+            disabled=not bool(paper_rows),
+        )

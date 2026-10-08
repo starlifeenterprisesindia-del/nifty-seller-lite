@@ -1,10 +1,23 @@
-# Nifty Seller Lite 2.73 — Liquidity Magnet + Smart Entry Advisor
+# Nifty Seller Lite 2.74 — Research Journal Validation Engine
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
+
+## 2.74 highlights
+
+- **Two independent paper-validation lanes:** One Brain and Market Intelligence are now recorded separately, so their results are never mixed.
+- **One Brain paper trigger:** concrete One-Brain action + direction strength at least 54/100 + entry readiness at least 62/100, followed by the existing protected-plan/live-data/risk guard.
+- **Market Intelligence paper trigger:** Institutional Window `OPEN/STRONG` with 6/6 gates and data safety, or Pressure Integrity `VERIFIED/REALIZED` with active barrier/attack support. `BULLISH → PE SELL`, `BEARISH → CE SELL` for seller-side research.
+- **Higher research capacity:** up to 25 paper samples/day per lane with a 5-minute research cooldown. Samples can overlap and are explicitly labelled as correlated research observations.
+- **Liquidity Magnet remains evidence, not a standalone trigger:** it is frozen at entry and used for aligned/conflict review without creating a trade by itself.
+- **Entry-time evidence freeze:** every paper trade stores Pressure Integrity, Institutional Window, Liquidity Magnet, barrier/attack state, One-Brain state and alignment context.
+- **Outcome attribution:** closed paper trades store gross P&L, estimated charges/net P&L, MFE/MAE, duration, 5m/15m/30m directional outcomes and evidence-based `likely` profit/loss factors.
+- **Aligned/conflict analysis:** when One Brain and MI are simultaneously active, each lane records whether they were aligned or in conflict for later comparison.
+- **Journal durability hardening:** Decision Journal read-update-write is atomic; Railway paper persistence accepts later 5m/15m/30m backfills without allowing a stale OPEN payload to reopen a closed trade.
+- **Zero new broker/API calls and zero changes to One Brain/MI calculations.**
 
 ## 2.73 highlights
 

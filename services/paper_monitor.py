@@ -21,8 +21,23 @@ class PaperMonitor:
                 key = entry["trade_id"]
                 if key not in existing:
                     existing[key] = dict(entry)
-                elif existing[key].get("status") != "CLOSED" and entry.get("status") == "CLOSED":
-                    existing[key] = dict(entry)
+                    continue
+                current = existing[key]
+                current_closed = str(current.get("status") or "").upper() == "CLOSED"
+                incoming_closed = str(entry.get("status") or "").upper() == "CLOSED"
+                # Never let a stale OPEN payload reopen a server-closed paper trade.
+                if current_closed and not incoming_closed:
+                    continue
+                # Merge fresh mark-to-market/outcome/diagnostic fields so 5m/15m/30m
+                # validation backfills survive a Streamlit restart.  Incoming CLOSED
+                # state wins over OPEN; both-closed rows can receive later horizons.
+                merged = dict(current)
+                for field, value in entry.items():
+                    if value is not None and value != "":
+                        merged[field] = value
+                    elif field not in merged:
+                        merged[field] = value
+                existing[key] = merged
             data["entries"] = list(existing.values())[-500:]
             self.store._write_local(data)
             return data["entries"]

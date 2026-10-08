@@ -1,0 +1,45 @@
+Nifty Seller Lite v2.74.0 — Build Validation
+
+AUTOMATED TESTS: 37/37 PASS (PYTHONPATH=. pytest -q)
+FULL PYTHON COMPILE: PASS
+NEW DHAN/BROKER CALLS: 0
+RESEARCH CAPS: One Brain 25/day; Market Intelligence 25/day; cooldown 5m/lane
+ONE BRAIN RESEARCH FLOOR: direction >=54; entry readiness >=62; protected-plan/live-data/risk guard still required
+MI RESEARCH: Window OPEN/STRONG 6/6 + data safety OR Pressure VERIFIED/REALIZED + attack/barrier support
+LIQUIDITY MAGNET: context only; cannot create a trade
+
+PROTECTED FILE SHA256 COMPARISON VS v2.73.1:
+PASS UNCHANGED  analysis/decision.py  3351c168983a72d33b67f7c65abfdcb00d18dafb641a9d70f453840778c5af43
+PASS UNCHANGED  analysis/simple_brain.py  3df728cc300521d317d220bf7b2cfffcbb888da2a4ab4c6873625118743eb5d2
+PASS UNCHANGED  analysis/future_brain.py  67ed85ba7cf25b84abd32f81823f161c4235ccfb9a7dd74e9e3db653aa282991
+PASS UNCHANGED  analysis/execution_guard.py  59fbe8237b69ae3fb921782cdd4da1424b91b5253af4d81f53e0ea83aa131ac6
+PASS UNCHANGED  analysis/trade_plan.py  8d625733617e981f4c9f979a849d5677e8f514185362b128281c41fa441d6127
+PASS UNCHANGED  analysis/position_guardian.py  188a1653da5e94aaf23089752243e1781015b55a2f482358774abdbbd36f4b23
+PASS UNCHANGED  services/snapshot_service.py  487de0a7af9a75984338a417d0eb280e57fba385a9fae61644463294d3712367
+PASS UNCHANGED  analysis/pressure_integrity.py  96b5b38070b2215f03ac0bb2718da8b8c8ca105b5a9f7cb3429785b5a8548eae
+PASS UNCHANGED  analysis/institutional_window.py  d5e47427f01d7f16d4b12d6e8d11e4c1f5cecd25a5d6e01c8aeacc1ef012aa76
+PASS UNCHANGED  analysis/liquidity_intelligence.py  3a90c48a5f493448b08a2cbed95c7b502518331c5de8829e719f3f536aa7d8cf
+PASS UNCHANGED  analysis/market_intelligence.py  da5bd7b0b8c8600314582ade647ee03ca88ff9df8269d80af7bdff80765a0634
+PASS UNCHANGED  analysis/smart_entry_advisor.py  59642e42787afcd06a441d51d77e86522f234e42f0921cf46291c977aec0d867
+PASS UNCHANGED  ui/premium_calculator.py  fb73d4085434305f1a0f28b9bf20b61fb5ddc51ec0bdad0e18d37736e4606b15
+
+PURE RESEARCH-TRIGGER MICROBENCHMARK (10,000 loops; no I/O):
+mean 2.66 µs
+p95 2.62 µs
+max 95.71 µs
+
+P&L TEST COVERAGE:
+- Conservative entry sides: short=bid, hedge/long=ask
+- Conservative close sides: short=ask, hedge/long=bid
+- SELL spread P&L arithmetic verified by unit test
+- BUY spread P&L arithmetic verified by unit test
+- Estimated charges remain separately labelled; UI says estimated net P&L
+
+JOURNAL RELIABILITY TEST COVERAGE:
+- One Brain and MI trigger mapping
+- Liquidity Magnet cannot trigger alone
+- Alignment/conflict classification
+- 25/day lane caps + 5m cooldown
+- Profit/loss likely-factor diagnosis
+- Railway closed-state protection + later outcome backfill
+- Existing 24 tests retained and passing
