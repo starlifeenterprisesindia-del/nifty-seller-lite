@@ -34,6 +34,50 @@ class LiquidityZone:
 
 
 @dataclass(frozen=True)
+class MoneyConcentrationZone:
+    """Observable option-positioning concentration around one strike.
+
+    This is deliberately a *proxy*, not rupee money and not hidden stop quantity.
+    It only uses option-chain OI, positive OI change and traded volume that are
+    already present in the authoritative snapshot.
+    """
+
+    side: str
+    strike: float
+    lower: float
+    upper: float
+    concentration_score: float
+    oi: float
+    oi_change: float
+    volume: float
+    distance_points: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class MoneyConcentration:
+    state: str
+    bias: str
+    upside_score: float
+    downside_score: float
+    confidence: float
+    upside_zone: MoneyConcentrationZone | None
+    downside_zone: MoneyConcentrationZone | None
+    primary_zone: MoneyConcentrationZone | None
+    reasons: tuple[str, ...]
+    cautions: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["upside_zone"] = self.upside_zone.to_dict() if self.upside_zone else None
+        data["downside_zone"] = self.downside_zone.to_dict() if self.downside_zone else None
+        data["primary_zone"] = self.primary_zone.to_dict() if self.primary_zone else None
+        return data
+
+
+@dataclass(frozen=True)
 class LiquidityIntelligence:
     state: str
     hunt_bias: str
@@ -54,6 +98,7 @@ class LiquidityIntelligence:
     sweep_anchor_at: str | None
     acceptance_state: str
     sweep_age_seconds: float | None
+    money_concentration: MoneyConcentration
     reasons: tuple[str, ...]
     cautions: tuple[str, ...]
 
@@ -63,6 +108,7 @@ class LiquidityIntelligence:
         data["extension_zone"] = self.extension_zone.to_dict() if self.extension_zone else None
         data["next_hunt_zone"] = self.next_hunt_zone.to_dict() if self.next_hunt_zone else None
         data["sweep_anchor_zone"] = self.sweep_anchor_zone.to_dict() if self.sweep_anchor_zone else None
+        data["money_concentration"] = self.money_concentration.to_dict()
         return data
 
 
@@ -145,6 +191,216 @@ def _category(label: str) -> str:
 
 def _point_width(atr: float) -> float:
     return max(2.0, min(7.0, atr * 0.12))
+
+
+def _empty_money_concentration() -> MoneyConcentration:
+    return MoneyConcentration(
+        state="UNAVAILABLE",
+        bias="UNCLEAR",
+        upside_score=0.0,
+        downside_score=0.0,
+        confidence=0.0,
+        upside_zone=None,
+        downside_zone=None,
+        primary_zone=None,
+        reasons=("Option-chain concentration unavailable",),
+        cautions=(
+            "Money concentration is an OI/OI-change/volume proxy; exact rupee capital, stops and hidden orders are not observable",
+        ),
+    )
+
+
+def _money_concentration(snapshot: Any, spot: float, atr: float) -> MoneyConcentration:
+    """Compare observable option concentration above vs below spot.
+
+    The goal is not to guess a participant's intent.  It answers a narrower question:
+    where is *visible option positioning/trading concentration* currently larger?
+
+    UPSIDE uses CE strikes at/above spot; DOWNSIDE uses PE strikes at/below spot.
+    OI is the dominant component, positive day OI addition is secondary, and volume
+    is a confirming activity term.  All inputs already exist in ``snapshot.option_chain``.
+    """
+
+    frame = getattr(snapshot, "option_chain", None)
+    if frame is None or frame.empty or not {"side", "strike", "oi"}.issubset(frame.columns):
+        return _empty_money_concentration()
+
+    source = frame.copy()
+    source["side"] = source["side"].astype(str).str.upper()
+    for column in ("strike", "oi", "day_oi_change", "volume"):
+        if column not in source.columns:
+            source[column] = 0.0
+        source[column] = pd.to_numeric(source[column], errors="coerce").fillna(0.0)
+    source = source[source["strike"] > 0]
+    if source.empty:
+        return _empty_money_concentration()
+
+    strikes = sorted(float(x) for x in source["strike"].dropna().unique())
+    steps = [b - a for a, b in zip(strikes, strikes[1:]) if b > a]
+    step = min(steps) if steps else 50.0
+    reach = max(200.0, min(450.0, atr * 18.0))
+
+    upside = source[
+        source["side"].eq("CE")
+        & source["strike"].ge(spot - step * 0.25)
+        & source["strike"].le(spot + reach)
+    ].copy()
+    downside = source[
+        source["side"].eq("PE")
+        & source["strike"].le(spot + step * 0.25)
+        & source["strike"].ge(spot - reach)
+    ].copy()
+
+    def totals(rows: pd.DataFrame) -> tuple[float, float, float]:
+        if rows.empty:
+            return 0.0, 0.0, 0.0
+        return (
+            float(rows["oi"].clip(lower=0).sum()),
+            float(rows["day_oi_change"].clip(lower=0).sum()),
+            float(rows["volume"].clip(lower=0).sum()),
+        )
+
+    up_totals = totals(upside)
+    down_totals = totals(downside)
+
+    def cross_share(up_value: float, down_value: float, *, upside_side: bool) -> float:
+        total = up_value + down_value
+        if total <= 0:
+            return 50.0
+        return (up_value if upside_side else down_value) / total * 100.0
+
+    up_share = (
+        cross_share(up_totals[0], down_totals[0], upside_side=True) * 0.50
+        + cross_share(up_totals[1], down_totals[1], upside_side=True) * 0.30
+        + cross_share(up_totals[2], down_totals[2], upside_side=True) * 0.20
+    )
+    down_share = (
+        cross_share(up_totals[0], down_totals[0], upside_side=False) * 0.50
+        + cross_share(up_totals[1], down_totals[1], upside_side=False) * 0.30
+        + cross_share(up_totals[2], down_totals[2], upside_side=False) * 0.20
+    )
+
+    def best_zone(rows: pd.DataFrame, direction: str, side_share: float) -> MoneyConcentrationZone | None:
+        if rows.empty:
+            return None
+        maxima = {
+            "oi": max(1.0, float(rows["oi"].clip(lower=0).max())),
+            "add": max(1.0, float(rows["day_oi_change"].clip(lower=0).max())),
+            "vol": max(1.0, float(rows["volume"].clip(lower=0).max())),
+        }
+        best: tuple[float, pd.Series] | None = None
+        for _, row in rows.iterrows():
+            oi = max(0.0, float(row["oi"]))
+            add = max(0.0, float(row["day_oi_change"]))
+            vol = max(0.0, float(row["volume"]))
+            strike = float(row["strike"])
+            local = (oi / maxima["oi"] * 100.0) * 0.50
+            local += (add / maxima["add"] * 100.0) * 0.30
+            local += (vol / maxima["vol"] * 100.0) * 0.20
+            distance = abs(strike - spot)
+            distance_fit = _clamp(100.0 - distance / max(75.0, reach) * 55.0)
+            selection = local * 0.82 + distance_fit * 0.18
+            if best is None or selection > best[0]:
+                best = (selection, row)
+        if best is None:
+            return None
+        row = best[1]
+        strike = float(row["strike"])
+        oi = max(0.0, float(row["oi"]))
+        add = max(0.0, float(row["day_oi_change"]))
+        vol = max(0.0, float(row["volume"]))
+        local = (oi / maxima["oi"] * 100.0) * 0.50
+        local += (add / maxima["add"] * 100.0) * 0.30
+        local += (vol / maxima["vol"] * 100.0) * 0.20
+        nearby = rows[(rows["strike"] - strike).abs() <= max(step, 50.0)]
+        total_oi = max(1.0, float(rows["oi"].clip(lower=0).sum()))
+        total_add = max(1.0, float(rows["day_oi_change"].clip(lower=0).sum()))
+        total_vol = max(1.0, float(rows["volume"].clip(lower=0).sum()))
+        cluster_share = (
+            float(nearby["oi"].clip(lower=0).sum()) / total_oi * 100.0 * 0.50
+            + float(nearby["day_oi_change"].clip(lower=0).sum()) / total_add * 100.0 * 0.30
+            + float(nearby["volume"].clip(lower=0).sum()) / total_vol * 100.0 * 0.20
+        )
+        score = _clamp(local * 0.25 + cluster_share * 0.15 + side_share * 0.60)
+        half = max(step * 0.50, 12.5)
+        return MoneyConcentrationZone(
+            side=direction,
+            strike=round(strike, 2),
+            lower=round(strike - half, 2),
+            upper=round(strike + half, 2),
+            concentration_score=round(score, 1),
+            oi=round(oi, 1),
+            oi_change=round(add, 1),
+            volume=round(vol, 1),
+            distance_points=round(abs(strike - spot), 1),
+        )
+
+    up_zone = best_zone(upside, "UPSIDE", up_share)
+    down_zone = best_zone(downside, "DOWNSIDE", down_share)
+    up_score = up_zone.concentration_score if up_zone else 0.0
+    down_score = down_zone.concentration_score if down_zone else 0.0
+    diff = up_score - down_score
+    if up_zone is None and down_zone is None:
+        return _empty_money_concentration()
+    if abs(diff) < 5.0:
+        bias = "BALANCED"
+        state = "MONEY CONCENTRATION BALANCED"
+        primary = up_zone if up_score >= down_score else down_zone
+    elif diff > 0:
+        bias = "UPSIDE"
+        state = "UPSIDE MONEY CONCENTRATION"
+        primary = up_zone
+    else:
+        bias = "DOWNSIDE"
+        state = "DOWNSIDE MONEY CONCENTRATION"
+        primary = down_zone
+    completeness = 100.0 if up_zone is not None and down_zone is not None else 60.0
+    confidence = _clamp(35.0 + abs(diff) * 3.2) * completeness / 100.0
+    reasons = [
+        f"Upside option concentration {up_score:.0f}/100" if up_zone else "Upside option concentration unavailable",
+        f"Downside option concentration {down_score:.0f}/100" if down_zone else "Downside option concentration unavailable",
+    ]
+    if primary is not None:
+        reasons.append(f"Strongest visible pool near {primary.strike:.0f} · {primary.side}")
+    return MoneyConcentration(
+        state=state,
+        bias=bias,
+        upside_score=round(up_score, 1),
+        downside_score=round(down_score, 1),
+        confidence=round(confidence, 1),
+        upside_zone=up_zone,
+        downside_zone=down_zone,
+        primary_zone=primary,
+        reasons=tuple(reasons[:4]),
+        cautions=(
+            "Visible OI/OI-change/volume concentration is a liquidity proxy, not exact rupee money or proof of a stop hunt",
+            "Large OI can act as attraction, resistance/support or hedging inventory; path and trigger evidence remain necessary",
+        ),
+    )
+
+
+def calculate_money_concentration_from_option_chain(
+    option_chain: pd.DataFrame | list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    spot: float,
+    atr: float = 12.0,
+) -> MoneyConcentration:
+    """Public replay/export helper using only already-recorded option rows.
+
+    Historical evidence files often contain the compact 30-row option window even
+    when the older Market Intelligence payload predates Money Concentration.  This
+    helper allows honest post-hoc reconstruction from those same timestamped rows;
+    it never uses future movement labels.
+    """
+    if isinstance(option_chain, pd.DataFrame):
+        frame = option_chain.copy()
+    else:
+        try:
+            frame = pd.DataFrame(list(option_chain or ()))
+        except (TypeError, ValueError):
+            frame = pd.DataFrame()
+    proxy = type("_RecordedOptionSnapshot", (), {"option_chain": frame})()
+    return _money_concentration(proxy, float(spot), max(1.0, float(atr)))
 
 
 def _zone_candidates(snapshot: Any, spot: float, atr: float) -> list[dict[str, Any]]:
@@ -563,10 +819,12 @@ def calculate_liquidity_intelligence(
             reach_state="UNCLEAR", path_clearance=0.0, sweep_state="NONE",
             sweep_outcome="UNCLEAR", sweep_quality=0.0,
             sweep_anchor_zone=None, sweep_anchor_at=None, acceptance_state="NONE", sweep_age_seconds=None,
+            money_concentration=_empty_money_concentration(),
             reasons=("Spot unavailable",), cautions=("Probable liquidity map unavailable",),
         )
 
     atr = max(8.0, _atr(snapshot))
+    money_concentration = _money_concentration(snapshot, spot, atr)
     candidates = _zone_candidates(snapshot, spot, atr)
     zones = _cluster_candidates(snapshot, spot, candidates, atr)
     up_zone, up_ext, up_clear = _select_target(snapshot, zones, "UPSIDE", atr)
@@ -687,6 +945,11 @@ def calculate_liquidity_intelligence(
         )
     reasons.append(f"Hunt pressure up {up_hunt:.0f} / down {down_hunt:.0f}")
     reasons.append(f"Path clearance {clearance:.0f}")
+    if money_concentration.bias in {"UPSIDE", "DOWNSIDE"}:
+        reasons.append(
+            f"Money concentration {money_concentration.bias} · "
+            f"up {money_concentration.upside_score:.0f} / down {money_concentration.downside_score:.0f}"
+        )
     reasons.extend(sweep_reasons)
     cautions = [
         "Liquidity zones infer probable clustered interest; exact stop money/participant intent is not observable",
@@ -715,6 +978,7 @@ def calculate_liquidity_intelligence(
         sweep_anchor_at=sweep_anchor_at,
         acceptance_state=acceptance_state,
         sweep_age_seconds=sweep_age_seconds,
+        money_concentration=money_concentration,
         reasons=tuple(dict.fromkeys(reasons))[:6],
         cautions=tuple(cautions[:3]),
     )

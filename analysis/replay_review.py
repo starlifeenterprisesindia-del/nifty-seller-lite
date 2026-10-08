@@ -11,6 +11,9 @@ from datetime import datetime
 from statistics import median
 from typing import Any, Iterable
 
+from analysis.institutional_window import calculate_institutional_window_from_record
+from analysis.liquidity_intelligence import calculate_money_concentration_from_option_chain
+
 
 def _num(value: Any) -> float | None:
     try:
@@ -80,8 +83,33 @@ def _market_intelligence_context(sample: dict[str, Any]) -> dict[str, Any]:
     integrity = mie.get("pressure_integrity") if isinstance(mie.get("pressure_integrity"), dict) else {}
     radar = mie.get("move_radar") if isinstance(mie.get("move_radar"), dict) else {}
     liquidity = mie.get("liquidity") if isinstance(mie.get("liquidity"), dict) else {}
+    money = liquidity.get("money_concentration") if isinstance(liquidity.get("money_concentration"), dict) else {}
+    if not money and sample.get("options") and _num(sample.get("spot")) is not None:
+        try:
+            money = calculate_money_concentration_from_option_chain(
+                sample.get("options") or [], spot=float(sample.get("spot")), atr=12.0
+            ).to_dict()
+            liquidity = dict(liquidity)
+            liquidity["money_concentration"] = money
+        except Exception:
+            money = {}
     next_hunt = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else {}
     sync = sample.get("snapshot_integrity") if isinstance(sample.get("snapshot_integrity"), dict) else {}
+    institutional = mie.get("institutional_window") if isinstance(mie.get("institutional_window"), dict) else {}
+    if not institutional and mie:
+        try:
+            mie_for_backfill = dict(mie)
+            mie_for_backfill["liquidity"] = liquidity
+            historical = calculate_institutional_window_from_record(
+                mie_for_backfill,
+                activity=sample.get("activity") if isinstance(sample.get("activity"), dict) else {},
+                recorded_sync=sync,
+                recorded_feeds=sample.get("feeds") if isinstance(sample.get("feeds"), dict) else {},
+                live_override=((sample.get("session") or {}).get("is_live") if isinstance(sample.get("session"), dict) else None),
+            )
+            institutional = historical.to_dict()
+        except Exception:
+            institutional = {}
     return {
         "market_state": str(mie.get("market_state") or ""),
         "direction": str(mie.get("direction") or ""),
@@ -95,8 +123,17 @@ def _market_intelligence_context(sample: dict[str, Any]) -> dict[str, Any]:
         "alignment": str(mie.get("one_brain_alignment") or ""),
         "system_status": str(mie.get("system_status") or ""),
         "hunt_bias": str(liquidity.get("hunt_bias") or ""),
+        "money_concentration_bias": str(money.get("bias") or ""),
+        "upside_money_score": _num(money.get("upside_score")),
+        "downside_money_score": _num(money.get("downside_score")),
+        "money_concentration_confidence": _num(money.get("confidence")),
         "next_hunt_lower": _num(next_hunt.get("lower")),
         "next_hunt_upper": _num(next_hunt.get("upper")),
+        "institutional_window_state": str(institutional.get("state") or ""),
+        "institutional_window_direction": str(institutional.get("direction") or ""),
+        "institutional_window_score": _num(institutional.get("opportunity_score")),
+        "institutional_window_gates": _num(institutional.get("gates_ready")),
+        "institutional_window_data_safety": str(institutional.get("data_safety_state") or ""),
         "sync_state": str(sync.get("state") or ""),
     }
 
@@ -171,6 +208,8 @@ def build_replay_bundle(
     quality_verified = 0
     pressure_flip = 0
     absorption_risk = 0
+    institutional_forming = 0
+    institutional_open = 0
 
     for sample in ordered_samples:
         at = str(sample.get("at") or "")
@@ -195,6 +234,11 @@ def build_replay_bundle(
             pressure_flip += 1
         if qstate == "ABSORPTION RISK":
             absorption_risk += 1
+        iw_state = str(intelligence.get("institutional_window_state") or "").upper()
+        if iw_state == "FORMING":
+            institutional_forming += 1
+        if iw_state in {"OPEN", "STRONG"}:
+            institutional_open += 1
 
         row = {
             "at": at,
@@ -227,8 +271,17 @@ def build_replay_bundle(
             "mi_alignment": intelligence.get("alignment"),
             "mi_system_status": intelligence.get("system_status"),
             "mi_hunt_bias": intelligence.get("hunt_bias"),
+            "mi_money_concentration_bias": intelligence.get("money_concentration_bias"),
+            "mi_upside_money_score": intelligence.get("upside_money_score"),
+            "mi_downside_money_score": intelligence.get("downside_money_score"),
+            "mi_money_concentration_confidence": intelligence.get("money_concentration_confidence"),
             "mi_next_hunt_lower": intelligence.get("next_hunt_lower"),
             "mi_next_hunt_upper": intelligence.get("next_hunt_upper"),
+            "mi_institutional_window_state": intelligence.get("institutional_window_state"),
+            "mi_institutional_window_direction": intelligence.get("institutional_window_direction"),
+            "mi_institutional_window_score": intelligence.get("institutional_window_score"),
+            "mi_institutional_window_gates": intelligence.get("institutional_window_gates"),
+            "mi_institutional_window_data_safety": intelligence.get("institutional_window_data_safety"),
             "snapshot_sync_state": intelligence.get("sync_state"),
             "r1": r1,
             "r2": r2,
@@ -306,6 +359,8 @@ def build_replay_bundle(
             "pressure_verified_or_realized_samples": quality_verified,
             "pressure_flip_samples": pressure_flip,
             "absorption_risk_samples": absorption_risk,
+            "institutional_window_forming_samples": institutional_forming,
+            "institutional_window_open_or_strong_samples": institutional_open,
         },
         "safety": {
             "broker_calls": 0,

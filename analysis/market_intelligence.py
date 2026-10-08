@@ -22,6 +22,7 @@ import pandas as pd
 
 from analysis.liquidity_intelligence import LiquidityIntelligence, calculate_liquidity_intelligence
 from analysis.pressure_integrity import PressureIntegrity, calculate_pressure_integrity
+from analysis.institutional_window import InstitutionalOpportunityWindow, calculate_institutional_window
 
 
 # Directional expert families.  The weights sum to 1.00 before regime/reliability
@@ -111,6 +112,7 @@ class MarketIntelligenceResult:
     institutional_pressure: str
     pressure_integrity: PressureIntegrity
     liquidity: LiquidityIntelligence
+    institutional_window: InstitutionalOpportunityWindow
     move_radar: dict[str, Any]
     evidence_coverage: float
     evidence_conflict: str
@@ -135,6 +137,7 @@ class MarketIntelligenceResult:
         data["path_30m"] = self.path_30m.to_dict()
         data["pressure_integrity"] = self.pressure_integrity.to_dict()
         data["liquidity"] = self.liquidity.to_dict()
+        data["institutional_window"] = self.institutional_window.to_dict()
         data["move_radar"] = dict(self.move_radar)
         data["experts"] = [item.to_dict() for item in self.experts]
         data["alerts"] = [dict(item) for item in self.alerts]
@@ -1277,7 +1280,8 @@ def _alerts(
     *, snapshot: Any, direction: str, expansion: float, velocity: float | None,
     system_status: str, alignment: str, coverage: float, conflict: str,
     fake_risk: str, liquidity: LiquidityIntelligence, move_radar: dict[str, Any],
-    direction_context: str, pressure_integrity: PressureIntegrity, previous: dict[str, Any] | None,
+    direction_context: str, pressure_integrity: PressureIntegrity,
+    institutional_window: InstitutionalOpportunityWindow, previous: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], ...]:
     """Generate *state changes*, not every raw module event.
 
@@ -1292,6 +1296,7 @@ def _alerts(
     previous_liquidity = previous.get("liquidity") if isinstance(previous.get("liquidity"), dict) else {}
     previous_radar = previous.get("move_radar") if isinstance(previous.get("move_radar"), dict) else {}
     previous_integrity = previous.get("pressure_integrity") if isinstance(previous.get("pressure_integrity"), dict) else {}
+    previous_window = previous.get("institutional_window") if isinstance(previous.get("institutional_window"), dict) else {}
     spot = _num((getattr(snapshot, "nifty_quote", {}) or {}).get("last_price"))
     stamp = getattr(snapshot, "created_at", None)
 
@@ -1306,7 +1311,22 @@ def _alerts(
         signals = list(pressure_integrity.supportive_signals or ())
         return (" · Support: " + ", ".join(signals[:2])) if signals else ""
 
+    def money_text() -> str:
+        money = getattr(liquidity, "money_concentration", None)
+        if money is None:
+            return ""
+        bias = str(getattr(money, "bias", "UNCLEAR") or "UNCLEAR")
+        if bias not in {"UPSIDE", "DOWNSIDE"}:
+            return ""
+        score = (
+            float(getattr(money, "upside_score", 0.0))
+            if bias == "UPSIDE"
+            else float(getattr(money, "downside_score", 0.0))
+        )
+        return f" · Money magnet {bias} {score:.0f}/100"
+
     def add(kind: str, priority: str, title: str, message: str, score: float | None = None) -> None:
+        money = getattr(liquidity, "money_concentration", None)
         output.append({
             "kind": kind, "priority": priority, "direction": direction,
             "title": title, "message": message,
@@ -1317,8 +1337,33 @@ def _alerts(
             "move_attack_state": pressure_integrity.move_attack_state,
             "liquidity_bias": liquidity.hunt_bias,
             "liquidity_target": liquidity.primary_zone.to_dict() if liquidity.primary_zone else None,
+            "money_concentration_bias": getattr(money, "bias", "UNCLEAR") if money is not None else "UNCLEAR",
+            "money_concentration_up": getattr(money, "upside_score", None) if money is not None else None,
+            "money_concentration_down": getattr(money, "downside_score", None) if money is not None else None,
             "sweep_outcome": liquidity.sweep_outcome,
         })
+
+    # Institutional Opportunity Window alert: only first OPEN transition (or a
+    # material OPEN→STRONG upgrade).  W/M/candle evidence remains supportive only.
+    iw_state = str(institutional_window.state or "CLOSED").upper()
+    iw_prev = str(previous_window.get("state") or "CLOSED").upper()
+    if institutional_window.alert_eligible and iw_state in {"OPEN", "STRONG"}:
+        if iw_prev not in {"OPEN", "STRONG"}:
+            add(
+                "INSTITUTIONAL_WINDOW_OPEN", "HIGH",
+                f"INSTITUTIONAL WINDOW {iw_state}",
+                f"6/6 core gates ready · {direction.title()} opportunity {institutional_window.opportunity_score:.0f}/100"
+                + money_text() + zone_text() + support_text(),
+                institutional_window.opportunity_score,
+            )
+        elif iw_state == "STRONG" and iw_prev != "STRONG":
+            add(
+                "INSTITUTIONAL_WINDOW_STRONG", "HIGH",
+                "INSTITUTIONAL WINDOW STRONG",
+                f"6/6 core gates remain ready · opportunity {institutional_window.opportunity_score:.0f}/100"
+                + money_text() + zone_text() + support_text(),
+                institutional_window.opportunity_score,
+            )
 
     radar_state = str(move_radar.get("state") or "NORMAL")
     old_radar_state = str(previous_radar.get("state") or "NORMAL")
@@ -1400,6 +1445,7 @@ def _alerts(
     # Keep the output bounded.  Delivery layer will choose only one story.
     rank = {
         "PRESSURE_FLIP_CONFIRMED": 110, "SYSTEM_CONFLICT": 105, "PRESSURE_ABSORBED": 102,
+        "INSTITUTIONAL_WINDOW_STRONG": 101, "INSTITUTIONAL_WINDOW_OPEN": 99,
         "BUILDUP_FAILED": 100, "LIQUIDITY_SWEEP": 98, "MOVE_EXHAUSTING": 96,
         "PRESSURE_FLIP_WATCH": 94, "PRESSURE_VERIFIED": 92, "MOVE_ATTACK": 90,
         "ONE_BRAIN_ALIGNMENT": 88, "LIQUIDITY_HUNT_WATCH": 84, "BIG_MOVE_PRECAUTION": 78,
@@ -1497,6 +1543,18 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         expansion_pressure=expansion, breakout_quality=breakout_quality,
         reversal_quality=reversal_quality, conflict=conflict,
     )
+    previous_window = (previous_mie or {}).get("institutional_window") if isinstance((previous_mie or {}).get("institutional_window"), dict) else {}
+    institutional_window = calculate_institutional_window(
+        direction=radar_direction, bull_pressure=bull, bear_pressure=bear, range_pressure=rng,
+        fast_confirmation_count=fast_confirmation_count, expansion_pressure=expansion,
+        pressure_velocity=velocity, coverage=coverage, conflict=radar_conflict,
+        structure_event=structure_event, breakout_direction=breakout_direction,
+        breakout_quality=breakout_quality, reversal_direction=reversal_direction,
+        reversal_quality=reversal_quality, experts=expert_map,
+        pressure_integrity=pressure_integrity, liquidity=liquidity,
+        activity=getattr(snapshot, "big_player_activity", None), snapshot=snapshot,
+        previous_window=previous_window,
+    )
     institutional = _institutional_pressure(expert_map, snapshot)
     impulse = _impulse_state(expansion, radar_direction)
     potential = _move_potential(expansion)
@@ -1537,7 +1595,8 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         snapshot=snapshot, direction=radar_direction, expansion=expansion, velocity=velocity,
         system_status=status, alignment=alignment, coverage=coverage, conflict=radar_conflict,
         fake_risk=fake_risk, liquidity=liquidity, move_radar=move_radar,
-        direction_context=direction_context, pressure_integrity=pressure_integrity, previous=previous_mie,
+        direction_context=direction_context, pressure_integrity=pressure_integrity,
+        institutional_window=institutional_window, previous=previous_mie,
     )
 
     reasons = tuple(dict.fromkeys([
@@ -1548,6 +1607,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         f"15m context {dominant_context} · {direction_context}",
         f"Institutional pressure {institutional}",
         f"Pressure quality {pressure_integrity.quality_state} {pressure_integrity.quality_score:.0f}/100 · attack {pressure_integrity.move_attack_state}",
+        f"Institutional window {institutional_window.state} · {institutional_window.gates_ready}/6 gates · {institutional_window.opportunity_score:.0f}/100",
         *pressure_integrity.reasons,
         *liquidity.reasons,
         f"Evidence coverage {coverage:.0f}% · conflict {conflict}",
@@ -1564,7 +1624,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         cautions.append("Market closed/reference data")
 
     return MarketIntelligenceResult(
-        engine="ONE_BRAIN_MARKET_INTELLIGENCE_V3_PRESSURE_INTEGRITY",
+        engine="ONE_BRAIN_MARKET_INTELLIGENCE_V4_INSTITUTIONAL_WINDOW",
         mode="SHADOW_ONLY_ZERO_CORE_WEIGHT",
         status="READY" if coverage >= 45 else "PARTIAL",
         market_state=regime,
@@ -1590,6 +1650,7 @@ def calculate_market_intelligence(snapshot: Any, previous_snapshot: Any | None =
         institutional_pressure=institutional,
         pressure_integrity=pressure_integrity,
         liquidity=liquidity,
+        institutional_window=institutional_window,
         move_radar=move_radar,
         evidence_coverage=round(coverage, 1),
         evidence_conflict=conflict,

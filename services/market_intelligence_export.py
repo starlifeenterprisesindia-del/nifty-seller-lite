@@ -15,6 +15,8 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from analysis.session_calibration import build_calibration_summary, build_latency_summary
+from analysis.institutional_window import calculate_institutional_window_from_record
+from analysis.liquidity_intelligence import calculate_money_concentration_from_option_chain
 
 
 def _json_body(value: Any) -> dict[str, Any]:
@@ -150,7 +152,9 @@ def build_market_intelligence_test_pack(
     impulse_rows: list[dict[str, Any]] = []
     liquidity_rows: list[dict[str, Any]] = []
     pressure_rows: list[dict[str, Any]] = []
+    institutional_rows: list[dict[str, Any]] = []
     performance_rows: list[dict[str, Any]] = []
+    previous_institutional: dict[str, Any] = {}
 
     for idx, wrapped in enumerate(parsed_samples):
         body = wrapped["body"]
@@ -162,9 +166,42 @@ def build_market_intelligence_test_pack(
         primary = liquidity.get("primary_zone") if isinstance(liquidity.get("primary_zone"), dict) else {}
         extension = liquidity.get("extension_zone") if isinstance(liquidity.get("extension_zone"), dict) else {}
         next_hunt = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else {}
+        money = liquidity.get("money_concentration") if isinstance(liquidity.get("money_concentration"), dict) else {}
+        if not money and body.get("options") and _float(body.get("spot")) is not None:
+            # Honest historical backfill from the option rows recorded at this exact
+            # timestamp.  Future 5/15/30m movement is never an input.
+            try:
+                money = calculate_money_concentration_from_option_chain(
+                    body.get("options") or [], spot=float(body.get("spot")), atr=12.0
+                ).to_dict()
+                liquidity = dict(liquidity)
+                liquidity["money_concentration"] = money
+            except Exception:
+                money = {}
+        money_primary = money.get("primary_zone") if isinstance(money.get("primary_zone"), dict) else {}
         radar = mie.get("move_radar") if isinstance(mie.get("move_radar"), dict) else {}
         integrity = mie.get("pressure_integrity") if isinstance(mie.get("pressure_integrity"), dict) else {}
         sync = body.get("snapshot_integrity") if isinstance(body.get("snapshot_integrity"), dict) else {}
+        institutional = mie.get("institutional_window") if isinstance(mie.get("institutional_window"), dict) else {}
+        if not institutional:
+            session = body.get("session") if isinstance(body.get("session"), dict) else {}
+            mie_for_backfill = dict(mie)
+            mie_for_backfill["liquidity"] = liquidity
+            historical = calculate_institutional_window_from_record(
+                mie_for_backfill, activity=body.get("activity") if isinstance(body.get("activity"), dict) else {},
+                recorded_sync=sync,
+                recorded_feeds=body.get("feeds") if isinstance(body.get("feeds"), dict) else {},
+                previous_window=previous_institutional,
+                live_override=bool(session.get("is_live")) if "is_live" in session else None,
+            )
+            institutional = historical.to_dict()
+        previous_institutional = institutional
+        iw_edge = institutional.get("directional_edge") if isinstance(institutional.get("directional_edge"), dict) else {}
+        iw_opp = institutional.get("opposition_weakness") if isinstance(institutional.get("opposition_weakness"), dict) else {}
+        iw_path = institutional.get("path_clearance") if isinstance(institutional.get("path_clearance"), dict) else {}
+        iw_capacity = institutional.get("participation_capacity") if isinstance(institutional.get("participation_capacity"), dict) else {}
+        iw_trigger = institutional.get("trigger_readiness") if isinstance(institutional.get("trigger_readiness"), dict) else {}
+        iw_pressure = institutional.get("pressure_effectiveness") if isinstance(institutional.get("pressure_effectiveness"), dict) else {}
         base = {
             "timestamp": at,
             "app_version": body.get("version"),
@@ -194,6 +231,27 @@ def build_market_intelligence_test_pack(
             "reversal_direction": mie.get("reversal_direction"),
             "reversal_quality": mie.get("reversal_quality"),
             "institutional_pressure": mie.get("institutional_pressure"),
+            "institutional_window_state": institutional.get("state"),
+            "institutional_window_direction": institutional.get("direction"),
+            "institutional_window_score": institutional.get("opportunity_score"),
+            "institutional_window_gates_ready": institutional.get("gates_ready"),
+            "institutional_window_data_safety": institutional.get("data_safety_state"),
+            "institutional_window_alert_eligible": institutional.get("alert_eligible"),
+            "institutional_window_transition": institutional.get("transition"),
+            "iw_directional_edge": iw_edge.get("score"),
+            "iw_directional_edge_state": iw_edge.get("state"),
+            "iw_opposition_weakness": iw_opp.get("score"),
+            "iw_opposition_weakness_state": iw_opp.get("state"),
+            "iw_path_clearance": iw_path.get("score"),
+            "iw_path_clearance_state": iw_path.get("state"),
+            "iw_participation_capacity": iw_capacity.get("score"),
+            "iw_participation_capacity_state": iw_capacity.get("state"),
+            "iw_trigger_readiness": iw_trigger.get("score"),
+            "iw_trigger_readiness_state": iw_trigger.get("state"),
+            "iw_pressure_effectiveness": iw_pressure.get("score"),
+            "iw_pressure_effectiveness_state": iw_pressure.get("state"),
+            "iw_missing_gates": " | ".join(str(x) for x in (institutional.get("missing_gates") or [])),
+            "iw_supportive_signals": " | ".join(str(x) for x in (institutional.get("supportive_signals") or [])),
             "evidence_coverage": mie.get("evidence_coverage"),
             "evidence_conflict": mie.get("evidence_conflict"),
             "conflict_score": mie.get("conflict_score"),
@@ -238,6 +296,17 @@ def build_market_intelligence_test_pack(
             "hunt_strength": liquidity.get("hunt_strength"),
             "upside_hunt_pressure": liquidity.get("upside_hunt_pressure"),
             "downside_hunt_pressure": liquidity.get("downside_hunt_pressure"),
+            "money_concentration_state": money.get("state"),
+            "money_concentration_bias": money.get("bias"),
+            "money_concentration_confidence": money.get("confidence"),
+            "upside_money_score": money.get("upside_score"),
+            "downside_money_score": money.get("downside_score"),
+            "money_primary_side": money_primary.get("side"),
+            "money_primary_strike": money_primary.get("strike"),
+            "money_primary_score": money_primary.get("concentration_score"),
+            "money_primary_oi": money_primary.get("oi"),
+            "money_primary_oi_change": money_primary.get("oi_change"),
+            "money_primary_volume": money_primary.get("volume"),
             "liquidity_target_lower": primary.get("lower"),
             "liquidity_target_upper": primary.get("upper"),
             "liquidity_target_attraction": primary.get("attraction_score"),
@@ -279,6 +348,9 @@ def build_market_intelligence_test_pack(
         if integrity and (move_risk_state != "NORMAL" or quality_state != "UNVERIFIED"):
             pressure_rows.append(dict(base))
 
+        if institutional and (str(institutional.get("state") or "CLOSED").upper() != "CLOSED" or int(_float(institutional.get("gates_ready")) or 0) >= 3):
+            institutional_rows.append(dict(base))
+
         if primary or str(liquidity.get("hunt_bias") or "") not in {"", "UNCLEAR", "BALANCED"} or str(liquidity.get("sweep_state") or "NONE") != "NONE":
             liquidity_rows.append(dict(base))
 
@@ -306,6 +378,9 @@ def build_market_intelligence_test_pack(
                 "liquidity_target_upper": primary.get("upper"),
                 "sweep_state": liquidity.get("sweep_state"),
                 "sweep_outcome": liquidity.get("sweep_outcome"),
+                "institutional_window_state": institutional.get("state"),
+                "institutional_window_score": institutional.get("opportunity_score"),
+                "institutional_window_gates": institutional.get("gates_ready"),
             })
 
         for expert in mie.get("experts") or []:
@@ -349,7 +424,8 @@ Files:
 - market_intelligence_snapshots.csv: all recorded OB-MIE states/scores plus observed future spot movement at 5/15/30m.
 - impulse_move_review.csv: Move Radar / pressure-building observations for large-candle lead-time testing.
 - pressure_integrity_review.csv: fast move-risk versus pressure quality, price response, barrier attack, supportive candle/W-M evidence, fake/real scores, realization and flip states.
-- liquidity_hunt_review.csv: current battle/next hunt zones, hunt pressure, reach score, sweep/breach outcome, acceptance/reclaim state and observed 5/15/30m movement.
+- institutional_window_review.csv: 6-gate Institutional Opportunity Window states, historical backfill where possible, plus 5/15/30m retrospective outcomes.
+- liquidity_hunt_review.csv: current battle/next hunt zones, visible Money Concentration proxy, hunt pressure, reach score, sweep/breach outcome, acceptance/reclaim state and observed 5/15/30m movement.
 - one_brain_alignment.csv: One Brain + Market Intelligence alignment/conflict observations.
 - market_intelligence_alerts.csv: generated precaution/alignment/liquidity alerts.
 - expert_evidence.csv: per-family evidence, freshness and reliability.
@@ -379,6 +455,7 @@ Important:
         archive.writestr("market_intelligence_snapshots.csv", _csv_bytes(snapshots))
         archive.writestr("impulse_move_review.csv", _csv_bytes(impulse_rows))
         archive.writestr("pressure_integrity_review.csv", _csv_bytes(pressure_rows))
+        archive.writestr("institutional_window_review.csv", _csv_bytes(institutional_rows))
         archive.writestr("liquidity_hunt_review.csv", _csv_bytes(liquidity_rows))
         archive.writestr("one_brain_alignment.csv", _csv_bytes(alignments))
         archive.writestr("market_intelligence_alerts.csv", _csv_bytes(alerts))

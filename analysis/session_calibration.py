@@ -44,11 +44,15 @@ def build_calibration_summary(rows: list[dict[str, Any]], alerts: list[dict[str,
     snapshots = [dict(row) for row in rows if isinstance(row, dict)]
     by_quality: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_attack: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_institutional_window: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_money_bias: dict[str, list[dict[str, Any]]] = defaultdict(list)
     warning_rows: list[dict[str, Any]] = []
 
     for row in snapshots:
         by_quality[str(row.get("pressure_quality_state") or "UNKNOWN").upper()].append(row)
         by_attack[str(row.get("move_attack_state") or "UNKNOWN").upper()].append(row)
+        by_institutional_window[str(row.get("institutional_window_state") or "UNKNOWN").upper()].append(row)
+        by_money_bias[str(row.get("money_concentration_bias") or "UNKNOWN").upper()].append(row)
         radar = str(row.get("move_radar_state") or "NORMAL").upper()
         risk = str(row.get("move_risk_state") or "NORMAL").upper()
         if radar != "NORMAL" or risk != "NORMAL":
@@ -104,6 +108,59 @@ def build_calibration_summary(rows: list[dict[str, Any]], alerts: list[dict[str,
             "Median 15m abs excursion": _med([_future_abs_excursion(x, "15m") for x in items]),
         })
 
+    institutional_rows: list[dict[str, Any]] = []
+    for state, items in sorted(by_institutional_window.items()):
+        directional_5m: list[int] = []
+        directional_15m: list[int] = []
+        for row in items:
+            sign = _direction_sign(row.get("institutional_window_direction") or row.get("direction"))
+            if not sign:
+                continue
+            m5 = _num(row.get("actual_5m_close_change"))
+            m15 = _num(row.get("actual_15m_close_change"))
+            if m5 is not None:
+                directional_5m.append(1 if m5 * sign > 0 else 0)
+            if m15 is not None:
+                directional_15m.append(1 if m15 * sign > 0 else 0)
+        institutional_rows.append({
+            "Window State": state,
+            "Samples": len(items),
+            "Median opportunity score": _med([_num(x.get("institutional_window_score")) for x in items]),
+            "Median 5m abs excursion": _med([_future_abs_excursion(x, "5m") for x in items]),
+            "Median 15m abs excursion": _med([_future_abs_excursion(x, "15m") for x in items]),
+            "5m directional agreement pct": round(100.0 * sum(directional_5m) / len(directional_5m), 1) if directional_5m else None,
+            "15m directional agreement pct": round(100.0 * sum(directional_15m) / len(directional_15m), 1) if directional_15m else None,
+            "note": "Descriptive replay diagnostic only; not win-rate or probability.",
+        })
+
+    money_rows: list[dict[str, Any]] = []
+    for bias, items in sorted(by_money_bias.items()):
+        sign = 1 if bias == "UPSIDE" else -1 if bias == "DOWNSIDE" else 0
+        agree_5: list[int] = []
+        agree_15: list[int] = []
+        for row in items:
+            if not sign:
+                continue
+            m5 = _num(row.get("actual_5m_close_change"))
+            m15 = _num(row.get("actual_15m_close_change"))
+            if m5 is not None:
+                agree_5.append(1 if m5 * sign > 0 else 0)
+            if m15 is not None:
+                agree_15.append(1 if m15 * sign > 0 else 0)
+        money_rows.append({
+            "Money Bias": bias,
+            "Samples": len(items),
+            "Median strongest score": _med([
+                max(_num(x.get("upside_money_score")) or 0.0, _num(x.get("downside_money_score")) or 0.0)
+                for x in items
+            ]),
+            "Median 5m abs excursion": _med([_future_abs_excursion(x, "5m") for x in items]),
+            "Median 15m abs excursion": _med([_future_abs_excursion(x, "15m") for x in items]),
+            "5m same-side close pct": round(100.0 * sum(agree_5) / len(agree_5), 1) if agree_5 else None,
+            "15m same-side close pct": round(100.0 * sum(agree_15) / len(agree_15), 1) if agree_15 else None,
+            "note": "Visible option concentration replay only; not proof that money was hunted or a calibrated probability.",
+        })
+
     return {
         "snapshot_rows": len(snapshots),
         "warning_rows": len(warning_rows),
@@ -111,11 +168,15 @@ def build_calibration_summary(rows: list[dict[str, Any]], alerts: list[dict[str,
         "horizons": horizon_summary,
         "pressure_quality_summary": quality_rows,
         "move_attack_summary": attack_rows,
+        "institutional_window_summary": institutional_rows,
+        "money_concentration_summary": money_rows,
         "rules": [
             "Future columns are retrospective labels only.",
             "No threshold is auto-tuned from this report.",
             "Missing outcomes are excluded, never converted to neutral.",
             "Directional agreement is diagnostic only and must not be advertised as accuracy.",
+            "Institutional Window labels public-market opportunity conditions; they do not identify an actual institution or hidden order.",
+            "Money Concentration uses visible OI/OI-change/volume only; it is not exact rupee capital or proof of stop hunting.",
         ],
     }
 
