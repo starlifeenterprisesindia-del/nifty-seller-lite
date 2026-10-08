@@ -74,6 +74,32 @@ def _option_context(sample: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def _market_intelligence_context(sample: dict[str, Any]) -> dict[str, Any]:
+    mie = sample.get("market_intelligence") if isinstance(sample.get("market_intelligence"), dict) else {}
+    integrity = mie.get("pressure_integrity") if isinstance(mie.get("pressure_integrity"), dict) else {}
+    radar = mie.get("move_radar") if isinstance(mie.get("move_radar"), dict) else {}
+    liquidity = mie.get("liquidity") if isinstance(mie.get("liquidity"), dict) else {}
+    next_hunt = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else {}
+    sync = sample.get("snapshot_integrity") if isinstance(sample.get("snapshot_integrity"), dict) else {}
+    return {
+        "market_state": str(mie.get("market_state") or ""),
+        "direction": str(mie.get("direction") or ""),
+        "expansion_pressure": _num(mie.get("expansion_pressure")),
+        "pressure_velocity": _num(mie.get("pressure_velocity")),
+        "quality_state": str(integrity.get("quality_state") or ""),
+        "quality_score": _num(integrity.get("quality_score")),
+        "move_attack_state": str(integrity.get("move_attack_state") or ""),
+        "move_risk_state": str(integrity.get("move_risk_state") or ""),
+        "radar_state": str(radar.get("state") or "NORMAL"),
+        "alignment": str(mie.get("one_brain_alignment") or ""),
+        "system_status": str(mie.get("system_status") or ""),
+        "hunt_bias": str(liquidity.get("hunt_bias") or ""),
+        "next_hunt_lower": _num(next_hunt.get("lower")),
+        "next_hunt_upper": _num(next_hunt.get("upper")),
+        "sync_state": str(sync.get("state") or ""),
+    }
+
 def _decision_statistics(decisions: list[dict[str, Any]]) -> dict[str, Any]:
     actions = Counter(str(item.get("final_action") or "UNKNOWN") for item in decisions)
     regimes = Counter(str(item.get("regime") or "UNKNOWN") for item in decisions)
@@ -141,6 +167,10 @@ def build_replay_bundle(
     ce_strikes: list[float | None] = []
     pe_strikes: list[float | None] = []
     high_bp = 0
+    radar_non_normal = 0
+    quality_verified = 0
+    pressure_flip = 0
+    absorption_risk = 0
 
     for sample in ordered_samples:
         at = str(sample.get("at") or "")
@@ -151,10 +181,20 @@ def build_replay_bundle(
         s1 = _barrier(barriers.get("nearest_support"))
         s2 = _barrier(barriers.get("next_support"))
         options = _option_context(sample)
+        intelligence = _market_intelligence_context(sample)
         activity = sample.get("activity") if isinstance(sample.get("activity"), dict) else {}
         bp_score = _num(activity.get("score"))
         if bp_score is not None and bp_score >= 60:
             high_bp += 1
+        if intelligence.get("radar_state") and intelligence.get("radar_state") != "NORMAL":
+            radar_non_normal += 1
+        qstate = str(intelligence.get("quality_state") or "").upper()
+        if qstate in {"VERIFIED", "REALIZED"}:
+            quality_verified += 1
+        if qstate in {"FLIP WATCH", "FLIP CONFIRMED"}:
+            pressure_flip += 1
+        if qstate == "ABSORPTION RISK":
+            absorption_risk += 1
 
         row = {
             "at": at,
@@ -175,6 +215,21 @@ def build_replay_bundle(
             "big_player_score": bp_score,
             "big_player_state": str(activity.get("state") or ""),
             "big_player_type": str(activity.get("activity_type") or ""),
+            "mi_market_state": intelligence.get("market_state"),
+            "mi_direction": intelligence.get("direction"),
+            "mi_pressure": intelligence.get("expansion_pressure"),
+            "mi_velocity": intelligence.get("pressure_velocity"),
+            "mi_quality_state": intelligence.get("quality_state"),
+            "mi_quality_score": intelligence.get("quality_score"),
+            "mi_attack_state": intelligence.get("move_attack_state"),
+            "mi_risk_state": intelligence.get("move_risk_state"),
+            "mi_radar_state": intelligence.get("radar_state"),
+            "mi_alignment": intelligence.get("alignment"),
+            "mi_system_status": intelligence.get("system_status"),
+            "mi_hunt_bias": intelligence.get("hunt_bias"),
+            "mi_next_hunt_lower": intelligence.get("next_hunt_lower"),
+            "mi_next_hunt_upper": intelligence.get("next_hunt_upper"),
+            "snapshot_sync_state": intelligence.get("sync_state"),
             "r1": r1,
             "r2": r2,
             "s1": s1,
@@ -247,6 +302,10 @@ def build_replay_bundle(
             "ce_wall_changes": _change_count(ce_strikes),
             "pe_wall_changes": _change_count(pe_strikes),
             "big_player_60plus_samples": high_bp,
+            "move_radar_non_normal_samples": radar_non_normal,
+            "pressure_verified_or_realized_samples": quality_verified,
+            "pressure_flip_samples": pressure_flip,
+            "absorption_risk_samples": absorption_risk,
         },
         "safety": {
             "broker_calls": 0,

@@ -157,9 +157,10 @@ def compact(snapshot, tracked_strikes=()):
         "institutional_context": summary.get("institutional_context", {}),
         "history_analytics": snapshot.metadata.get("history_analytics", {}),
         "market_intelligence": summary.get("market_intelligence"),
+        "snapshot_integrity": snapshot.metadata.get("snapshot_integrity", {}),
         "performance": {
             key: (snapshot.metadata.get("performance") or {}).get(key)
-            for key in ("pipeline_seconds", "build_seconds", "market_intelligence_seconds", "slowest_stage")
+            for key in ("pipeline_seconds", "build_seconds", "finalize_seconds", "market_intelligence_seconds", "slowest_stage", "stages")
         },
         # Canonical background inputs/results for later diagnosis, not extra votes.
         "evidence": evidence,
@@ -796,6 +797,8 @@ class DayMemory:
                 "'background_action',json_extract(body,'$.background_action'),"
                 "'barriers',json_extract(body,'$.barriers'),"
                 "'activity',json_extract(body,'$.activity'),"
+                "'market_intelligence',json_extract(body,'$.market_intelligence'),"
+                "'snapshot_integrity',json_extract(body,'$.snapshot_integrity'),"
                 "'evidence',json_object('option_intelligence',json_extract(body,'$.evidence.option_intelligence'))"
                 ") FROM samples WHERE at LIKE ? ORDER BY at DESC LIMIT ?",
                 (day + "%", limit),

@@ -110,6 +110,14 @@ def build_performance_report(
     recording = metadata.get("recording_diagnostics") if isinstance(metadata.get("recording_diagnostics"), dict) else {}
     history_async = recording.get("async_refresh") if isinstance(recording.get("async_refresh"), dict) else {}
     instrument_master = metadata.get("instrument_master_prewarm") if isinstance(metadata.get("instrument_master_prewarm"), dict) else {}
+    top_stages = stage_rows[:3]
+    integrity = metadata.get("snapshot_integrity") if isinstance(metadata.get("snapshot_integrity"), dict) else {}
+    budget_state = "GOOD"
+    if pipeline_seconds > interval:
+        budget_state = "OVER BUDGET"
+    elif pipeline_seconds > interval * 0.75:
+        budget_state = "TIGHT"
+
     return {
         "pipeline_seconds": round(pipeline_seconds, 4),
         "p50_pipeline_seconds": round(_percentile(latency_history, 0.50), 4),
@@ -127,6 +135,9 @@ def build_performance_report(
         "slowest_stage": slowest,
         "slowest_stage_seconds": round(slowest_seconds, 4),
         "stage_rows": stage_rows,
+        "top_stages": top_stages,
+        "latency_budget_state": budget_state,
+        "snapshot_integrity": integrity,
         "feed_rows": feed_rows,
         "critical_issue_count": critical_issue_count,
         "snapshot_mode": (

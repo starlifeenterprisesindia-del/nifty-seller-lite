@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from analysis.session_calibration import build_calibration_summary, build_latency_summary
+
 
 def _json_body(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -162,10 +164,15 @@ def build_market_intelligence_test_pack(
         next_hunt = liquidity.get("next_hunt_zone") if isinstance(liquidity.get("next_hunt_zone"), dict) else {}
         radar = mie.get("move_radar") if isinstance(mie.get("move_radar"), dict) else {}
         integrity = mie.get("pressure_integrity") if isinstance(mie.get("pressure_integrity"), dict) else {}
+        sync = body.get("snapshot_integrity") if isinstance(body.get("snapshot_integrity"), dict) else {}
         base = {
             "timestamp": at,
             "app_version": body.get("version"),
             "spot": body.get("spot"),
+            "snapshot_sync_state": sync.get("state"),
+            "snapshot_core_live": sync.get("core_live"),
+            "snapshot_core_total": sync.get("core_total"),
+            "snapshot_age_skew_seconds": sync.get("timestamped_age_skew_seconds"),
             "market_state": mie.get("market_state"),
             "direction": mie.get("direction"),
             "early_direction": mie.get("early_direction"),
@@ -322,8 +329,10 @@ def build_market_intelligence_test_pack(
                 "timestamp": at,
                 "pipeline_seconds": perf.get("pipeline_seconds"),
                 "build_seconds": perf.get("build_seconds"),
+                "finalize_seconds": perf.get("finalize_seconds"),
                 "market_intelligence_seconds": perf.get("market_intelligence_seconds"),
                 "slowest_stage": perf.get("slowest_stage"),
+                "stages": json.dumps(perf.get("stages") or {}, separators=(",", ":"), sort_keys=True),
             })
 
     decision_rows: list[dict[str, Any]] = []
@@ -346,6 +355,8 @@ Files:
 - expert_evidence.csv: per-family evidence, freshness and reliability.
 - one_brain_decisions.csv: recorded One Brain decision journal.
 - performance.csv: processing timings, including Market Intelligence runtime.
+- calibration_summary.json: post-market descriptive agreement/excursion summaries; never auto-tunes thresholds.
+- latency_summary.json: p50/p95 recorded pipeline/build/MI timings and slow-stage counts.
 - current_snapshot.json: current screen snapshot summary when supplied.
 
 Important:
@@ -359,6 +370,9 @@ Important:
 - First liquidity breach is PENDING ACCEPTANCE; a reclaim starts as REVERSAL WATCH and needs follow-through before REVERSAL FAVORED.
 """
 
+    calibration_summary = build_calibration_summary(snapshots, alerts)
+    latency_summary = build_latency_summary(performance_rows)
+
     output = io.BytesIO()
     with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
         archive.writestr("README.txt", readme)
@@ -371,6 +385,14 @@ Important:
         archive.writestr("expert_evidence.csv", _csv_bytes(experts))
         archive.writestr("one_brain_decisions.csv", _csv_bytes(decision_rows))
         archive.writestr("performance.csv", _csv_bytes(performance_rows))
+        archive.writestr(
+            "calibration_summary.json",
+            json.dumps(calibration_summary, indent=2, ensure_ascii=True, default=str),
+        )
+        archive.writestr(
+            "latency_summary.json",
+            json.dumps(latency_summary, indent=2, ensure_ascii=True, default=str),
+        )
         if current_snapshot_summary is not None:
             archive.writestr(
                 "current_snapshot.json",
