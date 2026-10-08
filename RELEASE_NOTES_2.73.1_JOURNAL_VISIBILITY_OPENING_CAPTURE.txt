@@ -1,0 +1,31 @@
+Nifty Seller Lite v2.73.1 — Journal Visibility + Opening Capture
+
+Why this patch exists
+- The app had two different journal lanes but the UI label "Auto Shadow Journal ON" made them look like one feature.
+- Decision Journal already recorded WAIT/READY/ENTRY observations, while Paper Trade Journal only opened a simulated trade after all protected-entry gates passed.
+- A full live day can therefore have many decision rows but zero new paper trades when One Brain remains WAIT. That is expected, not a journal failure.
+- The decision-journal recording window began at 09:30, leaving the important 09:15–09:30 opening period out of the journal.
+
+Changes
+1. Decision Journal now records from 09:15 to 15:00 IST.
+2. Sidebar toggle renamed to "Auto Paper Trades ON". Decision Journal is automatic and independent of this toggle.
+3. Sidebar now states that Decision Journal is AUTO and shows its recording window.
+4. Journal panel renamed "Decision + Paper Journal" and clearly separates Decision rows from gate-passed Paper Trades.
+5. Journal health can show LOCAL RECORDING while Railway history is still warming, avoiding a false impression that the journal is dead.
+6. 0 paper trades is explicitly explained as expected when One Brain final action remains WAIT.
+7. Decision-file writes retain atomic replacement and now use a dedicated lock path for safer multi-session access.
+
+Unchanged
+- One Brain decision logic
+- Execution Guard
+- Trade Plan
+- Position Guardian
+- Market Intelligence / Pressure Integrity / Institutional Window / Liquidity Magnet
+- Smart Entry Advisor
+- Dhan/API request count
+- Paper-entry qualification thresholds
+
+Validation
+- Python compile PASS
+- Existing automated suite: 24/24 PASS
+- Opening-capture smoke test: 09:14 ignored, 09:15 recorded, 09:16 recorded PASS

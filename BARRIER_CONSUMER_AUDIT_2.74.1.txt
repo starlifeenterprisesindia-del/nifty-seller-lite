@@ -1,0 +1,43 @@
+Nifty Seller Lite v2.74.1 — Barrier Consumer Audit
+
+AUTHORITATIVE SOURCES
+1) Structural levels: analysis/levels.py -> calculate_levels
+   Completed 3m close controls zone role/promotion; live spot controls distance/status.
+2) Enriched barrier map: analysis/barrier_map.py -> calculate_barrier_map
+   Uses structural levels + OI flow + price reaction + momentum + Top-9 + futures volume + VIX/speed.
+
+LEVELBUNDLE CONSUMERS (receive corrected completed-close role automatically)
+- analysis/decision.py            Canonical One Brain Barrier/Entry room + level permissions
+- analysis/trade_plan.py          Strike-vs-level clearance
+- analysis/patterns.py            Pattern nearest-level context
+- analysis/pre_touch_barriers.py  Pre-touch support/resistance detector
+- analysis/evidence_matrix.py     Structural level evidence
+- analysis/liquidity_intelligence.py  Structural/session liquidity candidates
+- services/pdf_report.py          Structural level reporting
+- snapshot.levels consumers       Same immutable LevelBundle
+
+BARRIERMAP CONSUMERS (receive corrected barrier identity/bias automatically)
+- analysis/market_intelligence.py   Barriers/Walls expert, structure/breakout, range bias
+- analysis/pressure_integrity.py    Barrier attack/proximity
+- analysis/liquidity_intelligence.py Path clearance + nearest barriers
+- analysis/big_player.py            Level reaction
+- analysis/smart_entry_advisor.py   Favorable target / entry context
+- analysis/strike_entry.py          Entry barrier/room
+- analysis/sl_target_planner.py     Stop/target reference
+- analysis/rsi_reversal_setup.py    Reversal barrier context
+- analysis/strategy_lab.py          Strategy barrier context
+- analysis/ai_move_tracker.py       R1/R2/S1/S2 move tracking
+- analysis/evidence_matrix.py       Barrier scores + breakout bias
+- analysis/presentation_safety.py   Safe user-facing barrier context
+- ui/components.py                  Compact + full barrier map
+- ui/live_barrier_chart.py          Barrier chart
+- ui/premium_calculator.py          Calculator barrier scenarios/targets
+- services/summary_presenter.py     Summary deltas
+- services/pdf_report.py            Audit/PDF map
+- services/day_memory.py            Durable barrier history/reactions
+- analysis/replay_review.py         Replay barrier context
+
+EXPLICIT SYNCHRONIZATION
+- Market Intelligence breakout direction now uses BarrierMap net vulnerability/breakout bias.
+- No module performs an extra broker fetch for the hardened barrier logic.
+- One Brain/MI weights are not changed; only the correctness of the barrier input is hardened.

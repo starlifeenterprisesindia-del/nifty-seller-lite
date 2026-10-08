@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.74.0_RESEARCH_JOURNAL_VALIDATION_ENGINE"
+    version: str = "2.74.1_BARRIER_CORRECTNESS_SYNC"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5

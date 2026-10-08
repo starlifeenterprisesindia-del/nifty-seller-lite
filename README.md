@@ -1,10 +1,21 @@
-# Nifty Seller Lite 2.74 — Research Journal Validation Engine
+# Nifty Seller Lite 2.74.1 — Barrier Correctness Sync
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
+
+
+## 2.74.1 highlights
+
+- **Completed-close barrier promotion:** live spot/wicks can test or temporarily cross R1/S1, but a barrier is not promoted/role-flipped until a completed 3-minute close accepts beyond the full zone.
+- **Confluence-zone integrity:** barrier clusters are built first and cleared only after the completed close clears the whole zone; individual anchors no longer disappear mid-zone.
+- **Net-vulnerability break bias:** `Break Pressure - Barrier Strength` is compared on both sides, so a weak support under moderate pressure is correctly distinguished from a very strong resistance under similar raw pressure.
+- **Recency-aware reaction quality:** recent completed 1-minute reactions (measured over the next ~3 minutes) receive modestly higher weight than old touches without erasing older evidence.
+- **System-wide sync:** `LevelBundle` confirmation logic feeds One Brain Barrier/Entry, trade-plan, patterns and pre-touch; `BarrierMap` feeds Market Intelligence, Pressure Integrity, Liquidity, Big Player, Smart Entry, SL/Target, Premium Calculator, maps, replay, PDF and journal views.
+- **Market Intelligence consistency:** breakout direction now follows the same net-vulnerability/barrier-bias logic instead of comparing raw break pressure alone.
+- **No new Dhan/broker/API calls. No weight changes.** One Brain/MI thresholds, Pressure Integrity, Institutional Window, Liquidity Magnet, Smart Entry and Journal logic are otherwise unchanged.
 
 ## 2.74 highlights
 

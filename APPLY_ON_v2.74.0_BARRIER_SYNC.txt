@@ -1,0 +1,10 @@
+Apply this update on top of v2.74.0_RESEARCH_JOURNAL_VALIDATION_ENGINE.
+
+Replace/add the files in this archive preserving folders. Runtime changes are limited to:
+- config.py
+- analysis/levels.py
+- analysis/barrier_map.py
+- analysis/market_intelligence.py
+- ui/components.py
+
+Tests/docs are included for verification. No credentials, caches, logs or runtime-generated state are required.

@@ -1,4 +1,4 @@
-# Architecture — V2.73 Liquidity Magnet + Smart Entry Advisor
+# Architecture — V2.74.1 Barrier Correctness Sync
 
 ## Canonical live path — unchanged
 
@@ -10,6 +10,15 @@
 4. Barrier / Entry — 15%
 
 Available evidence is normalized; missing evidence is NO VOTE. Market Intelligence has zero One Brain weight.
+
+## Barrier correctness and synchronization
+
+Two related barrier representations remain intentionally available, but now share the same completed-close acceptance rule:
+
+1. `analysis.levels.calculate_levels` builds the structural `LevelBundle`. Live spot controls distance/status, while completed 3-minute closes control support/resistance role and R1/S1 promotion. This bundle is consumed by the canonical One Brain Barrier/Entry block, trade-plan level clearance, pattern level context and pre-touch barriers.
+2. `analysis.barrier_map.calculate_barrier_map` enriches those structural levels with OI flow, reaction quality, momentum, Top-9, futures volume, market speed and VIX. It is consumed by Market Intelligence, Pressure Integrity, Liquidity Intelligence, Big Player, Smart Entry/Strike Entry, SL/Target planning, Premium Calculator, live maps, PDF/replay/day-memory and related display/validation layers.
+
+A live wick/tick through a barrier therefore remains `TESTING` / `AWAITING 3M CLOSE`; the next barrier is not promoted until the completed 3-minute close clears the full confluence zone. Range break bias compares net vulnerability (`Break Pressure - Strength`) on both sides. No new data request is made.
 
 ## Market Intelligence — Institutional Opportunity Window
 

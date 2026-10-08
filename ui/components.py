@@ -85,6 +85,9 @@ def _pressure_label(score: float) -> str:
 
 def _barrier_verdict(level: Any) -> str:
     side = str(level.side).upper()
+    state = str(getattr(level, "state", "") or "").upper()
+    if "AWAITING 3M CLOSE" in state:
+        return "Break attempt — completed 3m close se confirm hoga"
     margin = float(level.strength) - float(level.break_pressure)
     if margin >= 15:
         return "Resistance filhaal majboot" if side == "RESISTANCE" else "Support filhaal majboot"
@@ -97,6 +100,8 @@ def _barrier_state_hinglish(level: Any) -> str:
     state = str(level.state).upper()
     mapping = {
         "TESTING": "ABHI TEST HO RAHA",
+        "ABOVE ZONE / AWAITING 3M CLOSE": "UPAR NIKLA — 3M CLOSE KA WAIT",
+        "BELOW ZONE / AWAITING 3M CLOSE": "NEECHE NIKLA — 3M CLOSE KA WAIT",
         "HOLDING / STRONG": "LEVEL STRONG — REACTION DEKHO",
         "HOLDING": "LEVEL STRONG — REACTION DEKHO",
         "WEAKENING / BREAK RISK": "KAMZOR / TOOTNE KA RISK",
@@ -159,7 +164,7 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
         f'<div><span>Tootne ka pressure</span><b>{level.break_pressure:.0f}/100 · {escape(_pressure_label(float(level.break_pressure)))}</b><div class="bm-track"><div class="bm-fill pressure" style="width:{pressure_width:.0f}%"></div></div></div>'
         f'</div>'
         f'<div class="bm-verdict">Faisla: {escape(_barrier_verdict(level))}</div>'
-        f'<div class="bm-small">Break watch: {confirmation}. History mein completed 3m reaction dekho.</div>'
+        f'<div class="bm-small">Break watch: {confirmation}. History: completed 1m candles ka approx 3m reaction dekho.</div>'
         f'<div class="bm-small">{"Price zone ke andar hai" if level.distance_points == 0 else f"{level.distance_points:,.0f} pts door"} · Kyun: {sources}</div>'
         f'</div>'
     )
