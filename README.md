@@ -1,28 +1,38 @@
-# Nifty Seller Lite 2.70 — Pressure Integrity + Smart Alert Hardening
+# Nifty Seller Lite 2.71 — Observability + Replay + State Hardening
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
-The canonical Simple One-Brain remains intentionally small: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**, never an invented neutral vote. Future Brain and Market Intelligence are advisory/shadow layers; no UI panel creates a second operational decision engine.
+The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
 
-## 2.70 highlights
+## 2.71 highlights
 
-- **Pressure Integrity Engine (shadow-only):** separates fast big-move risk from directional pressure quality. It labels pressure as UNVERIFIED / BUILDING / VERIFIED / REALIZED / ABSORPTION RISK / BUILD-UP FAILED / EXHAUSTING / FLIP WATCH / FLIP CONFIRMED.
-- **No late-warning penalty from patterns:** W/M and strong-candle evidence is supportive only. Missing W/M/candle confirmation never blocks an early Move Radar warning.
-- **Move Attack state:** combines already-cached pressure, price response and barrier attack into NORMAL / WATCH / BUILDING / ATTACK / BREAK-EXPANSION states without adding a broker call.
-- **Real-vs-fake distinction:** pressure that already moved price meaningfully is remembered as REALIZED; if it later cools it becomes EXHAUSTING rather than incorrectly labelled fake.
-- **Pressure flip control:** opposite pressure begins as FLIP WATCH and upgrades only after stronger independent confirmation.
-- **Liquidity wording:** a zone already containing price is shown as CURRENT BATTLE ZONE; the directional extension becomes NEXT HUNT ZONE. Immediate reclaim/rejection is REVERSAL WATCH; follow-through is required before REVERSAL FAVORED.
-- **One Telegram voice:** W/M, candle and Big Player evidence still calculate and record, but when Market Intelligence alerts are enabled they are merged as supportive context instead of creating repeated standalone messages.
-- **WAIT presentation:** backend WAIT safety remains unchanged; the UI can show NO EDGE / WATCH / ARMED progression so a trigger-ready setup is visible without loosening One Brain.
-- **Diagnostic hardening:** numeric core-block tables use consistent display types to avoid Streamlit/PyArrow mixed-type serialization warnings.
-- **Validation pack:** adds pressure-integrity review fields and CSV output for fake/real pressure, price response, barriers, flips and realized move tracking.
-- **No extra API calls:** all new calculations reuse the authoritative MarketSnapshot and already-cached evidence.
+- **Zero-weight Snapshot Integrity diagnostic:** reads the already-built feed statuses and reports core-feed coverage, request/source-age information and timestamped age skew. It never changes One Brain or adds a broker request.
+- **Latency Budget visibility:** existing stage timings are surfaced as top bottlenecks, P50/P95 pipeline timing and refresh-budget health so optimization can target measured bottlenecks instead of guessing.
+- **Post-market calibration summary:** Market Intelligence Test Pack now includes `calibration_summary.json` and `latency_summary.json`. These are descriptive post-hoc diagnostics only; no threshold auto-tuning and no accuracy/win-rate claim.
+- **Replay expanded with Market Intelligence:** the existing on-demand Railway SQLite replay can now show recorded Move Radar, pressure quality, Move Attack, alignment, hunt direction and snapshot sync state alongside One Brain/barriers/options.
+- **Runtime state hardening:** Big Player/activity JSON state now uses the same process-safe lock + atomic replace pattern already used by other bounded state stores. Persistent Day Memory remains SQLite.
+- **No UI bloat:** live main screen only adds a small Data Sync status. Deep replay/calibration/performance details remain collapsed/on-demand.
+- **No extra Dhan/API calls:** all live diagnostics reuse the current MarketSnapshot. Calibration/replay run only on saved data after explicit user action.
 
-## Main screen philosophy
+## 2.70 foundation retained
 
-Show one operational answer first. Deep evidence stays behind expanders. Market Intelligence may warn early that **a move is developing**, while pressure quality separately indicates how trustworthy its direction currently is.
+- Pressure Integrity Engine: UNVERIFIED / BUILDING / VERIFIED / REALIZED / ABSORPTION RISK / BUILD-UP FAILED / EXHAUSTING / FLIP WATCH / FLIP CONFIRMED.
+- Move Attack state and fake-vs-real pressure handling.
+- W/M and strong candles are supportive only; never mandatory gates for early Move Radar warning.
+- Current Battle Zone vs Next Hunt Zone liquidity wording.
+- Smart Alert controller with one primary Market Intelligence Telegram voice.
+- WAIT presentation stages without loosening the actual One Brain gate.
+
+## Safety/performance rules
+
+- no new broker/API request for diagnostics
+- no future data in live calculations
+- no automatic threshold tuning
+- replay/calibration is on-demand and post-market
+- no duplicate evidence weighting
+- protected One Brain decision/risk files remain unchanged in 2.71
 
 ## Run
 
@@ -35,7 +45,7 @@ streamlit run app.py
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q
+PYTHONPATH=. pytest -q
 ```
 
-Runtime state, credentials, caches, generated reports and local data are excluded through `.gitignore`.
+Runtime state, credentials, caches and generated reports are excluded through `.gitignore`.

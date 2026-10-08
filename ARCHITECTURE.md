@@ -1,66 +1,71 @@
-# Architecture — V2.70 Pressure Integrity / Smart Alert Hardening
+# Architecture — V2.71 Observability / Replay / State Hardening
 
-## One authoritative snapshot
+## Canonical live path — unchanged
 
-`services/snapshot_service.py` builds one `MarketSnapshot`. Screen, journal, PDF and decision logic consume that same snapshot. New Market Intelligence logic performs **no independent broker/API fetch**.
+`services/snapshot_service.py` builds one authoritative `MarketSnapshot`. The protected operational brain remains:
 
-## Canonical operational brain — unchanged
+1. Trend / Regime — 40%
+2. Options Flow — 25%
+3. Participation — 20%
+4. Barrier / Entry — 15%
 
-`analysis/simple_brain.py` remains the operational authority after evidence is built:
+Available evidence is normalized; missing evidence is NO VOTE. Market Intelligence has zero One Brain weight.
 
-1. **Trend / Regime — 40%**
-2. **Options Flow — 25%**
-3. **Participation — 20%**
-4. **Barrier / Entry — 15%**
+## New diagnostic lane — zero live decision weight
 
-Weights normalize over available evidence. **Missing = no vote.** Market Intelligence never feeds a second directional score back into One Brain.
+`analysis/snapshot_integrity.py` consumes only the existing `feed_status` already present in the snapshot. It reports:
 
-## Two-speed Market Intelligence
+- core decision feeds LIVE count
+- context feeds LIVE count
+- source-age values where the broker supplies them
+- timestamped live-feed age skew
+- GOOD / CAUTION / LIMITED / REFERENCE diagnostic state
 
-### Fast lane — do not miss the move
+Request-time option-chain data without an exchange timestamp is explicitly labelled instead of receiving a fake age. This diagnostic never gates One Brain in v2.71.
 
-Move Radar can enter WATCH / BUILDING / HIGH immediately from pressure acceleration and already-available independent evidence. It does **not** wait for W/M, strong-candle completion or multi-snapshot persistence.
+## Latency observability
 
-### Quality lane — real vs fake pressure
+SnapshotService already records stage timings with `perf_mark`. V2.71 keeps that critical-path mechanism unchanged and improves presentation only:
 
-`analysis/pressure_integrity.py` evaluates:
+- current pipeline/build/finalize timing
+- P50/P95 session latency
+- top three slow stages
+- refresh-budget status
+- feed freshness + Snapshot Integrity state
 
-- independent-family confirmation/opposition
-- immediate price response / pressure efficiency
-- nearest relevant barrier distance, strength and break pressure
-- already-computed live 1m market speed
-- pressure persistence and collapse
-- W/M and candle evidence as **small supportive context only**
+No second timer-heavy pipeline and no extra API request are added.
 
-Outputs include pressure quality, fake/real evidence score, move-attack state, realized progress and flip state. A pressure wave that already produced a meaningful price move is marked REALIZED; later cooling becomes EXHAUSTING instead of being misclassified as fake.
+## Replay/calibration lane — on demand only
 
-## Pattern rule
+Persistent Day Memory already uses Railway SQLite. V2.71 extends its explicit replay projection to include the Market Intelligence state that was recorded at that minute:
 
-W/M and strong-candle patterns are never mandatory gates for Move Radar or pressure verification. They can strengthen or oppose a view but their absence is **NO VOTE**.
+- Move Radar
+- Move Pressure / velocity
+- Pressure Quality
+- Move Attack / Move Risk
+- One Brain alignment
+- liquidity hunt direction / next hunt zone
+- snapshot sync state
 
-## Liquidity rule
+`analysis/session_calibration.py` generates descriptive post-market summaries from retrospective labels. It never reconstructs an earlier signal using future information, never auto-tunes a threshold and never feeds results into the live predictor.
 
-A liquidity pool already containing price is a **CURRENT BATTLE ZONE**, not a future target. The next directional extension is a **NEXT HUNT ZONE**. A first breach is PENDING ACCEPTANCE. A quick reclaim is only REVERSAL WATCH; follow-through completed closes are required before REVERSAL FAVORED.
+## State management
 
-## Alert architecture
+High-value durable session history stays in SQLite through Day Memory. Small same-day runtime JSON stores remain bounded and local. In 2.71, Big Player/activity state gains process-safe locking around the already atomic read-modify-write cycle. Option state, discipline state and context stores already use hardened persistence patterns.
 
-Market Intelligence is the primary automatic Telegram voice. Pattern/W-M/Big Player evidence remains calculated and journaled, but when the MI lane is enabled it is merged into the Smart Alert context. Material state changes can alert: Big Move Watch, Pressure Verified, Absorption/Fake Risk, Build-up Failed, Exhaustion, Flip Watch/Confirmed, Move Attack, Liquidity Sweep, Alignment or System Conflict.
+A wholesale Redis/Postgres migration is intentionally deferred until multi-user/multi-replica production architecture requires it; adding an external service during single-user live validation would add complexity and failure modes without improving signal quality.
 
-## WAIT presentation
+## Pressure Integrity rules retained
 
-One Brain action logic is unchanged. UI labels may show NO EDGE / WATCH / ARMED while the canonical action remains WAIT. This is presentation only and cannot open the entry gate.
+- early Move Radar must not wait for W/M or candle completion
+- W/M and strong candles are supportive only
+- high pressure is not a trade signal
+- pressure that already produced a move is REALIZED, not retroactively fake
+- opposite pressure begins with FLIP WATCH before FLIP CONFIRMED
+- liquidity reclaim starts as REVERSAL WATCH before stronger follow-through
 
-## Validation
+## Golden Rule
 
-The Market Intelligence Test Pack records raw move pressure, pressure quality, price response, barrier attack, supportive signals, realized progress, flip states, liquidity roles and retrospective 5/15/30-minute outcomes. Future outcome columns are post-hoc labels only and are never exposed to the live predictor.
+**Observability must observe; it must not become another trading brain.**
 
-## Performance rules
-
-- no new Dhan/broker request
-- no full-history scan on the critical live path
-- no ML model on the live path
-- no duplicate evidence weighting
-- W/M/candle support is optional, never blocking
-- current One Brain core files stay protected
-
-The app remains read-only and never places, modifies or exits broker orders.
+V2.71 adds no Dhan request, does not change protected One Brain weights/calculations, and keeps expensive replay/calibration outside the live critical path.

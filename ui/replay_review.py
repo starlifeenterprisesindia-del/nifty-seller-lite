@@ -85,6 +85,8 @@ def _timeline_view(rows: list[dict[str, Any]]) -> pd.DataFrame:
             "R1": None if not r1 else f"{_fmt(r1.get('lower'),0)}–{_fmt(r1.get('upper'),0)}",
             "S1": None if not s1 else f"{_fmt(s1.get('lower'),0)}–{_fmt(s1.get('upper'),0)}",
             "CE Wall": ce.get("strike"), "PE Wall": pe.get("strike"), "Option Bias": row.get("option_bias"),
+            "MI Pressure": row.get("mi_pressure"), "MI Quality": row.get("mi_quality_state"),
+            "Move Radar": row.get("mi_radar_state"), "MI Alignment": row.get("mi_alignment"),
         })
     return pd.DataFrame(view)
 
@@ -135,6 +137,11 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
     m4.metric("CE wall moves", stats.get("ce_wall_changes", 0))
     m5.metric("PE wall moves", stats.get("pe_wall_changes", 0))
     m6.metric("BP 60+", stats.get("big_player_60plus_samples", 0))
+    i1, i2, i3, i4 = st.columns(4)
+    i1.metric("Move Radar active", stats.get("move_radar_non_normal_samples", 0))
+    i2.metric("Pressure verified", stats.get("pressure_verified_or_realized_samples", 0))
+    i3.metric("Pressure flips", stats.get("pressure_flip_samples", 0))
+    i4.metric("Absorption risk", stats.get("absorption_risk_samples", 0))
 
     step = st.slider("Replay step", 0, len(rows) - 1, len(rows) - 1, key="phase3_replay_step")
     selected = rows[int(step)]
@@ -147,6 +154,11 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
     bps = selected.get("big_player_score")
     c.metric("Big Player", str(selected.get("big_player_direction") or "—"), "—" if bps is None else f"{float(bps):.0f}/100")
     d.metric("Option Bias", str(selected.get("option_bias") or "—"), f"Conf {_fmt(selected.get('option_confidence'),0)}")
+    st.caption(
+        f"MI: {selected.get('mi_direction') or '—'} · Pressure {_fmt(selected.get('mi_pressure'),0)} · "
+        f"Quality {selected.get('mi_quality_state') or '—'} {_fmt(selected.get('mi_quality_score'),0)} · "
+        f"Radar {selected.get('mi_radar_state') or '—'} · Sync {selected.get('snapshot_sync_state') or '—'}"
+    )
 
     r1, s1 = selected.get("r1") or {}, selected.get("s1") or {}
     ce, pe = selected.get("ce_wall") or {}, selected.get("pe_wall") or {}
@@ -159,10 +171,25 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
         f"PE wall {_fmt(pe.get('strike'),0)} · migration {_fmt(pe.get('migration_points'),0)}"
     )
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🧠 One Brain Timeline", "🧱 Barrier + Money", "📊 Outcomes", "🧾 Events"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🧠 One Brain Timeline", "🧠 Intelligence", "🧱 Barrier + Money", "📊 Outcomes", "🧾 Events"])
     with tab1:
         st.dataframe(_timeline_view(rows), hide_index=True, width="stretch")
     with tab2:
+        intelligence_rows = []
+        for row in rows:
+            intelligence_rows.append({
+                "Time": row.get("time"), "Spot": row.get("spot"),
+                "MI Direction": row.get("mi_direction"), "Move Pressure": row.get("mi_pressure"),
+                "Velocity": row.get("mi_velocity"), "Quality": row.get("mi_quality_state"),
+                "Quality Score": row.get("mi_quality_score"), "Move Attack": row.get("mi_attack_state"),
+                "Move Risk": row.get("mi_risk_state"), "Move Radar": row.get("mi_radar_state"),
+                "Alignment": row.get("mi_alignment"), "Hunt": row.get("mi_hunt_bias"),
+                "Next Hunt Low": row.get("mi_next_hunt_lower"), "Next Hunt High": row.get("mi_next_hunt_upper"),
+                "Data Sync": row.get("snapshot_sync_state"),
+            })
+        st.dataframe(pd.DataFrame(intelligence_rows), hide_index=True, width="stretch")
+        st.caption("Recorded Market Intelligence only; future outcomes never feed back into the live predictor.")
+    with tab3:
         barrier_rows = []
         for row in rows:
             r1, r2, s1, s2 = row.get("r1") or {}, row.get("r2") or {}, row.get("s1") or {}, row.get("s2") or {}
@@ -175,7 +202,7 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
             })
         st.dataframe(pd.DataFrame(barrier_rows), hide_index=True, width="stretch")
         st.caption("Wall migration aur barrier changes historical display hain; inka live One Brain weight yahan se change nahi hota.")
-    with tab3:
+    with tab4:
         outcome = stats.get("outcomes") or {}
         out_rows = []
         for horizon in ("5m", "15m", "30m"):
@@ -190,7 +217,7 @@ def render_phase3_replay(snapshot: Any, url: str, key: str) -> None:
         st.write("**Action counts**", stats.get("action_counts") or {})
         st.write("**Regime counts**", stats.get("regime_counts") or {})
         st.caption(str(stats.get("note") or ""))
-    with tab4:
+    with tab5:
         events = list(bundle.get("events") or [])
         if events:
             st.dataframe(pd.DataFrame(events), hide_index=True, width="stretch")

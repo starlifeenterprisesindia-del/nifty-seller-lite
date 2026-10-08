@@ -66,11 +66,28 @@ def render_performance_diagnostics(
         )
 
     slowest = report.get("slowest_stage") or "—"
+    integrity = report.get("snapshot_integrity") or {}
+    integrity_text = ""
+    if integrity:
+        integrity_text = (
+            f" · Evidence sync {integrity.get('state', '—')}"
+            f" · core {integrity.get('core_live', 0)}/{integrity.get('core_total', 0)}"
+            f" · age skew {float(integrity.get('timestamped_age_skew_seconds') or 0.0):.1f}s"
+        )
     st.caption(
         f"Snapshot mode: {report['snapshot_mode']} · "
+        f"Budget: {report.get('latency_budget_state', '—')} · "
         f"Slowest stage: {slowest} {report['slowest_stage_seconds']:.2f}s · "
         f"Critical feed issues: {report['critical_issue_count']}"
+        f"{integrity_text}"
     )
+
+    top = report.get("top_stages") or []
+    if top:
+        st.caption(
+            "Top bottlenecks: "
+            + " | ".join(f"{row['Stage']} {float(row['Seconds']):.2f}s" for row in top)
+        )
 
     tab1, tab2 = st.tabs(["Stage timing", "Feed freshness"])
     with tab1:

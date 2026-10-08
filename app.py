@@ -1160,6 +1160,22 @@ snapshot = st.session_state.snapshot
 previous_snapshot = st.session_state.get("previous_snapshot")
 
 
+def _attach_snapshot_integrity_diagnostic(snapshot):
+    """Attach zero-weight feed coherence diagnostics from existing feed metadata."""
+    metadata = getattr(snapshot, "metadata", {})
+    if metadata.get("snapshot_integrity"):
+        return
+    try:
+        from analysis.snapshot_integrity import build_snapshot_integrity
+        metadata["snapshot_integrity"] = build_snapshot_integrity(snapshot)
+    except Exception as exc:
+        metadata["snapshot_integrity"] = {
+            "state": "UNAVAILABLE",
+            "reason": f"{type(exc).__name__}",
+            "effect_on_one_brain": "NONE — DIAGNOSTIC ONLY",
+        }
+
+
 def _attach_market_intelligence_shadow(snapshot, previous_snapshot):
     """Attach OB-MIE after current One-Brain decisions, with fail-open isolation."""
     metadata = getattr(snapshot, "metadata", {})
@@ -1262,6 +1278,7 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
     # decision/guard pipeline is finished.  It has zero core weight and cannot
     # feed back into any decision above.
     _attach_market_intelligence_shadow(snapshot, previous_snapshot)
+    _attach_snapshot_integrity_diagnostic(snapshot)
     snapshot.metadata["canonical_finalized"] = True
 
     # Evidence remains exact, but the Railway endpoint now returns only an ACK for
@@ -1320,6 +1337,7 @@ shadow_entries = _finalize_snapshot_once(snapshot, previous_snapshot)
 # Idempotent safety for a restored/cached snapshot created before OB-MIE existed.
 # Fresh snapshots already have this attached inside the canonical finalizer.
 _attach_market_intelligence_shadow(snapshot, previous_snapshot)
+_attach_snapshot_integrity_diagnostic(snapshot)
 # Phase-11 latency history is session-local diagnostics only. It never feeds a
 # market score, and keeping 120 points is enough for P50/P95 without unbounded RAM.
 _perf_now = snapshot.metadata.setdefault("performance", {})
@@ -1403,10 +1421,17 @@ st.caption(
     f"build {_build_text} · {_data_text}"
 )
 if _perf.get("pipeline_seconds") is not None:
+    _sync_diag = snapshot.metadata.get("snapshot_integrity") or {}
+    _sync_suffix = (
+        f" · sync {_sync_diag.get('state', '—')}"
+        f" {_sync_diag.get('core_live', 0)}/{_sync_diag.get('core_total', 0)}"
+        if _sync_diag else ""
+    )
     st.caption(
         f"⚙️ Processing {float(_perf['pipeline_seconds']):.2f}s · "
         f"snapshot {float(_perf.get('build_seconds') or 0.0):.2f}s · "
         f"slowest {_slowest or '—'} {_slowest_seconds:.2f}s"
+        f"{_sync_suffix}"
     )
 
 

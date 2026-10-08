@@ -257,10 +257,17 @@ def render_market_intelligence(snapshot: Any) -> None:
             ("15m", _path_text(item.get("path_15m"))),
             ("30m", _path_text(item.get("path_30m"))),
         ], outlook=True)
+        sync = (getattr(snapshot, "metadata", {}) or {}).get("snapshot_integrity") or {}
+        sync_text = ""
+        if sync:
+            sync_text = (
+                f" · Data sync: {sync.get('state', '—')}"
+                f" ({sync.get('core_live', 0)}/{sync.get('core_total', 0)} core)"
+            )
         st.caption(
             f"Next hunt: {next_hunt_text} · After zone: {sweep_outcome} · Reach: {reach} · "
-            f"Fake-risk: {integrity.get('fake_pressure_score', '—')} · Evidence: {_evidence_label(item)} · "
-            "scores evidence hain, calibrated probabilities nahi."
+            f"Fake-risk: {integrity.get('fake_pressure_score', '—')} · Evidence: {_evidence_label(item)}"
+            f"{sync_text} · scores evidence hain, calibrated probabilities nahi."
         )
 
     with st.expander("Advanced / Research detail", expanded=False):
