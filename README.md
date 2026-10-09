@@ -1,4 +1,4 @@
-# Nifty Seller Lite 2.74.1 — Barrier Correctness Sync
+# Nifty Seller Lite 2.74.2 — MI Alert Runtime Hotfix
 
 Read-only NIFTY options decision-support app with one operational path:
 
@@ -6,6 +6,12 @@ Read-only NIFTY options decision-support app with one operational path:
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
 
+
+## 2.74.2 hotfix
+
+- Fixes a live-only `NameError` in the Market Intelligence Telegram/app alert controller when an MI alert becomes eligible.
+- The fix only binds the already-computed `institutional_window` payload inside the alert function; no market calculation, barrier logic, One Brain logic, journal logic, thresholds, weights, or API calls change.
+- v2.74.1 Barrier Correctness Sync remains intact.
 
 ## 2.74.1 highlights
 

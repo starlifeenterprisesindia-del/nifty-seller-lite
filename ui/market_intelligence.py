@@ -410,6 +410,11 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     if not st.session_state.get("market_intelligence_alerts_enabled", True):
         return []
     item = (getattr(snapshot, "metadata", {}) or {}).get("market_intelligence") or {}
+    # Alert processing runs independently from the screen renderer, so keep its
+    # Institutional Window context local to this function as well.  Without this
+    # local binding, the first live MI alert could raise NameError even though the
+    # underlying Market Intelligence calculation had completed successfully.
+    institutional = item.get("institutional_window") if isinstance(item.get("institutional_window"), dict) else {}
     alerts = [row for row in (item.get("alerts") or ()) if isinstance(row, dict)]
     if not alerts:
         return []
