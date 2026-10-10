@@ -1,0 +1,34 @@
+# Python/runtime caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets
+.streamlit/secrets.toml
+.env
+
+# Runtime market state / caches (created automatically at runtime)
+data/instrument_master.csv
+data/option_state.json
+data/option_state.json.lock
+data/market_context.json
+data/market_context.json.lock
+data/market_context_mirror.json
+data/market_context_rescue.json
+data/discipline_state.json
+data/discipline_state.json.lock
+data/big_player_state.json
+data/big_player_state.json.lock
+data/recent_top9.json
+data/shadow_journal.json
+data/shadow_journal.json.lock
+data/shadow_journal.cycles.json
+data/shadow_journal.cycles.json.lock
+data/decision_journal.json
+data/decision_journal.json.lock
+
+# Generated evidence / reports
+*.log
+*.tmp
+nifty-evidence*.jsonl
+nifty-evidence*.jsonl.gz
