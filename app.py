@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # Compact GitHub package: pure-Python analysis/services/ui modules live in one zip.
-_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v269.zip")
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v275.zip")
 if _RUNTIME_BUNDLE.exists() and str(_RUNTIME_BUNDLE) not in sys.path:
     sys.path.insert(0, str(_RUNTIME_BUNDLE))
 
@@ -107,6 +107,7 @@ from ui.strategy_lab import render_phase4_strategy_lab, render_phase7_strategy_r
 from ui.validation_lab import render_phase5_validation_lab
 from ui.market_intelligence import render_market_intelligence, render_move_radar, process_market_intelligence_alerts
 from services.market_intelligence_export import build_market_intelligence_test_pack
+from services.master_live_test_pack import build_master_live_test_pack
 
 
 _PROCESS_PERSIST_CONTROLS = {
@@ -1233,6 +1234,18 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
     sync_day_memory(
         snapshot, live_server_url, live_server_api_key, record_event=False
     )
+    # Restore durable Decision Journal rows immediately after a deploy/restart.
+    # This happens before the Journal panel is opened, preventing false "0 decisions"
+    # states while the local Streamlit filesystem is still cold.
+    _day_report = st.session_state.get("day_memory_report") or {}
+    _remote_decisions = _day_report.get("app_decisions") or [] if isinstance(_day_report, dict) else []
+    if _remote_decisions:
+        try:
+            shadow_journal_store.merge_decisions(
+                [row for row in _remote_decisions if isinstance(row, dict)]
+            )
+        except Exception:
+            pass
     snapshot.metadata["future_brain"] = calculate_future_brain(
         snapshot,
         previous_snapshot,
@@ -1617,19 +1630,13 @@ render_compact_barrier_map(view_snapshot, previous_view_snapshot)
 render_market_pulse_strip(view_snapshot)
 render_compact_strategy_summary(view_snapshot)
 
-# The chart is intentionally optional.  Keeping the iframe closed during ordinary
-# auto-refresh removes the largest layout-shift source while the Brain keeps running.
-with persistent_panel("📊 Show Live Chart — Simple / Advanced", "panel_live_chart_open") as panel_open:
-    if panel_open:
-        render_live_barrier_chart(view_snapshot)
-
 # Alerts remain the same calculation/delivery lanes.  Automatic combined-alert
 # processing runs above regardless of whether this visual hub is open.
 with persistent_panel("🔔 Alerts", "panel_alerts_hub_open") as alerts_open:
     if alerts_open:
         st.caption(
-            "Smart Alert mode: Market Intelligence primary Telegram voice hai; W/M + Candle + Big Player "
-            "supportive evidence ke roop me calculate/record hote hain aur same story me merge hote hain."
+            "STRONG ONLY: Telegram sirf strong movement/escalation ya important risk par. "
+            "W/M + Candle + Big Player + watch events screen/journal me record hote rahenge; same setup story par repeat alert suppress hoga."
         )
         _persistent_toggle(
             "Market Intelligence / Move Radar / Liquidity alerts ON",
@@ -1672,9 +1679,9 @@ _remember_runtime_control(
 # PRE-LIVE MAIN ROUTE TOOLS (v2.64.6): these five high-use live panels stay
 # directly accessible on the main page.  Their calculations/renderers are unchanged;
 # only the navigation level moved out of More Tools & Advanced.
-with persistent_panel("🛡️ Strategy & Strike Detail", "panel_strategy_detail_open") as panel_open:
-    if panel_open:
-        render_protected_candidates(view_snapshot)
+# High-use strategy table stays open on the main route; no extra calculation/API call.
+with st.container(border=True):
+    render_protected_candidates(view_snapshot)
 
 with persistent_panel("📈 Options Live Board", "panel_options_live_board_open") as panel_open:
     if panel_open:
@@ -1696,6 +1703,11 @@ with persistent_panel("Compact Evidence — Diagnostic", "panel_compact_evidence
 # its state across 15/30s reruns and makes the default live page short and stable.
 with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") as more_open:
     if more_open:
+        with persistent_panel("📊 Advanced Live Chart — optional", "panel_live_chart_open") as panel_open:
+            if panel_open:
+                st.caption("Display-only chart. Core One Brain calculations run independently; default closed to avoid layout/refresh overhead.")
+                render_live_barrier_chart(view_snapshot)
+
         with persistent_panel("🕯️ Candle Pattern Library — Shadow", "panel_candle_library_shadow_open") as panel_open:
             if panel_open:
                 render_candle_pattern_library_shadow(view_snapshot)
@@ -1790,10 +1802,6 @@ with persistent_panel("⚙️ More Tools & Advanced", "panel_more_tools_open") a
                     snapshot_built_now=snapshot_built_now,
                     pipeline_history=list(st.session_state.get("pipeline_latency_history", [])),
                 )
-
-        with persistent_panel("❓ One Brain Quick Guide", "panel_help_guide_open") as panel_open:
-            if panel_open:
-                render_help_guide()
 
         with persistent_panel("📚 Recorded Data + Calibration", "panel_day_memory_open") as panel_open:
             if panel_open:
@@ -1906,6 +1914,51 @@ with st.expander("🧰 Checks & Downloads Centre", expanded=False):
         )
 
     st.divider()
+    st.markdown("**FINAL MASTER TESTING — one-click forensic pack**")
+    st.caption(
+        "Decision Journal + Paper Validation + Smart Entry + Alert delivery/suppression + performance + "
+        "existing Market Intelligence replay ko ek ZIP me rakhta hai. Button click par existing Railway evidence export read hoti hai; live broker/API calculation path par zero effect."
+    )
+    if st.button("Prepare MASTER LIVE TEST PACK", key="prepare_master_live_test_pack", width="stretch"):
+        if not live_server_url or not live_server_api_key:
+            st.info("MASTER LIVE TEST PACK ke liye Railway connection chahiye.")
+        else:
+            try:
+                with st.spinner("Building master forensic ZIP from already-recorded evidence..."):
+                    raw_evidence = RailwayDhanClient(
+                        live_server_url, live_server_api_key, timeout_seconds=60
+                    ).download_bytes("/day-memory-export-file")
+                    _report = st.session_state.get("day_memory_report") or {}
+                    _remote = _report.get("app_decisions") or [] if isinstance(_report, dict) else []
+                    if _remote:
+                        try:
+                            shadow_journal_store.merge_decisions([row for row in _remote if isinstance(row, dict)])
+                        except Exception:
+                            pass
+                    st.session_state.master_live_test_pack_bytes = build_master_live_test_pack(
+                        raw_evidence,
+                        current_snapshot_summary=view_snapshot.public_summary(),
+                        decision_rows=shadow_journal_store.load_decisions(),
+                        paper_entries=shadow_entries,
+                        smart_entry_rows=list(st.session_state.get("smart_entry_validation_log", [])),
+                        alert_audit_rows=list(st.session_state.get("smart_alert_audit_local", [])),
+                        performance_rows=list(st.session_state.get("pipeline_latency_history", [])),
+                        recording_diagnostics=snapshot.metadata.get("recording_diagnostics") or {},
+                    )
+                st.success("MASTER LIVE TEST PACK ready")
+            except Exception as exc:
+                st.error(f"MASTER LIVE TEST PACK not generated: {exc}")
+    if st.session_state.get("master_live_test_pack_bytes"):
+        _master_stamp = snapshot.created_at.strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            "Download MASTER LIVE TEST PACK ZIP",
+            data=st.session_state.master_live_test_pack_bytes,
+            file_name=f"one_brain_master_live_test_pack_{_master_stamp}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
+
+    st.divider()
     st.markdown("**Recorded data and backups**")
     evidence_col, journal_col = st.columns(2)
     with evidence_col:
@@ -1964,10 +2017,16 @@ with st.expander("🧰 Checks & Downloads Centre", expanded=False):
             )
         diagnostics = snapshot.metadata.get("recording_diagnostics") or {}
         if diagnostics:
+            pending = bool((diagnostics.get("async_refresh") or {}).get("pending"))
+            recorder_state = (
+                "AVAILABLE" if diagnostics.get("available") else
+                "SYNC PENDING / WARMING" if pending else
+                "RETRYING" if diagnostics.get("error") else
+                "UNAVAILABLE"
+            )
             st.caption(
-                "Evidence recorder: "
-                + ("AVAILABLE" if diagnostics.get("available") else "UNAVAILABLE")
-                + f" · {diagnostics.get('recording_health') or diagnostics.get('error') or '—'}"
+                "Evidence recorder: " + recorder_state
+                + f" · {diagnostics.get('recording_health') or diagnostics.get('error') or 'history refresh in progress' if pending else '—'}"
             )
     st.caption("Railway memory safety: ek time par sirf ek generated report RAM me rakhi jati hai; next snapshot par clear hoti hai.")
     gc.collect()

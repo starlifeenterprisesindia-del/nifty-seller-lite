@@ -30,6 +30,17 @@ def render_rsi_reversal_setup(
         if item.status == "REFERENCE ONLY"
         else "wait"
     )
+    permission_text = (
+        "TOP ACTIVE" if item.zone == "TOP" else
+        "BOTTOM ACTIVE" if item.zone == "BOTTOM" else
+        "NOT ACTIVE"
+    )
+    permission_detail = (
+        f"{permission_text} · RSI {_value(item.rsi_previous)} → {_value(item.rsi_now)}"
+        if item.zone != "NORMAL"
+        else f"{permission_text} · 15m RSI {_value(item.rsi_previous)} → {_value(item.rsi_now)} · Top ≥70 / Bottom ≤30"
+    )
+
     html = (
         "<style>"
         ".rtr-card{border:1px solid rgba(127,127,127,.28);border-radius:15px;padding:13px;margin:4px 0 10px}"
@@ -47,7 +58,7 @@ def render_rsi_reversal_setup(
         f'<div><div class="rtr-label">ALAG RSI REVERSAL STRATEGY</div><div class="rtr-action">{escape(item.action)}</div></div>'
         f'<div class="rtr-badge">{escape(item.status)} · Setup score {item.confidence}/100</div></div>'
         '<div class="rtr-grid">'
-        f'<div class="rtr-cell"><div class="rtr-label">15M PERMISSION + RSI</div><div class="rtr-value">{escape(item.zone)} · {_value(item.rsi_previous)} → {_value(item.rsi_now)}</div></div>'
+        f'<div class="rtr-cell"><div class="rtr-label">15M PERMISSION + RSI</div><div class="rtr-value">{escape(permission_detail)}</div></div>'
         f'<div class="rtr-cell"><div class="rtr-label">3M ENTRY TRIGGER</div><div class="rtr-value">{escape(item.trigger_text)}</div></div>'
         f'<div class="rtr-cell"><div class="rtr-label">BARRIER + OI</div><div class="rtr-value">{escape(item.barrier_text)}</div></div>'
         f'<div class="rtr-cell"><div class="rtr-label">BIG PLAYER</div><div class="rtr-value">{escape(item.big_player_text)}</div></div>'

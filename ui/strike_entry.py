@@ -13,14 +13,18 @@ def reset_strike_entry_state(snapshot, side, position, strike, hedge):
     st.session_state.pop(key + "_ready", None)
 
 
-def prepare_strike_entry(snapshot, side, position, strike, lots, *, compact: bool = False):
+def prepare_strike_entry(
+    snapshot, side, position, strike, lots, *, compact: bool = False, enforce_risk_cap: bool = True
+):
     """Build the independent planner once and return ``(result, hedge)``.
 
-    ``compact=True`` is used by the Premium Calculator so the Smart Entry Advisor can
-    present one clear decision card while the full planner detail stays in an expander.
-    The underlying planner/risk logic is unchanged.
+    ``compact=True`` is used by the Premium Calculator.  ``enforce_risk_cap=False``
+    allows a what-if quantity to be calculated without weakening the live execution
+    guard; the UI must still show the configured risk allowance separately.
     """
-    if int(lots) < 1 or int(lots) > snapshot.risk_profile.max_lots_cap:
+    if int(lots) < 1:
+        return None, None
+    if enforce_risk_cap and int(lots) > snapshot.risk_profile.max_lots_cap:
         return None, None
 
     hedge = None
@@ -60,7 +64,11 @@ def prepare_strike_entry(snapshot, side, position, strike, lots, *, compact: boo
         as_of=snapshot.created_at,
         expiry=snapshot.expiry,
         live=live,
-        risk_budget=min(5000, snapshot.risk_profile.risk_budget_rupees),
+        risk_budget=(
+            min(5000, snapshot.risk_profile.risk_budget_rupees)
+            if enforce_risk_cap
+            else 1_000_000_000.0
+        ),
         lot_size=snapshot.risk_profile.lot_size,
         lots=int(lots),
         hedge_strike=hedge,

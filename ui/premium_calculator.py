@@ -74,7 +74,7 @@ def _render_smart_entry_advisor(advisor: Any, *, side: str, position: str, strik
         st.caption("Why: " + reason_text)
     magnet_score = "—" if advisor.liquidity_magnet_score is None else f"{advisor.liquidity_magnet_score:.0f}/100"
     st.caption(
-        f"Liquidity Magnet: {advisor.liquidity_magnet_bias} {magnet_score} · "
+        f"Liquidity Concentration: {advisor.liquidity_magnet_bias} {magnet_score} · "
         f"Price quality {advisor.price_quality_score:.0f}/100 · Move urgency {advisor.move_urgency_score:.0f}/100"
     )
 
@@ -245,11 +245,11 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
         q1, q2, q3, q4 = st.columns(4)
         q1.metric("Current premium", f"₹{chain_price:,.2f}")
         q2.metric("Current NIFTY", f"{live_spot:,.2f}")
-        lots = q3.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots")
+        lots = q3.number_input("Lots", min_value=1, value=1, step=1, key="spc2_lots")
         q4.metric("Expiry / Time", expiry_info.label)
 
         planner_result, hedge = prepare_strike_entry(
-            snapshot, side, position, strike, lots, compact=True
+            snapshot, side, position, strike, lots, compact=True, enforce_risk_cap=False
         )
         if planner_result is None:
             st.warning("Planner setup unavailable — quantity/protective hedge check karo.")
@@ -264,6 +264,33 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
             hedge_strike=hedge,
         )
         _render_smart_entry_advisor(advisor, side=side, position=position, strike=float(strike))
+
+        # Display/validation-only trace for the Master Live Test Pack. Reuses the
+        # already-built advisor and never calls the broker or changes One Brain.
+        smart_entry_row = {
+            "snapshot_id": snapshot.snapshot_id,
+            "at": snapshot.created_at.isoformat(),
+            "side": side, "position": position, "strike": float(strike), "lots": int(lots),
+            "status": str(advisor.status),
+            "current_executable": float(advisor.current_executable_premium),
+            "preferred_low": advisor.preferred_low, "preferred_high": advisor.preferred_high,
+            "acceptable_low": advisor.acceptable_low, "acceptable_high": advisor.acceptable_high,
+            "no_chase_level": advisor.no_chase_level,
+            "price_quality_state": str(advisor.price_quality_state),
+            "price_quality_score": float(advisor.price_quality_score),
+            "move_urgency_state": str(advisor.move_urgency_state),
+            "move_urgency_score": float(advisor.move_urgency_score),
+            "institutional_state": str(advisor.institutional_state),
+            "liquidity_concentration_bias": str(advisor.liquidity_magnet_bias),
+            "liquidity_concentration_score": advisor.liquidity_magnet_score,
+        }
+        snapshot.metadata["smart_entry_advisor_last"] = smart_entry_row
+        history = list(st.session_state.get("smart_entry_validation_log", []))
+        row_key = f"{snapshot.snapshot_id}:{side}:{position}:{float(strike):.2f}:{int(lots)}"
+        if not history or str(history[-1].get("_key") or "") != row_key:
+            smart_entry_row["_key"] = row_key
+            history.append(smart_entry_row)
+            st.session_state.smart_entry_validation_log = history[-500:]
 
         entry_spot = (
             float(live_spot)
@@ -348,8 +375,16 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
             step=1.0,
             key="spc2_entry_spot",
         )
-        lots = p4.number_input("Lots", min_value=1, max_value=100, value=1, step=1, key="spc2_lots_actual")
+        lots = p4.number_input("Lots", min_value=1, value=1, step=1, key="spc2_lots_actual")
         st.caption("Actual-fill mode: calculator tumhari real entry ko use karega; Smart Entry Advisor is mode me entry rewrite nahi karta.")
+
+    configured_cap = int(getattr(snapshot.risk_profile, "max_lots_cap", 0) or 0)
+    if configured_cap > 0 and int(lots) > configured_cap:
+        st.warning(
+            f"Calculator scenario: {int(lots)} lots. Live risk allowance {configured_cap} lot(s); "
+            f"{int(lots) - configured_cap} lot(s) allowance se upar. Projection calculate hogi, "
+            "lekin live Execution Guard / risk cap unchanged rahega."
+        )
 
     h1, h2 = st.columns(2)
     holding = h1.selectbox(
@@ -379,12 +414,20 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
             key="spc2_upper",
         )
 
-    advanced_on = st.checkbox("Advanced IV/Time details", key="spc2_advanced_on")
+    st.caption("Advanced IV/Time details · Auto saved-history IV ya Manual WHAT-IF choose karo.")
+    # Backward wording note: Manual IV scenario override / IV change scenario (optional) is now the clearer MANUAL WHAT-IF mode.
+    iv_mode = st.selectbox(
+        "IV scenario mode",
+        ("AUTO IV — saved history", "MANUAL WHAT-IF", "IV EFFECT OFF"),
+        index=0,
+        key="spc2_iv_mode",
+        help="Auto uses already-saved option history; Manual is a what-if only; Off ignores IV change. No mode changes One Brain.",
+    )
     iv_change = 0.0
     auto_iv_status = "OFF"
     auto_iv_window = None
     auto_iv_delta = None
-    if advanced_on:
+    if iv_mode == "AUTO IV — saved history":
         # Auto IV delta is presentation/calculator-only. It reuses the compact
         # option snapshot already attached to MarketSnapshot and bounded same-day
         # persisted history. No broker/API call and no One-Brain recomputation.
@@ -448,21 +491,19 @@ def render_spot_premium_calculator(snapshot: MarketSnapshot, option_state_store:
                 "IV effect 0 rakha gaya, koi value invent nahi ki gayi."
             )
 
-        manual_iv_override = st.checkbox(
-            "Manual IV scenario override",
-            value=False,
-            key="spc2_manual_iv_override",
-            help="Normally OFF rakho. Auto IV Δ available ho to wahi calculator use karega.",
+    elif iv_mode == "MANUAL WHAT-IF":
+        iv_change = st.number_input(
+            "What-if IV Δ (points)",
+            min_value=-20.0,
+            max_value=20.0,
+            value=0.0,
+            step=0.5,
+            key="spc2_iv_change",
+            help="Hypothetical IV change for projection only; live IV/One Brain data is not overwritten.",
         )
-        if manual_iv_override:
-            iv_change = st.number_input(
-                "IV change scenario (optional)",
-                min_value=-20.0,
-                max_value=20.0,
-                value=float(round(iv_change, 2)),
-                step=0.5,
-                key="spc2_iv_change",
-            )
+        st.caption("Manual WHAT-IF: scenario only — signal, barrier, entry gate aur live IV unchanged.")
+    else:
+        st.caption("IV EFFECT OFF: premium projection me IV change 0 maana jayega; current Greeks/source values unchanged.")
 
     signature = (
         snapshot.snapshot_id,

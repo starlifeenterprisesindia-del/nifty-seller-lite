@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import pandas as pd
 import streamlit as st
+from config import CONFIG
 from analysis.canonical_forecast import build_canonical_forecast, compatible_strategies
 from analysis.entry_guidance import build_entry_guidance
 from analysis.iv_delta_display import compute_iv_delta_payload
@@ -138,15 +139,31 @@ def _responsive_cards_html(cards: list[tuple[str, str, str, str]]) -> str:
     )
 
 
-def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: str) -> str:
+def _barrier_level_html(
+    level: Any | None, *, css_class: str, fallback_label: str, active_attack: bool = False
+) -> str:
     if level is None:
         return (
             f'<div class="bm-level {css_class} muted">'
             f'<div class="bm-tag">{escape(fallback_label)}</div>'
             '<div class="bm-zone">Unresolved</div></div>'
         )
+    raw_state = str(getattr(level, "state", "") or "").upper()
     state = escape(_barrier_state_hinglish(level))
     sources = escape(_barrier_sources(level))
+    margin = float(level.break_pressure) - float(level.strength)
+    confirmed_break = any(token in raw_state for token in ("BROKEN", "ROLE REVERSAL", "CONFIRMED BREAK"))
+    attack_visual = bool(
+        active_attack
+        and float(level.break_pressure) >= CONFIG.visual_barrier_attack_pressure
+        and margin >= CONFIG.visual_barrier_attack_margin
+    )
+    vulnerable = margin > 0
+    visual_class = (
+        " confirmed-break" if confirmed_break else
+        " attack-break" if attack_visual else
+        " vulnerable" if vulnerable else ""
+    )
     strength_width = max(0.0, min(100.0, float(level.strength)))
     pressure_width = max(0.0, min(100.0, float(level.break_pressure)))
     confirmation = (
@@ -155,7 +172,7 @@ def _barrier_level_html(level: Any | None, *, css_class: str, fallback_label: st
         else f"{level.lower:,.0f} ke neeche close"
     )
     return (
-        f'<div class="bm-level {css_class}">'
+        f'<div class="bm-level {css_class}{visual_class}">'
         f'<div class="bm-level-head"><span class="bm-tag">{escape(level.label)} · {escape(level.side.title())}</span>'
         f'<span class="bm-state">{state}</span></div>'
         f'<div class="bm-zone">{level.lower:,.0f}–{level.upper:,.0f}</div>'
@@ -322,6 +339,26 @@ def render_compact_barrier_map(
         "NO IMPORTANT CANDLE",
         show_possible_effect=True,
     )
+
+    def pattern_visual_class(signal: Any | None, base: str) -> str:
+        if signal is None:
+            return base
+        direction = str(getattr(signal, "direction", "NEUTRAL") or "NEUTRAL").upper()
+        strength = str(getattr(signal, "strength", "NORMAL") or "NORMAL").upper()
+        stage = str(getattr(signal, "stage", "") or "").upper()
+        confidence = float(getattr(signal, "confidence", 0.0) or 0.0)
+        strong = strength in {"STRONG", "VERY STRONG"} or confidence >= 70.0
+        pulse = strength == "VERY STRONG" or (strong and any(x in stage for x in ("CONFIRM", "BREAK", "VALID")))
+        if direction == "BULLISH" and strong:
+            return base + " bullish" + (" pulse" if pulse else "")
+        if direction == "BEARISH" and strong:
+            return base + " bearish" + (" pulse" if pulse else "")
+        if direction == "NEUTRAL" and strong:
+            return base + " neutral-strong"
+        return base
+
+    wm_class = pattern_visual_class(getattr(patterns, "wm_3m", None), "wm")
+    candle_class = pattern_visual_class(main_candle, "candle")
     if candle_name != "NO IMPORTANT CANDLE":
         main_direction = str(getattr(main_candle, "direction", "NEUTRAL")).upper()
 
@@ -356,8 +393,13 @@ def render_compact_barrier_map(
         '.cbm-n{font-size:.72rem;opacity:.72;margin-top:4px;line-height:1.3}'
         '.cbm-patterns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 8px}'
         '.cbm.pattern{padding:9px 11px}.cbm.pattern .cbm-v{font-size:1rem}'
+        '@keyframes cbmPulse{0%,100%{box-shadow:none;transform:scale(1)}50%{box-shadow:0 0 18px rgba(255,255,255,.18);transform:scale(1.008)}}'
         '.cbm.wm{border-color:rgba(168,85,247,.38);background:rgba(168,85,247,.07)}'
         '.cbm.candle{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.07)}'
+        '.cbm.pattern.bullish{border-color:rgba(34,197,94,.68);background:rgba(34,197,94,.14)}'
+        '.cbm.pattern.bearish{border-color:rgba(239,68,68,.68);background:rgba(239,68,68,.14)}'
+        '.cbm.pattern.neutral-strong{border-color:rgba(245,158,11,.68);background:rgba(245,158,11,.14)}'
+        '.cbm.pattern.pulse{animation:cbmPulse .85s ease-in-out 4}'
         '@media(max-width:760px){.cbm-grid,.cbm-patterns{grid-template-columns:1fr}.cbm{padding:10px}.cbm-v{font-size:1.12rem}.cbm.pattern{padding:8px 10px}}'
         '</style>'
         '<div class="cbm-grid">'
@@ -365,8 +407,8 @@ def render_compact_barrier_map(
         f'<div class="cbm spot"><div class="cbm-l">NIFTY ABHI</div><div class="cbm-v">{escape(spot)}</div><div class="cbm-n">Range {range_item.confidence:.0f}/100 · {escape(range_item.breakout_bias)} · Confirmation tak WAIT</div></div>'
         f'<div class="cbm sup"><div class="cbm-l">AGLA SAHARA</div><div class="cbm-v">{escape(support)}</div><div class="cbm-n">{escape(support_note)}</div></div>'
         '</div><div class="cbm-patterns">'
-        f'<div class="cbm pattern wm"><div class="cbm-l">3-MINUTE W/M @ NEAREST LEVEL</div><div class="cbm-v">{escape(wm_name)}</div><div class="cbm-n">{escape(wm_note)}</div></div>'
-        f'<div class="cbm pattern candle"><div class="cbm-l">3-MINUTE CANDLE @ NEAREST LEVEL</div><div class="cbm-v">{escape(candle_name)}</div><div class="cbm-n">{escape(candle_note)}</div></div>'
+        f'<div class="cbm pattern {escape(wm_class)}"><div class="cbm-l">3-MINUTE W/M @ NEAREST LEVEL</div><div class="cbm-v">{escape(wm_name)}</div><div class="cbm-n">{escape(wm_note)}</div></div>'
+        f'<div class="cbm pattern {escape(candle_class)}"><div class="cbm-l">3-MINUTE CANDLE @ NEAREST LEVEL</div><div class="cbm-v">{escape(candle_name)}</div><div class="cbm-n">{escape(candle_note)}</div></div>'
         '</div>'
     )
     if hasattr(st, "html"):
@@ -392,12 +434,25 @@ def render_compact_barrier_map(
     core = snapshot.core_evidence
     core_state = getattr(core, "market_state", getattr(core, "state", "UNRESOLVED"))
     core_range = float(getattr(core, "range_score", 0.0) or 0.0)
+    bull = float(core.bullish_score or 0.0)
+    bear = float(core.bearish_score or 0.0)
+    bull_tone = ""
+    bear_tone = ""
+    if bull >= CONFIG.visual_evidence_strong_score and bull - bear >= CONFIG.visual_evidence_min_gap:
+        bull_tone = "green"
+        if bull >= CONFIG.visual_evidence_pulse_score and bull - bear >= CONFIG.visual_evidence_pulse_gap:
+            bull_tone += " pulse"
+    elif bear >= CONFIG.visual_evidence_strong_score and bear - bull >= CONFIG.visual_evidence_min_gap:
+        bear_tone = "red"
+        if bear >= CONFIG.visual_evidence_pulse_score and bear - bull >= CONFIG.visual_evidence_pulse_gap:
+            bear_tone += " pulse"
+    range_tone = "amber" if core_range >= CONFIG.visual_evidence_strong_score else ""
     _render_compact_cards(
         [
-            ("Bullish Evidence", f"{core.bullish_score:.1f}/100", "Upar ke completed-candle signals"),
-            ("Bearish Evidence", f"{core.bearish_score:.1f}/100", "Neeche ke completed-candle signals"),
-            ("Range / Mixed", f"{core_range:.1f}/100", f"Core state {core_state}"),
-            ("Core data coverage", f"{core.confidence:.1f}%", f"Status {core.status}; not win probability"),
+            ("Bullish Evidence", f"{bull:.1f}/100", "Upar ke completed-candle signals", bull_tone),
+            ("Bearish Evidence", f"{bear:.1f}/100", "Neeche ke completed-candle signals", bear_tone),
+            ("Range / Mixed", f"{core_range:.1f}/100", f"Core state {core_state}", range_tone),
+            ("Core data coverage", f"{core.confidence:.1f}%", f"Status {core.status}; not win probability", ""),
         ]
     )
     st.info("🧠 **Barrier AI:** " + item.summary)
@@ -445,9 +500,20 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
             "Nearest barrier ki Break Pressure ko priority se dekho."
         )
 
+    mie = (snapshot.metadata.get("market_intelligence") or {}) if isinstance(snapshot.metadata, dict) else {}
+    integrity = mie.get("pressure_integrity") or {}
+    integrity_direction = str(integrity.get("direction") or "").upper() if isinstance(integrity, dict) else ""
+    attack_state = str(integrity.get("move_attack_state") or "").upper() if isinstance(integrity, dict) else ""
+    attack_active = attack_state in {"ATTACK", "BREAK / EXPANSION", "BREAK/EXPANSION"}
     r2 = _barrier_level_html(item.next_resistance, css_class="res secondary", fallback_label="R2")
-    r1 = _barrier_level_html(item.nearest_resistance, css_class="res primary", fallback_label="R1")
-    s1 = _barrier_level_html(item.nearest_support, css_class="sup primary", fallback_label="S1")
+    r1 = _barrier_level_html(
+        item.nearest_resistance, css_class="res primary", fallback_label="R1",
+        active_attack=attack_active and integrity_direction == "BULLISH",
+    )
+    s1 = _barrier_level_html(
+        item.nearest_support, css_class="sup primary", fallback_label="S1",
+        active_attack=attack_active and integrity_direction == "BEARISH",
+    )
     s2 = _barrier_level_html(item.next_support, css_class="sup secondary", fallback_label="S2")
     spot = f"{item.current_price:,.2f}" if item.current_price is not None else "—"
     range_state = escape(range_item.state)
@@ -465,7 +531,11 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         '.bm-level.res{border-left-color:#d9534f;background:rgba(217,83,79,.08)}'
         '.bm-level.sup{border-left-color:#2e9d63;background:rgba(46,157,99,.08)}'
         '.bm-level.secondary{opacity:.84}'
+        '@keyframes barrierPulse{0%,100%{box-shadow:0 0 0 1px rgba(127,127,127,.10) inset}50%{box-shadow:0 0 0 3px rgba(245,158,11,.20),0 0 22px rgba(245,158,11,.24)}}'
         '.bm-level.primary{box-shadow:0 0 0 1px rgba(127,127,127,.10) inset}'
+        '.bm-level.vulnerable{border-color:rgba(245,158,11,.7);background:rgba(245,158,11,.12)}'
+        '.bm-level.attack-break{border-color:#f59e0b;background:rgba(245,158,11,.18);animation:barrierPulse .8s ease-in-out 5}'
+        '.bm-level.confirmed-break{border-color:#60a5fa;background:rgba(96,165,250,.16);box-shadow:0 0 0 2px rgba(96,165,250,.22) inset}'
         '.bm-level.muted{opacity:.55}'
         '.bm-level-head{display:flex;justify-content:space-between;gap:12px;align-items:center}'
         '.bm-tag{font-size:.78rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase}'
@@ -532,14 +602,21 @@ def render_compact_status_bar(snapshot: MarketSnapshot) -> None:
     bad = [item for item in critical if not item.ok or item.use_state not in {"LIVE", "REFERENCE"}]
     ages = [age for item in critical if (age := _effective_age_seconds(snapshot, item)) is not None]
     age = f" · max age {max(ages):.0f}s" if ages else ""
-    if snapshot.market_session.is_live and not bad:
+    progression = statuses.get("price_progression")
+    late_reference = bool(
+        snapshot.market_session.is_live
+        and progression is not None
+        and getattr(progression, "use_state", "") == "REFERENCE"
+    )
+    if snapshot.market_session.is_live and not bad and late_reference:
+        st.info(f"🟢 OPTIONS/FUTURES LIVE · NIFTY SPOT LATE-SESSION REFERENCE{age} · One-Brain safety rules active")
+    elif snapshot.market_session.is_live and not bad:
         st.success(f"🟢 MARKET OPEN · DATA FRESH{age} · One-Brain live")
     elif snapshot.market_session.is_live:
         st.warning("🟡 MARKET OPEN · CHECK DATA: " + ", ".join(item.name for item in bad))
     else:
         st.warning("🟡 MARKET CLOSED · LAST DATA · reference only")
-    progression = statuses.get("price_progression")
-    if progression is not None and not progression.ok:
+    if progression is not None and not progression.ok and getattr(progression, "use_state", "") != "REFERENCE":
         st.error(f"SOURCE FLATLINE · {progression.message} · entry blocked")
 
 
@@ -749,13 +826,17 @@ def render_evidence_matrix(
     body = []
     detail_rows: list[dict[str, str]] = []
     for row in rows:
+        module = str(row["Module"])
+        top9_feed = snapshot.feed_status.get("heavyweights") if module == "NIFTY Top-9" else None
+        top9_no_vote = bool(top9_feed is not None and getattr(top9_feed, "use_state", "") != "LIVE")
         confidence = (
-            f"{float(row['Confidence %']):.0f}%"
+            "NO VOTE"
+            if top9_no_vote
+            else f"{float(row['Confidence %']):.0f}%"
             if row.get("Confidence %") is not None
             else "—"
         )
         change = change_text(row)
-        module = str(row["Module"])
         impact = impact_with_last(
             module, impact_by_module.get(module, "—")
         )
@@ -767,14 +848,22 @@ def render_evidence_matrix(
                 "Badlav": change,
             }
         )
+        bull_cell = "—" if top9_no_vote else score_text(row.get("Bullish %"), "")
+        bear_cell = "—" if top9_no_vote else score_text(row.get("Bearish %"), "")
+        neutral_cell = "—" if top9_no_vote else score_text(row.get("Neutral %"), "")
+        note_text = (
+            f"{getattr(top9_feed, 'use_state', 'REFERENCE')} · {getattr(top9_feed, 'message', 'stale Top-9; no live vote')}"
+            if top9_no_vote
+            else compact_evidence_note(snapshot, row)
+        )
         body.append(
             '<tr>'
             f'<td class="evt-module">{escape(str(row["Module"]))}</td>'
-            f'<td class="evt-bull">{score_text(row.get("Bullish %"), "")}</td>'
-            f'<td class="evt-bear">{score_text(row.get("Bearish %"), "")}</td>'
-            f'<td class="evt-neutral">{score_text(row.get("Neutral %"), "")}</td>'
+            f'<td class="evt-bull">{bull_cell}</td>'
+            f'<td class="evt-bear">{bear_cell}</td>'
+            f'<td class="evt-neutral">{neutral_cell}</td>'
             f'<td class="evt-conf">{confidence}</td>'
-            f'<td class="evt-note">{escape(compact_evidence_note(snapshot, row))}</td>'
+            f'<td class="evt-note">{escape(note_text)}</td>'
             '</tr>'
         )
     table_html = (
@@ -868,13 +957,15 @@ def _level_summary(level: Any | None, *, fallback: str) -> str:
     )
 
 
-def _compact_cards_html(cards: list[tuple[str, str, str]]) -> str:
-    """Render small responsive cards that stay two-across on narrow phones."""
+def _compact_cards_html(cards: list[tuple[str, str, str] | tuple[str, str, str, str]]) -> str:
+    """Render responsive cards with optional display-only emphasis classes."""
 
     blocks = []
-    for label, value, note in cards:
+    for card in cards:
+        label, value, note = card[:3]
+        tone = card[3] if len(card) > 3 else ""
         blocks.append(
-            '<div class="mai-card">'
+            f'<div class="mai-card {escape(str(tone))}">'
             f'<div class="mai-label">{escape(label)}</div>'
             f'<div class="mai-value">{escape(value)}</div>'
             f'<div class="mai-note">{escape(note)}</div>'
@@ -882,8 +973,13 @@ def _compact_cards_html(cards: list[tuple[str, str, str]]) -> str:
         )
     return (
         '<style>'
+        '@keyframes maiPulse{0%,100%{transform:scale(1);box-shadow:none}50%{transform:scale(1.012);box-shadow:0 0 0 3px rgba(255,255,255,.10),0 0 18px rgba(255,255,255,.12)}}'
         '.mai-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:4px 0 12px}'
         '.mai-card{min-width:0;border:1px solid rgba(127,127,127,.24);border-radius:12px;padding:10px 11px;background:rgba(127,127,127,.045)}'
+        '.mai-card.green{border-color:rgba(34,197,94,.58);background:rgba(34,197,94,.12)}'
+        '.mai-card.red{border-color:rgba(239,68,68,.58);background:rgba(239,68,68,.12)}'
+        '.mai-card.amber{border-color:rgba(245,158,11,.58);background:rgba(245,158,11,.12)}'
+        '.mai-card.pulse{animation:maiPulse .85s ease-in-out 4}'
         '.mai-label{font-size:.76rem;opacity:.72;margin-bottom:4px}'
         '.mai-value{font-size:1.18rem;font-weight:800;line-height:1.15;overflow-wrap:anywhere}'
         '.mai-note{font-size:.70rem;opacity:.68;margin-top:4px;line-height:1.25}'
@@ -892,7 +988,7 @@ def _compact_cards_html(cards: list[tuple[str, str, str]]) -> str:
     )
 
 
-def _render_compact_cards(cards: list[tuple[str, str, str]]) -> None:
+def _render_compact_cards(cards: list[tuple[str, str, str] | tuple[str, str, str, str]]) -> None:
     html = _compact_cards_html(cards)
     if hasattr(st, "html"):
         st.html(html)
@@ -947,7 +1043,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         eligible = [name for name in evaluations if name in allowed]
         leader = max(eligible or list(evaluations), key=lambda name: evaluations[name].score)
 
-    st.subheader("🛡️ Best Strategy + Strike Value Table")
+    st.subheader("🛡️ Strategy + Strike Value Table")
     st.caption(
         "Simple One-Brain direction ke compatible protected CE/PE/Condor setups. "
         "Main decision Regime → Direction → Entry → Risk se aata hai; Future Brain advisory only hai."
@@ -986,11 +1082,11 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
         if not snapshot.market_session.is_live:
             status = "REFERENCE ONLY"
         elif common.get("entry_allowed") and name == selected:
-            status = "BEST • ENTRY READY" if plan.available else "BEST • STRIKE BLOCKED"
+            status = "TOP COMPATIBLE • ENTRY READY" if plan.available else "TOP COMPATIBLE • STRIKE BLOCKED"
         elif allowed and name not in allowed:
             status = "DIRECTION BLOCKED"
         elif not common.get("entry_allowed") and name == leader:
-            status = "BEST AVAILABLE • WAIT"
+            status = "TOP COMPATIBLE • WAIT"
         elif not plan.available:
             status = "BLOCKED"
         else:
@@ -1010,7 +1106,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     frame = pd.DataFrame(rows)
 
     def _strategy_style(row: pd.Series) -> list[str]:
-        if str(row["Status"]).startswith("BEST"):
+        if str(row["Status"]).startswith("TOP COMPATIBLE"):
             return ["background-color: rgba(59,130,246,.18);font-weight:700"] * len(row)
         if row["Status"] in {"BLOCKED", "DIRECTION BLOCKED"}:
             return ["background-color: rgba(239,68,68,.08)"] * len(row)
@@ -1026,7 +1122,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
             label = "CONDITIONS MET" if common.get("entry_allowed") else "CANDIDATE ONLY — CONDITIONS PENDING"
         else:
             label = "ENTRY" if common.get("entry_allowed") else "CANDIDATE ONLY — ENTRY GATE CLOSED"
-        st.markdown(f"**Best compatible {label} — {public_action_label(leader)}: {guidance.status}**")
+        st.markdown(f"**Top compatible {label} — {public_action_label(leader)}: {guidance.status}**")
         c1, c2, c3 = st.columns(3)
         c1.metric("Current package", common_entry.get("current", guidance.current))
         c2.metric("Preferred limit zone", common_entry.get("preferred_zone", guidance.preferred_zone))
@@ -1245,7 +1341,15 @@ def render_main_ai_market_view(
                 a.caption(f"Raw {_raw_direction_strength:.0f} · stability view")
             if core_block_coverage is not None:
                 a.caption(f"Core blocks available {core_block_coverage:.0f}%")
-            b.metric("REGIME", str(simple.get("regime") or "TRANSITION"))
+            regime_text = str(simple.get("regime") or "TRANSITION")
+            b.markdown(
+                '<div class="regime-card"><div class="regime-label">REGIME</div>'
+                f'<div class="regime-value">{escape(regime_text)}</div></div>'
+                '<style>.regime-card{min-height:74px;padding:4px 0}.regime-label{font-size:.82rem;opacity:.72}'
+                '.regime-value{font-size:1.42rem;font-weight:750;line-height:1.12;overflow-wrap:anywhere;white-space:normal}'
+                '@media(max-width:760px){.regime-value{font-size:1.05rem}}</style>',
+                unsafe_allow_html=True,
+            )
             c.metric(
                 entry_metric_label(),
                 "DATA INCOMPLETE" if "DATA" in entry_state else f"{float(simple.get('display_entry_readiness', simple.get('entry_readiness')) or 0):.0f}/100",

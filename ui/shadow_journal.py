@@ -18,6 +18,13 @@ def _decision_rows(store=None) -> list[dict[str, Any]]:
     local = store.load_decisions() if store is not None else []
     report = st.session_state.get("day_memory_report") or {}
     remote = report.get("app_decisions") or []
+    if store is not None and remote:
+        try:
+            # Fresh Streamlit/Railway deploys start with an empty local file. Restore
+            # the persistent Railway rows instead of briefly showing a false zero.
+            store.merge_decisions([row for row in remote if isinstance(row, dict)])
+        except Exception:
+            pass
     merged: dict[str, dict[str, Any]] = {}
     for row in [*local, *remote]:
         if not isinstance(row, dict):
@@ -107,7 +114,10 @@ def render_shadow_journal_status(entries: list[dict[str, Any]], store=None, snap
             if str(row.get("session_date")) == today and bool(row.get("session_live", True))
         ]
         cols = st.columns(5)
-        cols[0].metric("Live decisions", len(today_decisions))
+        diagnostics = (getattr(snapshot, "metadata", {}) or {}).get("recording_diagnostics") or {}
+        pending = bool((diagnostics.get("async_refresh") or {}).get("pending"))
+        decision_display = "SYNCING" if pending and not today_decisions and not report else len(today_decisions)
+        cols[0].metric("Live decisions", decision_display)
         cols[1].metric("OB paper", ob["total"])
         cols[2].metric("MI paper", mi["total"])
         cols[3].metric("Open paper", len(open_items))
@@ -132,7 +142,7 @@ def render_auto_shadow_journal(entries: list[dict[str, Any]], session_date: str,
     st.caption(
         "Decision Journal 09:15–15:00 WAIT/READY/ENTRY evidence record karta hai. Executable paper trades configured "
         "entry window me separate One Brain aur Market Intelligence lanes me bante hain. MI Window OPEN/STRONG 6/6 "
-        "ya verified/realized pressure + attack support trigger ho sakta hai; Liquidity Magnet akela trade nahi banata."
+        "ya verified/realized pressure + attack support trigger ho sakta hai; Liquidity Concentration akeli trade nahi banati."
     )
     if store is not None:
         decisions = _decision_rows(store)

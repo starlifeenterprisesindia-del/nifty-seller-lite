@@ -1,10 +1,23 @@
-# Nifty Seller Lite 2.74.2 — MI Alert Runtime Hotfix
+# Nifty Seller Lite 2.75.0 — Live Readability + Validation Hardening
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
+
+
+## 2.75.0 highlights
+
+- **No core retuning:** One Brain weights, 54/62 research floors, MI gates, Pressure/Barrier formulas and FII/DII live direction weight are unchanged.
+- **Journal validation hardening:** restart recovery, OB candidate research sampling, MI unique-cycle dedupe, richer paper-trade finalization and evidence diagnostics.
+- **Performance hardening:** live Snapshot path uses stale-while-revalidate Instrument Master refresh instead of waiting on a stale cache download.
+- **Readability:** full Regime card, strong W/M/candle/evidence highlights, staged Barrier vulnerability/attack/break visuals and clearer Liquidity Concentration wording.
+- **Alert discipline:** STRONG ONLY Market Intelligence delivery with story-level dedupe; lower-priority events remain available as app/journal evidence.
+- **Cleaner live route:** Strategy + Strike always visible; Live Chart moved under Advanced; Quick Guide hidden from the operational screen.
+- **Calculator:** large-lot what-if calculations no longer stop at the live risk cap; live execution safety remains unchanged. IV modes are Auto History / Manual What-if / Off.
+- **Top-9 / late session:** explicit LIVE/WARMING/REFERENCE/NO-VOTE handling rather than fake zero evidence.
+- **Testing/recording:** one-click Master Live Test Pack adds decision, paper, Smart Entry, alert-delivery and performance timelines without new live broker calls.
 
 
 ## 2.74.2 hotfix

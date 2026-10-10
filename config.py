@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.74.2_MI_ALERT_RUNTIME_HOTFIX"
+    version: str = "2.75.0_LIVE_READABILITY_VALIDATION_HARDENING"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -295,6 +295,19 @@ class AppConfig:
     shadow_journal_cooldown_minutes: int = 5
     shadow_journal_research_cooldown_minutes: int = 5
     shadow_journal_estimated_charges_per_trade: float = 40.0
+
+    # v2.75 display/alert hardening. These values affect only presentation and
+    # notification delivery; they never change One-Brain/MI scoring weights.
+    visual_evidence_strong_score: float = 60.0
+    visual_evidence_min_gap: float = 15.0
+    visual_evidence_pulse_score: float = 72.0
+    visual_evidence_pulse_gap: float = 22.0
+    visual_barrier_attack_pressure: float = 65.0
+    visual_barrier_attack_margin: float = 8.0
+    mi_alert_mode: str = "STRONG_ONLY"
+    mi_alert_strong_min_coverage: float = 65.0
+    mi_alert_strong_min_expansion: float = 62.0
+    mi_alert_story_cooldown_seconds: int = 900
 
     @property
     def top9_symbols(self) -> tuple[str, ...]:

@@ -10,6 +10,7 @@ from typing import Any
 from html import escape
 
 import streamlit as st
+from config import CONFIG
 
 from services.railway_live_client import post_railway_json
 from analysis.pattern_alerts import combined_signal_alert
@@ -273,7 +274,7 @@ def render_market_intelligence(snapshot: Any) -> None:
                 f"{iw_ready}/6 core gates · Opportunity {iw_score:.0f}/100 · "
                 f"Path {iw_path.get('state', '—')} · Opposition {iw_opp.get('state', '—')} · "
                 f"Trigger {iw_trigger.get('state', '—')} · Pressure {iw_pressure.get('state', '—')} · "
-                f"💰 Magnet {money_bias} {money_score:.0f}/100"
+                f"💰 Liquidity Concentration {money_bias} {money_score:.0f}/100"
             )
             if iw_missing and iw_state not in {"OPEN", "STRONG"}:
                 st.caption("Window missing: " + ", ".join(iw_missing[:3]) + ("…" if len(iw_missing) > 3 else ""))
@@ -365,11 +366,15 @@ def render_market_intelligence(snapshot: Any) -> None:
             )
             if money:
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Liquidity Magnet", money_bias)
+                m1.metric("Liquidity Concentration", money_bias)
                 m2.metric("Upside money proxy", f"{_num(money.get('upside_score')):.0f}/100")
                 m3.metric("Downside money proxy", f"{_num(money.get('downside_score')):.0f}/100")
-                m4.metric("Magnet confidence", f"{_num(money.get('confidence')):.0f}/100")
+                m4.metric("Concentration confidence", f"{_num(money.get('confidence')):.0f}/100")
                 primary_money = money.get("primary_zone") if isinstance(money.get("primary_zone"), dict) else None
+                st.caption(
+                    "Liquidity Concentration observable OI/OI-add/volume ka location proxy hai — "
+                    "ye market direction prediction nahi. Hunt direction alag path/pressure signal hai; dono conflict bhi kar sakte hain."
+                )
                 if primary_money:
                     st.caption(
                         f"Strongest visible option concentration near {float(primary_money.get('strike') or 0):,.0f} · "
@@ -407,7 +412,17 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     All calculations/events remain available in snapshot/journal.  Delivery is intentionally
     selective: one meaningful alert per setup, with material-change overrides only.
     """
+    def _audit(action: str, kind: str = "", direction: str = "", reason: str = "", score: float = 0.0) -> None:
+        rows = list(st.session_state.get("smart_alert_audit_local", []))
+        rows.append({
+            "at": getattr(getattr(snapshot, "created_at", None), "isoformat", lambda: "")(),
+            "action": action, "kind": kind, "direction": direction,
+            "reason": reason, "score": round(float(score or 0.0), 1),
+        })
+        st.session_state.smart_alert_audit_local = rows[-500:]
+
     if not st.session_state.get("market_intelligence_alerts_enabled", True):
+        _audit("SUPPRESSED", reason="Market Intelligence alerts disabled")
         return []
     item = (getattr(snapshot, "metadata", {}) or {}).get("market_intelligence") or {}
     # Alert processing runs independently from the screen renderer, so keep its
@@ -423,17 +438,45 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     coverage = _num(item.get("evidence_coverage"))
     alignment = str(item.get("one_brain_alignment") or "NO CLEAR ALIGNMENT")
 
-    # Mixed-direction acceleration is useful on-screen but usually too noisy for Telegram.
+    # STRONG-ONLY delivery. Every event remains inside the snapshot/replay journal;
+    # Telegram is reserved for genuinely actionable escalation or important risk.
+    integrity0 = item.get("pressure_integrity") if isinstance(item.get("pressure_integrity"), dict) else {}
+    attack0 = str(integrity0.get("move_attack_state") or "").upper()
+    critical_kinds = {
+        "PRESSURE_FLIP_CONFIRMED", "SYSTEM_CONFLICT", "PRESSURE_ABSORBED",
+        "BUILDUP_FAILED", "LIQUIDITY_SWEEP", "MOVE_EXHAUSTING",
+    }
     filtered = []
     for candidate in alerts:
         kind0 = str(candidate.get("kind") or "")
         dir0 = str(candidate.get("direction") or "MIXED").upper()
-        if dir0 == "MIXED" and kind0 == "BIG_MOVE_PRECAUTION" and expansion < 58:
-            continue
-        if kind0 == "ONE_BRAIN_ALIGNMENT" and alignment == "ALIGNMENT WATCH" and (expansion < 60 or coverage < 70):
-            continue
-        filtered.append(candidate)
+        score0 = _num(candidate.get("score"), expansion)
+        strong = False
+        if kind0 in critical_kinds:
+            strong = True
+        elif kind0 == "INSTITUTIONAL_WINDOW_STRONG":
+            strong = coverage >= CONFIG.mi_alert_strong_min_coverage
+        elif kind0 == "INSTITUTIONAL_WINDOW_OPEN":
+            strong = score0 >= 70 and coverage >= CONFIG.mi_alert_strong_min_coverage and expansion >= 60
+        elif kind0 == "PRESSURE_VERIFIED":
+            strong = (
+                coverage >= CONFIG.mi_alert_strong_min_coverage
+                and expansion >= CONFIG.mi_alert_strong_min_expansion
+                and attack0 in {"ATTACK", "BREAK / EXPANSION", "BREAK/EXPANSION"}
+            )
+        elif kind0 == "MOVE_ATTACK":
+            strong = coverage >= CONFIG.mi_alert_strong_min_coverage and expansion >= CONFIG.mi_alert_strong_min_expansion
+        elif kind0 == "ONE_BRAIN_ALIGNMENT":
+            strong = alignment == "STRONG EVIDENCE ALIGNMENT" and coverage >= 70 and expansion >= CONFIG.mi_alert_strong_min_expansion
+        elif kind0 == "BIG_MOVE_PRECAUTION":
+            strong = expansion >= 70 and coverage >= 70 and dir0 in {"BULLISH", "BEARISH"}
+        # LIQUIDITY_HUNT_WATCH and ordinary watch/forming events remain screen/journal only.
+        if strong:
+            filtered.append(candidate)
+        else:
+            _audit("SUPPRESSED", kind0, dir0, "STRONG_ONLY delivery gate", score0)
     if not filtered:
+        st.session_state.market_intelligence_alert_status = "Strong-only mode — watch events recorded, Telegram suppressed"
         return []
 
     rank = {
@@ -476,22 +519,22 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
     last_score = _num(st.session_state.get("smart_alert_last_score"), 0.0)
     age = current_ts - last_ts if last_ts else 9999.0
 
-    # Three-minute setup cooldown.  Only a material state change can break it.
+    # One primary alert per continuing market story. A genuine direction flip or
+    # critical risk state can override; an ordinary OPEN→STRONG upgrade cannot.
     critical = kind in {
         "SYSTEM_CONFLICT", "BUILDUP_FAILED", "LIQUIDITY_SWEEP", "PRESSURE_ABSORBED",
-        "PRESSURE_FLIP_CONFIRMED", "PRESSURE_FLIP_WATCH", "MOVE_EXHAUSTING",
+        "PRESSURE_FLIP_CONFIRMED", "MOVE_EXHAUSTING",
     }
     direction_flip = direction in {"BULLISH", "BEARISH"} and last_dir in {"BULLISH", "BEARISH"} and direction != last_dir
-    strong_upgrade = (
-        kind in {"ONE_BRAIN_ALIGNMENT", "PRESSURE_VERIFIED", "MOVE_ATTACK", "INSTITUTIONAL_WINDOW_OPEN", "INSTITUTIONAL_WINDOW_STRONG"}
-        and current_rank > last_rank
-        and score >= last_score + 8
-    )
-    material_change = critical or direction_flip or strong_upgrade
-    if age < 180 and not material_change:
-        st.session_state.market_intelligence_alert_status = "Smart cooldown — evidence recorded, Telegram suppressed"
+    material_change = critical or direction_flip
+    last_story = str(st.session_state.get("smart_alert_last_story") or "")
+    story_key = f"{direction}:{target_key}"
+    if age < CONFIG.mi_alert_story_cooldown_seconds and story_key == last_story and not material_change:
+        st.session_state.market_intelligence_alert_status = "Strong-only story cooldown — evidence recorded, Telegram suppressed"
+        _audit("SUPPRESSED", kind, direction, "Same continuing setup story", score)
         return []
     if age < 60 and critical and kind == last_kind and direction == last_dir:
+        _audit("SUPPRESSED", kind, direction, "Duplicate critical alert <60s", score)
         return []
 
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
@@ -582,13 +625,17 @@ def process_market_intelligence_alerts(snapshot: Any, server_url: str = "", serv
         st.session_state.smart_alert_last_kind = kind
         st.session_state.smart_alert_last_rank = current_rank
         st.session_state.smart_alert_last_score = score
-        st.session_state.market_intelligence_alert_status = "Telegram synced · Smart Alert mode"
+        st.session_state.smart_alert_last_story = story_key
+        st.session_state.market_intelligence_alert_status = "Telegram synced · STRONG ONLY"
+        _audit("SENT", kind, direction, "Strong-only delivery passed", score)
         st.session_state.last_market_intelligence_alerts = [row]
         return [row]
 
     seen.add(fingerprint)
     st.session_state[seen_key] = list(seen)[-300:]
     st.session_state.market_intelligence_alert_status = "App only — Telegram gateway not configured"
+    st.session_state.smart_alert_last_story = story_key
+    _audit("APP_ONLY", kind, direction, "Strong-only delivery passed; no Telegram gateway", score)
     st.session_state.last_market_intelligence_alerts = [row]
     return []
 
