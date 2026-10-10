@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.75.0_LIVE_READABILITY_VALIDATION_HARDENING"
+    version: str = "2.75.1_PACKAGE_RUNTIME_SAFETY"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5

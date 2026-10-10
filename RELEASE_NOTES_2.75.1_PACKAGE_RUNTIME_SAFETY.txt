@@ -1,0 +1,14 @@
+v2.75.1_PACKAGE_RUNTIME_SAFETY
+
+This is the corrected packaging/deployment revision of v2.75.0. All v2.75.0 forensic fixes and UI/readability improvements are preserved.
+
+Additional hardening:
+- Complete-source mode now prefers direct analysis/services/ui folders.
+- Compact deploy mode uses nsl_runtime_v2751.zip only when direct runtime folders are absent.
+- A stale nested ZIP can no longer shadow edited source in a complete-source checkout.
+- Complete-source backup intentionally ships WITHOUT a nested runtime ZIP.
+- GitHub/Railway upload package intentionally ships WITH nsl_runtime_v2751.zip and clear instructions not to extract the inner ZIP.
+
+Preserved v2.75 improvements include Journal restore, OB research sampling, MI unique-cycle sampling, paper validation hardening, Instrument Master non-blocking refresh, strong-only alerts, readable regime UI, Liquidity Concentration wording, pattern/evidence/barrier visual emphasis, Strategy always-open route, Advanced-only chart, calculator lot what-if separation, Auto/Manual/Off IV modes, Top-9 state handling, RSI explanation, Smart Entry validation logging, and Master Live Test Pack.
+
+No model calibration/weight/threshold retuning in this revision.
