@@ -64,6 +64,10 @@ def freeze_market_context(snapshot: Any) -> dict[str, Any]:
     simple = _mapping(metadata.get("simple_brain"))
     common = _mapping(metadata.get("common_decision"))
     move_radar = _mapping(mie.get("move_radar"))
+    edge = _mapping(metadata.get("research_edge_context"))
+    move_ctx = _mapping(edge.get("expected_move"))
+    mean_ctx = _mapping(edge.get("mean_reversion"))
+    iv_ctx = _mapping(edge.get("iv_percentile"))
 
     spot = getattr(getattr(snapshot, "levels", None), "current_price", None)
     if spot is None:
@@ -104,6 +108,19 @@ def freeze_market_context(snapshot: Any) -> dict[str, Any]:
         "liquidity_downside_score": round(_num(money.get("downside_score"), 0.0) or 0.0, 1),
         "move_radar_state": str(move_radar.get("state") or move_radar.get("radar_state") or ""),
         "mi_one_brain_alignment": str(mie.get("one_brain_alignment") or ""),
+        "vix_range_state": str(move_ctx.get("state") or "NO VOTE"),
+        "vix_range_utilization_pct": (
+            round(float(move_ctx.get("utilization_pct")), 1)
+            if move_ctx.get("utilization_pct") is not None else None
+        ),
+        "mean_reversion_state": str(mean_ctx.get("state") or "NO VOTE"),
+        "mean_reversion_verdict": str(mean_ctx.get("verdict") or "NO VOTE"),
+        "iv_context_state": str(iv_ctx.get("state") or "NO VOTE"),
+        "iv_percentile": (
+            round(float(iv_ctx.get("iv_percentile")), 1)
+            if iv_ctx.get("iv_percentile") is not None else None
+        ),
+        "iv_dte_bucket": str(iv_ctx.get("dte_bucket") or "UNKNOWN"),
     }
 
 

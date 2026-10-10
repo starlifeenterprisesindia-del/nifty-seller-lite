@@ -137,7 +137,7 @@ def compact(snapshot, tracked_strikes=()):
             "core_evidence", "price_action", "patterns", "option_intelligence",
             "heavyweights", "volume", "vix_context", "news_context", "event_risk",
             "decision", "trade_plan", "execution_guard", "risk_profile",
-            "market_intelligence")}
+            "market_intelligence", "research_edge_context")}
     return clean({
         "record_schema": 2,
         "at": summary["created_at"], "spot": spot, "expiry": summary["expiry"],
@@ -157,10 +157,11 @@ def compact(snapshot, tracked_strikes=()):
         "institutional_context": summary.get("institutional_context", {}),
         "history_analytics": snapshot.metadata.get("history_analytics", {}),
         "market_intelligence": summary.get("market_intelligence"),
+        "research_edge_context": summary.get("research_edge_context"),
         "snapshot_integrity": snapshot.metadata.get("snapshot_integrity", {}),
         "performance": {
             key: (snapshot.metadata.get("performance") or {}).get(key)
-            for key in ("pipeline_seconds", "build_seconds", "finalize_seconds", "market_intelligence_seconds", "slowest_stage", "stages")
+            for key in ("pipeline_seconds", "build_seconds", "finalize_seconds", "market_intelligence_seconds", "edge_context_seconds", "slowest_stage", "stages")
         },
         # Canonical background inputs/results for later diagnosis, not extra votes.
         "evidence": evidence,
@@ -686,6 +687,10 @@ class DayMemory:
                 db.execute("INSERT OR REPLACE INTO meta VALUES ('app_heartbeat',?)", (at.isoformat(),))
                 return True
             simple = body.get("simple_brain") if isinstance(body.get("simple_brain"), dict) else {}
+            edge = body.get("research_edge_context") if isinstance(body.get("research_edge_context"), dict) else {}
+            move_ctx = edge.get("expected_move") if isinstance(edge.get("expected_move"), dict) else {}
+            mean_ctx = edge.get("mean_reversion") if isinstance(edge.get("mean_reversion"), dict) else {}
+            iv_ctx = edge.get("iv_percentile") if isinstance(edge.get("iv_percentile"), dict) else {}
             decision = clean({
                 "at": at.isoformat(),
                 "session_date": at.astimezone(IST).date().isoformat(),
@@ -708,6 +713,13 @@ class DayMemory:
                 "final_action": body.get("action") or simple.get("final_action"),
                 "trigger": simple.get("trigger"),
                 "next_level": simple.get("next_level"),
+                "vix_range_state": move_ctx.get("state"),
+                "vix_range_utilization_pct": move_ctx.get("utilization_pct"),
+                "mean_reversion_state": mean_ctx.get("state"),
+                "mean_reversion_verdict": mean_ctx.get("verdict"),
+                "iv_context_state": iv_ctx.get("state"),
+                "iv_percentile": iv_ctx.get("iv_percentile"),
+                "iv_dte_bucket": iv_ctx.get("dte_bucket"),
                 "reason": body.get("reason"),
                 "version": body.get("version"),
             })
