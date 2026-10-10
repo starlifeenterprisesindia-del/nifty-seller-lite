@@ -132,9 +132,3 @@ def render_strike_entry_result(result, hedge=None, *, show_reset_note: bool = Tr
         st.caption("Frozen barrier fail hone par planner CANCEL rahega jab tak selected strike explicitly re-plan/reset na ho.")
 
 
-def render_strike_entry(snapshot, side, position, strike, lots):
-    st.markdown("**Independent Strike Entry Planner**")
-    st.caption("3m candle + barrier + quotes only. Main AI does not approve/override this planner. Advisory, no orders.")
-    result, hedge = prepare_strike_entry(snapshot, side, position, strike, lots, compact=False)
-    render_strike_entry_result(result, hedge)
-    return result, hedge

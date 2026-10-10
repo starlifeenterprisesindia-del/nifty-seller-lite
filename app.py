@@ -6,7 +6,6 @@ import time
 import re
 import gc
 import threading
-from dataclasses import replace
 from contextlib import contextmanager
 from html import escape
 from datetime import datetime
@@ -79,10 +78,8 @@ from ui.components import (
     render_indicators,
     render_levels,
     render_market_context,
-    render_market_session,
     render_news_context,
     render_main_ai_market_view,
-    render_data_health,
     render_detailed_evidence,
     render_option_chain,
     render_option_flow_matrix,
@@ -109,7 +106,6 @@ from ui.ai_move_tracker import render_ai_move_tracker
 from ui.rsi_reversal_setup import render_rsi_reversal_setup
 from ui.presentation_helpers import public_mode_enabled
 from ui.performance_diagnostics import render_performance_diagnostics
-from ui.help_guide import render_help_guide
 from ui.live_barrier_chart import render_live_barrier_chart
 from ui.advanced_options_intelligence import render_phase2_options_intelligence
 from ui.replay_review import render_phase3_replay

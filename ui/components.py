@@ -18,15 +18,13 @@ from analysis.iv_delta_display import compute_iv_delta_payload
 
 from analysis.evidence_matrix import build_compact_evidence_matrix, build_module_impact_audit
 from analysis.presentation_safety import (
-    candidate_invalidation_text,
-    display_main_blocker,
     market_rukh_display,
     normalized_news_display,
     safe_brain_hinglish_line,
     simple_core_block_coverage,
     future_brain_display_label,
 )
-from models import MarketLevel, MarketSnapshot, TimeframeIndicators
+from models import MarketLevel, MarketSnapshot
 from services.summary_presenter import (
     best_existing_candidate,
     plan_leg_text,
@@ -111,32 +109,6 @@ def _barrier_state_hinglish(level: Any) -> str:
         "FAR": "ABHI DOOR",
     }
     return mapping.get(state, state)
-
-
-def _responsive_cards_html(cards: list[tuple[str, str, str, str]]) -> str:
-    """Responsive replacement for wide dataframes on phone screens."""
-    blocks = []
-    for label, value, note, tone in cards:
-        blocks.append(
-            f'<div class="rfc {escape(tone)}">'
-            f'<div class="rfc-label">{escape(label)}</div>'
-            f'<div class="rfc-value">{escape(value)}</div>'
-            f'<div class="rfc-note">{escape(note)}</div>'
-            '</div>'
-        )
-    return (
-        '<style>'
-        '.rfc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:6px 0 12px}'
-        '.rfc{min-width:0;border:1px solid rgba(127,127,127,.24);border-radius:12px;padding:10px;background:rgba(127,127,127,.045)}'
-        '.rfc.green{border-color:rgba(34,197,94,.38);background:rgba(34,197,94,.08)}'
-        '.rfc.amber{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.08)}'
-        '.rfc.red{border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.08)}'
-        '.rfc-label{font-size:.75rem;font-weight:800;opacity:.76;text-transform:uppercase}'
-        '.rfc-value{font-size:1.02rem;font-weight:900;margin:3px 0;overflow-wrap:anywhere}'
-        '.rfc-note{font-size:.77rem;line-height:1.35;opacity:.82;overflow-wrap:anywhere}'
-        '@media(max-width:760px){.rfc-grid{grid-template-columns:1fr}}'
-        '</style><div class="rfc-grid">' + ''.join(blocks) + '</div>'
-    )
 
 
 def _barrier_level_html(
@@ -580,20 +552,6 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         st.caption("Speed reasons: " + " | ".join(speed.reasons))
 
 
-def render_market_session(snapshot: MarketSnapshot) -> None:
-    session = snapshot.market_session
-    if session.is_live:
-        st.success(f"🟢 {session.label} — {session.message}")
-    else:
-        st.warning(f"🟡 {session.label} — {session.message}")
-    progression = snapshot.feed_status.get("price_progression")
-    if progression is not None and not progression.ok:
-        st.warning(f"⚠️ {progression.message}. Fresh direction/entry par bharosa mat karo.")
-    expiry_quality = snapshot.feed_status.get("expiry_close_quality")
-    if expiry_quality is not None and not expiry_quality.ok:
-        st.warning(f"⏳ {expiry_quality.message}.")
-
-
 def render_compact_status_bar(snapshot: MarketSnapshot) -> None:
     """One top status line instead of duplicate session and health banners."""
     statuses = snapshot.feed_status or {}
@@ -618,27 +576,6 @@ def render_compact_status_bar(snapshot: MarketSnapshot) -> None:
         st.warning("🟡 MARKET CLOSED · LAST DATA · reference only")
     if progression is not None and not progression.ok and getattr(progression, "use_state", "") != "REFERENCE":
         st.error(f"SOURCE FLATLINE · {progression.message} · entry blocked")
-
-
-def render_header(snapshot: MarketSnapshot) -> None:
-    quote = snapshot.nifty_quote
-    last_price = quote.get("last_price")
-    ohlc = quote.get("ohlc") or {}
-    previous_close = ohlc.get("close")
-    change_pct = None
-    if previous_close not in (None, 0) and last_price is not None:
-        change_pct = (
-            (float(last_price) - float(previous_close)) / float(previous_close) * 100
-        )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "NIFTY",
-        f"{float(last_price):,.2f}" if last_price is not None else "—",
-        f"{change_pct:+.2f}%" if change_pct is not None else None,
-    )
-    c2.metric("Expiry", snapshot.expiry or "Unavailable")
-    c3.metric("Snapshot", snapshot.snapshot_id[-8:])
-    c4.metric("Created", snapshot.created_at.strftime("%H:%M:%S IST"))
 
 
 def render_greeks_health(frame: pd.DataFrame) -> None:
@@ -902,50 +839,6 @@ def render_evidence_matrix(
                                       for key, value in actual.items()]), hide_index=True, width="stretch")
             st.caption("Base + net adjustments = final fit. Net includes level/risk adjustments, caps and rounding. Evidence quality is separate, not multiplied again. Fit is not profit probability.")
 
-
-
-def render_pre_touch_barriers(snapshot: MarketSnapshot) -> None:
-    bundle = snapshot.pre_touch_barriers
-    st.subheader("Pre-Touch Support / Resistance — Early Warning")
-    st.caption(
-        "Price ke level touch karke wapas aane ka wait nahi. Yeh existing structure + "
-        "Previous Day/Opening Range + CE/PE OI wall ko mila kar pehle se probable zone dikhata hai."
-    )
-    if bundle.status != "READY":
-        st.info("Pre-touch S/R abhi available nahi hai.")
-        return
-
-    left, right = st.columns(2)
-    with left:
-        support = bundle.support
-        if support is None:
-            st.info("Neeche probable support resolve nahi hua.")
-        else:
-            st.metric(
-                "Probable Support",
-                f"{support.lower:,.0f}–{support.upper:,.0f}",
-                f"{support.distance_points:.0f} pts door",
-            )
-            st.caption(
-                f"Strength {support.strength:.0f}% | {support.proximity} | "
-                + " + ".join(support.sources[:4])
-            )
-            st.info(support.message)
-    with right:
-        resistance = bundle.resistance
-        if resistance is None:
-            st.info("Upar probable resistance resolve nahi hua.")
-        else:
-            st.metric(
-                "Probable Resistance",
-                f"{resistance.lower:,.0f}–{resistance.upper:,.0f}",
-                f"{resistance.distance_points:.0f} pts door",
-            )
-            st.caption(
-                f"Strength {resistance.strength:.0f}% | {resistance.proximity} | "
-                + " + ".join(resistance.sources[:4])
-            )
-            st.warning(resistance.message)
 
 
 def _level_summary(level: Any | None, *, fallback: str) -> str:
@@ -1563,94 +1456,6 @@ def render_main_ai_market_view(
 
 
 
-def render_compact_protected_setup(snapshot: MarketSnapshot) -> None:
-    """Show one compact protected setup row without duplicating the full planner."""
-
-    st.subheader("Best Protected Setup — One-Brain Reference")
-    st.caption(
-        "Same Final One-Brain scores aur same option-chain snapshot. WAIT ho to candidate sirf reference hai; "
-        "full planner neeche detail expander me rahega."
-    )
-    name, score, plan, is_selected = best_existing_candidate(snapshot)
-    if plan is None or not plan.available:
-        st.info("Protected CE/PE/Condor candidate abhi available nahi hai.")
-        return
-
-    evaluation = _decision_evaluations(snapshot).get(name)
-    caution = (
-        evaluation.cautions[0]
-        if evaluation is not None and evaluation.cautions
-        else "Koi extra caution nahi"
-    )
-    entry_allowed = snapshot.execution_guard.readiness == "ENTRY READY" and is_selected
-    premium = (
-        f"Credit {plan.estimated_credit_points:.2f} pts"
-        if plan.estimated_credit_points is not None
-        else f"Debit {plan.estimated_debit_points:.2f} pts"
-        if plan.estimated_debit_points is not None
-        else "Premium —"
-    )
-    _render_compact_cards(
-        [
-            ("Best / Reference Setup", name, f"Fit {score:.1f}% · {'Selected' if is_selected else 'Reference only'}"),
-            ("Exact Structure", _plan_structure_text(plan), f"Quality {plan.quality_score:.0f}/100"),
-            ("Premium / Max Risk", premium, f"Max risk {plan.max_risk_points:.2f} pts" if plan.max_risk_points is not None else "Max risk —"),
-            ("Entry Allowed", "YES" if entry_allowed else "NO — WAIT", caution),
-        ]
-    )
-    if snapshot.decision.final_action == "WAIT":
-        st.info("Final Action WAIT hai — yeh strike pair sirf reference hai, entry signal nahi.")
-    invalidation = candidate_invalidation_text(snapshot, name)
-    if invalidation:
-        st.caption("Invalidation: " + invalidation)
-
-
-def render_best_protected_sells(snapshot: MarketSnapshot) -> None:
-    bundle = snapshot.trade_plan
-    st.subheader("Best CE / PE Sell + Hedge")
-    st.caption(
-        "Yeh second brain nahi hai. Final One-Brain ke same option-chain snapshot se best short strike "
-        "aur uske liye liquid farther-OTM hedge choose hota hai. Har fresh snapshot par update hota hai."
-    )
-
-    rows = []
-    score_map = {
-        "CE SELL": snapshot.decision.ce_sell.score,
-        "PE SELL": snapshot.decision.pe_sell.score,
-    }
-    for plan in (bundle.ce_sell, bundle.pe_sell):
-        short = plan.short_legs[0] if plan.short_legs else None
-        hedge = plan.hedge_legs[0] if plan.hedge_legs else None
-        rows.append(
-            {
-                "Setup": plan.name,
-                "Brain score %": score_map.get(plan.name, 0.0),
-                "Sell": f"{short.strike:,.0f} {short.side}" if short else "—",
-                "Buy hedge": f"{hedge.strike:,.0f} {hedge.side}" if hedge else "—",
-                "Credit pts": plan.estimated_credit_points,
-                "Max risk pts": plan.max_risk_points,
-                "Strike + hedge quality /100": plan.quality_score,
-                "Status": plan.status,
-            }
-        )
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-    selected = snapshot.decision.final_action.replace(" WITH HEDGE", "")
-    selected_plan = {"CE SELL": bundle.ce_sell, "PE SELL": bundle.pe_sell}.get(selected)
-    if snapshot.decision.final_action == "WAIT":
-        st.info("Brain ka final action WAIT hai — CE/PE strikes sirf reference hain, entry signal nahi.")
-    elif selected_plan and selected_plan.available:
-        short = selected_plan.short_legs[0]
-        hedge = selected_plan.hedge_legs[0]
-        st.success(
-            f"Brain Pick: {selected} WITH HEDGE — SELL {short.strike:,.0f} {short.side} "
-            f"+ BUY {hedge.strike:,.0f} {hedge.side} hedge | "
-            f"Quality {selected_plan.quality_score:.0f}% | Est. credit {selected_plan.estimated_credit_points:.2f} pts"
-        )
-    else:
-        st.warning("Brain ne directional setup choose kiya hai, lekin safe hedge wala valid spread abhi resolve nahi hua.")
-
-
 def render_news_context(snapshot: MarketSnapshot) -> None:
     news = snapshot.news_context
     status = str(news.status).upper()
@@ -1689,439 +1494,6 @@ def _decision_evaluations(snapshot: MarketSnapshot) -> dict[str, Any]:
         "PE SELL": item.pe_sell,
         "IRON CONDOR": item.iron_condor,
     }
-
-
-def render_decision(
-    snapshot: MarketSnapshot, *, audit_only: bool = False
-) -> None:
-    item = snapshot.decision
-    evaluations = _decision_evaluations(snapshot)
-    selected_name = item.final_action.replace(" WITH HEDGE", "")
-    leader_name = max(evaluations, key=lambda name: evaluations[name].score)
-    displayed_name = selected_name if selected_name in evaluations else leader_name
-    displayed_score = evaluations[displayed_name].score
-
-    if audit_only:
-        st.subheader("Strategy Audit")
-        bundle = snapshot.trade_plan
-        plan_map = {
-            "CE BUY": bundle.ce_buy,
-            "PE BUY": bundle.pe_buy,
-            "CE SELL": bundle.ce_sell,
-            "PE SELL": bundle.pe_sell,
-            "IRON CONDOR": bundle.iron_condor,
-        }
-        rows = []
-        for name, strategy in evaluations.items():
-            plan = plan_map.get(name)
-            if plan is not None and plan.available:
-                if plan.is_buy:
-                    premium = (
-                        f"Debit {plan.estimated_debit_points:.2f}"
-                        if plan.estimated_debit_points is not None
-                        else "—"
-                    )
-                else:
-                    premium = (
-                        f"Credit {plan.estimated_credit_points:.2f}"
-                        if plan.estimated_credit_points is not None
-                        else "—"
-                    )
-            else:
-                premium = "—"
-
-            pick = (
-                "BEST"
-                if item.final_action != "WAIT" and name == selected_name
-                else "REFERENCE"
-                if item.final_action == "WAIT" and name == leader_name
-                else ""
-            )
-            rows.append(
-                {
-                    "Setup": name,
-                    "Fit %": strategy.score,
-                    "Structure": _plan_structure_text(plan),
-                    "Premium": premium,
-                    "Main caution": strategy.cautions[0] if strategy.cautions else "None",
-                    "Status": strategy.status,
-                    "_pick": pick,
-                }
-            )
-
-        rows.sort(key=lambda row: float(row["Fit %"]), reverse=True)
-        compact_rows = []
-        for row in rows:
-            pick = str(row["_pick"])
-            status = "ENTRY" if pick == "BEST" else "BEST AVAILABLE • WAIT" if pick == "REFERENCE" else "AVOID"
-            compact_rows.append(
-                {
-                    "Strategy": row["Setup"],
-                    "Fit": f"{float(row['Fit %']):.0f}%",
-                    "Structure": row["Structure"],
-                    "Credit/Debit": row["Premium"],
-                    "Status": status,
-                }
-            )
-        st.dataframe(compact_rows, width="stretch", hide_index=True)
-        if item.final_action == "WAIT":
-            st.info(
-                f"🟡 WAIT — {leader_name} best available setup hai, lekin confirmation complete nahi."
-            )
-        else:
-            st.success(
-                f"🟢 {item.final_action} · Fit {displayed_score:.1f}%"
-            )
-        return
-
-    st.subheader("Final One-Brain Decision")
-    st.caption(
-        "Same AI Brain CE Buy, PE Buy, CE Sell, PE Sell aur Iron Condor ko compare karta hai. "
-        "Sirf ek final action aata hai; scores suitability hain, guaranteed probability nahi."
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Best Setup", item.final_action)
-    c2.metric(
-        "Brain Fit",
-        f"{displayed_score:.1f}%" if item.final_action != "WAIT" else f"{displayed_score:.1f}% ref",
-    )
-    c3.metric("Decision Confidence", f"{item.decision_confidence:.1f}%")
-    c4.metric("Signal State", item.signal_state)
-
-    instant_note = (
-        f" | Instant read: {item.instant_action}"
-        if item.instant_action != item.final_action
-        else ""
-    )
-    message = (
-        f"FINAL ACTION: {item.final_action} | Execution: {item.execution_status} | "
-        f"Hedge required: {'YES' if item.hedge_required else 'NO'}{instant_note}"
-    )
-    if item.final_action == "WAIT":
-        st.warning(message)
-    else:
-        st.success(message)
-
-    st.info("🧠 **Brain samjha raha hai:** " + safe_brain_hinglish_line(snapshot))
-
-    left, right = st.columns(2)
-    with left:
-        st.write("**Top reasons**")
-        for reason in item.reasons or ("No decisive evidence",):
-            st.write(f"• {reason}")
-    with right:
-        st.write("**Main blocker**")
-        st.write(f"• {display_main_blocker(snapshot)}")
-
-    with st.expander("All 5 strategy scores & cautions", expanded=False):
-        rows = []
-        for strategy in (*evaluations.values(), item.wait_need):
-            pick = (
-                "BEST"
-                if item.final_action != "WAIT" and strategy.name == selected_name
-                else "REFERENCE LEADER"
-                if item.final_action == "WAIT" and strategy.name == leader_name
-                else ""
-            )
-            rows.append(
-                {
-                    "Setup": strategy.name,
-                    "Fit / Need %": strategy.score,
-                    "Pick": pick,
-                    "Status": strategy.status,
-                    "Key evidence": " | ".join(strategy.reasons),
-                    "Cautions": " | ".join(strategy.cautions) or "None",
-                }
-            )
-        frame = pd.DataFrame(rows)
-
-        def _score_row(row: pd.Series) -> list[str]:
-            if row["Pick"] == "BEST":
-                return [
-                    "background-color: rgba(34, 197, 94, 0.18); font-weight: 700"
-                ] * len(row)
-            if row["Pick"] == "REFERENCE LEADER":
-                return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
-            return [""] * len(row)
-
-        styled = frame.style.apply(_score_row, axis=1).format(
-            {"Fit / Need %": "{:.1f}%"}, na_rep="—"
-        )
-        st.dataframe(styled, width="stretch", hide_index=True, row_height=44)
-
-def _leg_label(legs: tuple[Any, ...], *, prefix: str = "") -> str:
-    if not legs:
-        return "—"
-    text = " + ".join(f"{leg.strike:,.0f} {leg.side}" for leg in legs)
-    return f"{prefix} {text}".strip()
-
-
-def render_trade_plan(
-    snapshot: MarketSnapshot, *, compact: bool = False, max_rows: int = 5
-) -> None:
-    bundle = snapshot.trade_plan
-    evaluations = _decision_evaluations(snapshot)
-    score_map = {name: float(item.score) for name, item in evaluations.items()}
-    selected = bundle.selected_setup
-    reference_leader = max(score_map, key=score_map.get)
-    display_pick = selected if selected in score_map else reference_leader
-
-    plan_map = {
-        "CE BUY": bundle.ce_buy,
-        "PE BUY": bundle.pe_buy,
-        "CE SELL": bundle.ce_sell,
-        "PE SELL": bundle.pe_sell,
-        "IRON CONDOR": bundle.iron_condor,
-    }
-    ordered_names = sorted(
-        plan_map, key=lambda name: score_map.get(name, 0.0), reverse=True
-    )
-
-    if compact:
-        st.subheader("🎯 AI Strategy Planner — Top 3")
-        st.caption(
-            "Same One-Brain ke top setups. Fit suitability hai, guaranteed chance nahi. "
-            "Green sirf selected BEST; WAIT me amber reference leader."
-        )
-        rows = []
-        for name in ordered_names[: max(1, int(max_rows))]:
-            plan = plan_map[name]
-            if selected != "WAIT" and name == selected:
-                pick = "BEST"
-                status = "BEST"
-            elif selected == "WAIT" and name == reference_leader:
-                pick = "REFERENCE"
-                status = "REFERENCE"
-            else:
-                pick = ""
-                status = "AVAILABLE" if plan.available else "BLOCKED"
-            rows.append(
-                {
-                    "Setup": name,
-                    "Fit %": score_map.get(name, 0.0),
-                    "Strike / Structure": _plan_structure_text(plan),
-                    "Quality %": plan.quality_score if plan.available else None,
-                    "Status": status,
-                    "_pick": pick,
-                }
-            )
-        frame = pd.DataFrame(rows)
-
-        def _compact_row(row: pd.Series) -> list[str]:
-            if row["_pick"] == "BEST":
-                return [
-                    "background-color: rgba(34, 197, 94, 0.20); font-weight: 700"
-                ] * len(row)
-            if row["_pick"] == "REFERENCE":
-                return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
-            return [""] * len(row)
-
-        styled = (
-            frame.style.apply(_compact_row, axis=1)
-            .hide(axis="columns", subset=["_pick"])
-            .format(
-                {
-                    "Fit %": "{:.1f}%",
-                    "Quality %": lambda value: "—"
-                    if pd.isna(value)
-                    else f"{value:.1f}%",
-                },
-                na_rep="—",
-            )
-        )
-        st.dataframe(styled, width="stretch", hide_index=True, row_height=42)
-        if selected == "WAIT":
-            st.info(
-                f"Final One-Brain WAIT hai. {reference_leader} sirf reference leader hai; entry approval nahi."
-            )
-        elif bundle.blocker != "None":
-            st.warning(f"Planner blocker: {bundle.blocker}")
-        return
-
-    st.subheader("AI Strategy & Protected Strike Planner")
-    st.caption(
-        "Same Final One-Brain 5 setups compare karta hai. Planner decision dobara nahi banata; "
-        "sirf selected setup ka liquid strike aur seller trade me mandatory hedge nikalta hai."
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Selected Setup", selected)
-    c2.metric(
-        "Brain Fit",
-        f"{score_map.get(display_pick, 0.0):.1f}%"
-        + (" ref" if selected == "WAIT" else ""),
-    )
-    c3.metric("Expiry", bundle.expiry or "—")
-    c4.metric("Spot", f"{bundle.spot:,.2f}" if bundle.spot is not None else "—")
-    st.caption(f"Planner status: {bundle.status}")
-
-    rows = []
-    for name in ordered_names:
-        plan = plan_map[name]
-        breakeven = "—"
-        if plan.lower_breakeven is not None and plan.upper_breakeven is not None:
-            breakeven = (
-                f"{plan.lower_breakeven:,.2f} to {plan.upper_breakeven:,.2f}"
-            )
-        elif plan.lower_breakeven is not None:
-            breakeven = f"Lower {plan.lower_breakeven:,.2f}"
-        elif plan.upper_breakeven is not None:
-            breakeven = f"Upper {plan.upper_breakeven:,.2f}"
-
-        if plan.is_buy:
-            primary = _leg_label(plan.long_legs, prefix="BUY")
-            protection = _leg_label(plan.short_legs, prefix="SELL")
-            premium = (
-                f"Debit {plan.estimated_debit_points:.2f}"
-                if plan.estimated_debit_points is not None
-                else "—"
-            )
-        else:
-            primary = _leg_label(plan.short_legs, prefix="SELL")
-            protection = _leg_label(plan.hedge_legs, prefix="BUY")
-            premium = (
-                f"Credit {plan.estimated_credit_points:.2f}"
-                if plan.estimated_credit_points is not None
-                else "—"
-            )
-
-        if selected != "WAIT" and name == selected:
-            pick = "BEST"
-            status = f"BEST · {plan.status}"
-        elif selected == "WAIT" and name == reference_leader:
-            pick = "REFERENCE"
-            status = "REFERENCE BEST"
-        else:
-            pick = ""
-            status = plan.status
-        rows.append(
-            {
-                "Setup": name,
-                "Primary leg(s)": primary,
-                "Protection": protection,
-                "Premium": premium,
-                "Max risk pts": plan.max_risk_points,
-                "Breakeven / Range": breakeven,
-                "Brain fit %": score_map.get(name, 0.0),
-                "Leg quality %": plan.quality_score,
-                "Status": status,
-                "_pick": pick,
-            }
-        )
-
-    frame = pd.DataFrame(rows)
-
-    def _planner_row(row: pd.Series) -> list[str]:
-        if row["_pick"] == "BEST":
-            return [
-                "background-color: rgba(34, 197, 94, 0.20); font-weight: 700"
-            ] * len(row)
-        if row["_pick"] == "REFERENCE":
-            return ["background-color: rgba(245, 158, 11, 0.14)"] * len(row)
-        return [""] * len(row)
-
-    styled = (
-        frame.style.apply(_planner_row, axis=1)
-        .hide(axis="columns", subset=["_pick"])
-        .format(
-            {
-                "Max risk pts": lambda value: "—"
-                if pd.isna(value)
-                else f"{value:.2f}",
-                "Brain fit %": "{:.1f}%",
-                "Leg quality %": "{:.1f}%",
-            },
-            na_rep="—",
-        )
-    )
-    st.dataframe(styled, width="stretch", hide_index=True, row_height=40)
-
-    chosen = plan_map.get(selected)
-    _render_pair_comparison(plan_map)
-    if chosen and chosen.available:
-        st.write("**Selected-plan evidence**")
-        for reason in chosen.reasons or ("No candidate reason available",):
-            st.write(f"• {reason}")
-    elif selected == "WAIT":
-        st.info(
-            f"Final action WAIT hai. {reference_leader} {score_map[reference_leader]:.1f}% "
-            "sirf reference leader hai, green approval nahi."
-        )
-    if bundle.blocker != "None":
-        st.warning(f"Planner blocker: {bundle.blocker}")
-
-
-def render_execution_guard(snapshot: MarketSnapshot) -> None:
-    item = snapshot.execution_guard
-    profile = snapshot.risk_profile
-    state = snapshot.discipline_state
-    st.subheader("Execution Guard & One-Trade Discipline")
-    st.caption(
-        "This is not a second strategy brain. It applies signal persistence, fresh-feed, "
-        "entry-window, protected-risk budget and one-trade/day rules to the already "
-        "selected final action. It never places or exits an order."
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Entry Readiness", item.readiness)
-    c2.metric("Signal Persistence", item.signal_state)
-    c3.metric("Risk Budget", f"₹{item.risk_budget_rupees:,.0f}")
-    c4.metric("Allowed Lots", str(item.allowed_lots))
-
-    message = (
-        f"Setup: {item.selected_setup} | Entry window: {item.entry_window} | "
-        f"Compulsory exit: {item.forced_exit_time} | "
-        f"One-trade state: {state.last_outcome or 'NOT USED'}"
-    )
-    if item.readiness == "ENTRY READY":
-        st.success(message)
-    elif item.readiness == "WATCH":
-        st.info(message)
-    else:
-        st.warning(message)
-
-    risk_rows = [
-        {
-            "Capital ₹": profile.capital_rupees,
-            "Risk %": profile.risk_pct,
-            "Risk budget ₹": item.risk_budget_rupees,
-            "Lot size": profile.lot_size,
-            "Risk / lot ₹": item.risk_per_lot_rupees,
-            "Budget lots": item.max_lots_by_budget,
-            "Lot cap": item.max_lots_cap,
-            "Allowed lots": item.allowed_lots,
-            "Target capture pts": item.target_capture_points,
-            "Target option value pts": item.target_exit_debit_points,
-            "Target ₹": item.target_profit_rupees,
-            "SL trigger pts": item.stop_loss_points,
-            "SL option value pts": item.stop_exit_debit_points,
-            "SL ₹": item.stop_loss_rupees,
-        }
-    ]
-    st.dataframe(pd.DataFrame(risk_rows), width="stretch", hide_index=True)
-
-    low = (
-        f"Below {item.spot_invalidation_low:,.2f}"
-        if item.spot_invalidation_low is not None
-        else "—"
-    )
-    high = (
-        f"Above {item.spot_invalidation_high:,.2f}"
-        if item.spot_invalidation_high is not None
-        else "—"
-    )
-    st.caption(
-        f"Spot invalidation guide — downside: **{low}** | upside: **{high}**. "
-        "Premium-based triggers are estimates; verify broker bid/ask and fills."
-    )
-
-    left, right = st.columns(2)
-    with left:
-        st.write("**Guard evidence**")
-        for reason in item.reasons or ("No positive readiness evidence",):
-            st.write(f"• {reason}")
-    with right:
-        st.write("**Guard blockers**")
-        for blocker in item.blockers or ("None",):
-            st.write(f"• {blocker}")
 
 
 def render_position_guardian(snapshot: MarketSnapshot) -> None:
@@ -2222,22 +1594,6 @@ def render_position_guardian(snapshot: MarketSnapshot) -> None:
             st.write(f"• {blocker}")
 
 
-def render_feed_status(snapshot: MarketSnapshot) -> None:
-    rows = []
-    for key, status in snapshot.feed_status.items():
-        rows.append(
-            {
-                "Feed": key,
-                "Available": "YES" if status.ok else "NO",
-                "Use": status.use_state,
-                "Age sec": status.age_seconds,
-                "Message": status.message,
-                "Source": status.source,
-            }
-        )
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-
 def _data_confidence(snapshot: MarketSnapshot) -> tuple[int, str]:
     """Display-only trust score from existing FeedStatus objects.
 
@@ -2308,31 +1664,6 @@ def _option_conflict_text(item: Any) -> str:
     return str(blockers[0]) if blockers else "No major flow conflict"
 
 
-def render_data_health(snapshot: MarketSnapshot) -> None:
-    """Compact display-only trust label; it never changes One-Brain scores."""
-    statuses = snapshot.feed_status or {}
-    critical = [statuses.get(key) for key in ("quotes", "candles", "option_chain", "future_volume", "vix")]
-    critical = [item for item in critical if item is not None]
-    unavailable = [item for item in critical if not item.ok or item.use_state == "UNAVAILABLE"]
-    delayed = [item for item in critical if item.use_state in {"STALE", "CAUTION", "DELAYED"}]
-    if not snapshot.market_session.is_live:
-        label, detail, kind = "LAST DATA", "Market live nahi — sirf reference", "warning"
-    elif unavailable:
-        label, detail, kind = "DATA KAM", ", ".join(item.name for item in unavailable), "error"
-    elif delayed:
-        label, detail, kind = "DELAYED", ", ".join(item.name for item in delayed), "warning"
-    elif critical:
-        ages = [age for item in critical if (age := _effective_age_seconds(snapshot, item)) is not None]
-        age_text = f" · max age {max(ages):.0f}s" if ages else ""
-        label, detail, kind = "FRESH", "Critical feeds ready" + age_text, "success"
-    else:
-        label, detail, kind = "BROKER SE MATCH CHECK", "Freshness details available nahi", "warning"
-    score, score_detail = _data_confidence(snapshot)
-    confidence_text = f"{score}/100" if snapshot.market_session.is_live else f"{score}/100 reference"
-    getattr(st, kind)(f"📡 **Data Health: {label}** — {detail} · **Data Confidence {confidence_text}**")
-    st.caption(score_detail)
-
-
 def render_core_evidence(snapshot: MarketSnapshot) -> None:
     item = snapshot.core_evidence
     st.dataframe(
@@ -2349,25 +1680,6 @@ def render_core_evidence(snapshot: MarketSnapshot) -> None:
         f"**Kyon:** {(item.reasons or ('Mixed evidence',))[0]}  •  "
         f"**Savdhani:** {(item.blockers or ('Koi major caution nahi',))[0]}"
     )
-
-
-def _price_action_row(item: Any) -> dict[str, Any]:
-    return {
-        "Timeframe": item.timeframe,
-        "As Of": item.as_of.strftime("%d-%m-%Y %H:%M") if item.as_of else "—",
-        "Structure": item.structure,
-        "Current Event": item.event,
-        "Move Stage": item.move_stage,
-        "Last Swing High": item.last_swing_high,
-        "Last Swing Low": item.last_swing_low,
-        "Invalidation": item.invalidation_level,
-        "ATR 14": item.atr14,
-        "Bullish": item.bullish_score,
-        "Bearish": item.bearish_score,
-        "Range": item.range_score,
-        "Confidence": item.confidence,
-        "Status": item.status,
-    }
 
 
 def render_price_action(snapshot: MarketSnapshot) -> None:
@@ -2423,23 +1735,6 @@ def render_levels(snapshot: MarketSnapshot) -> None:
             "Distance": raw["Distance"], "Strength": raw["Strength"], "Status": raw["Status"],
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-
-def _volume_row(item: Any) -> dict[str, Any]:
-    return {
-        "Timeframe": item.timeframe,
-        "As Of": item.as_of.strftime("%d-%m-%Y %H:%M") if item.as_of else "—",
-        "Current Volume": item.current_volume,
-        "Time-Normalized Baseline": item.baseline_volume,
-        "Relative Volume": item.relative_volume,
-        "Volume State": item.volume_state,
-        "Trend": item.volume_trend,
-        "Price Candle": item.price_direction,
-        "Move Support": item.move_support,
-        "Baseline Samples": item.baseline_samples,
-        "Confidence": item.confidence,
-        "Status": item.status,
-    }
 
 
 def render_volume(snapshot: MarketSnapshot) -> None:
@@ -2548,24 +1843,6 @@ def render_heavyweights(snapshot: MarketSnapshot) -> None:
             }
         )
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-
-def _indicator_row(item: TimeframeIndicators) -> dict[str, Any]:
-    return {
-        "Timeframe": item.timeframe,
-        "As Of": item.as_of.strftime("%d-%m-%Y %H:%M") if item.as_of else "—",
-        "Close": item.close,
-        "EMA 20": item.ema20,
-        "EMA 50": item.ema50,
-        "EMA State": item.ema_state,
-        "MACD": item.macd,
-        "Signal": item.macd_signal,
-        "Histogram": item.macd_histogram,
-        "MACD State": item.macd_state,
-        "RSI 14": item.rsi14,
-        "RSI State": item.rsi_state,
-        "Status": item.status,
-    }
 
 
 def render_indicators(snapshot: MarketSnapshot) -> None:
