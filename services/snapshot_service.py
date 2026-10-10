@@ -425,7 +425,28 @@ class SnapshotService:
             display_name=CONFIG.india_vix.name,
         )
         try:
-            raw_master = self.master.load()
+            # Live snapshot path is stale-while-revalidate: a valid local master is
+            # always preferable to blocking One Brain for a multi-second network
+            # refresh.  The legacy InstrumentMaster.load() behaviour is preserved for
+            # non-live callers/tests; only SnapshotService opts into non-blocking use.
+            try:
+                try:
+                    raw_master = self.master.load(allow_download=False)
+                except TypeError:
+                    # Compatibility with legacy/custom resolvers whose load() does not
+                    # yet expose allow_download. Production InstrumentMaster uses the
+                    # non-blocking branch above.
+                    raw_master = self.master.load()
+                prewarm = getattr(self.master, "prewarm_async", None)
+                if callable(prewarm):
+                    prewarm()
+            except Exception:
+                # First-ever cold start has no usable local master, so one blocking
+                # download is unavoidable. Subsequent stale refreshes are background.
+                try:
+                    raw_master = self.master.load(allow_download=True)
+                except TypeError:
+                    raw_master = self.master.load()
             future = self.master.resolve_nearest_nifty_future(raw_master)
             resolver = getattr(self.master, "resolve_india_vix", None)
             vix = resolver(raw_master) if callable(resolver) else None
@@ -811,22 +832,36 @@ class SnapshotService:
             if len(heavyweight_quotes) == len(CONFIG.top9)
             else "CAUTION",
         )
-        statuses["heavyweights"] = FeedStatus(
-            name="heavyweights",
-            ok=len(analysis_heavyweight_quotes) == len(CONFIG.top9),
-            fetched_at=current,
-            message=(
-                f"Usable Top-9 quotes {len(analysis_heavyweight_quotes)}/{len(CONFIG.top9)}; grouped response fresh, per-symbol timestamp optional"
-            ),
-            source="Grouped Dhan market quote",
-            use_state=(
+        top9_live_count = len(analysis_heavyweight_quotes)
+        top9_late_reference = bool(
+            market_session.is_live
+            and current.timetz().replace(tzinfo=None) >= CONFIG.spot_reference_only_start
+            and top9_live_count < len(CONFIG.top9)
+        )
+        if top9_late_reference:
+            top9_message = (
+                f"Late-session reference: fresh Top-9 timestamps {top9_live_count}/{len(CONFIG.top9)}; "
+                "stale constituents receive NO VOTE (grouped response may still be fresh)"
+            )
+            top9_use_state = "REFERENCE"
+        else:
+            top9_message = (
+                f"Usable Top-9 quotes {top9_live_count}/{len(CONFIG.top9)}; grouped response fresh, per-symbol timestamp optional"
+            )
+            top9_use_state = (
                 "LIVE"
-                if market_session.is_live
-                and len(analysis_heavyweight_quotes) == len(CONFIG.top9)
+                if market_session.is_live and top9_live_count == len(CONFIG.top9)
                 else "CAUTION"
                 if market_session.is_live
                 else "REFERENCE"
-            ),
+            )
+        statuses["heavyweights"] = FeedStatus(
+            name="heavyweights",
+            ok=top9_live_count == len(CONFIG.top9),
+            fetched_at=current,
+            message=top9_message,
+            source="Grouped Dhan market quote",
+            use_state=top9_use_state,
         )
         statuses["vix"] = FeedStatus(
             name="vix",

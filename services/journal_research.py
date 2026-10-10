@@ -136,14 +136,16 @@ def market_intelligence_candidate(snapshot: Any) -> dict[str, Any] | None:
     if iw_state in {"OPEN", "STRONG"} and gates >= 6 and alert_eligible:
         setup = seller_setup_for_direction(iw_direction)
         if setup:
+            transition = str(institutional.get("transition") or "UNCHANGED").upper()
             return {
                 "source": "MARKET INTELLIGENCE",
                 "trigger_type": "INSTITUTIONAL WINDOW",
                 "trigger_state": iw_state,
+                "trigger_transition": transition,
                 "direction": iw_direction,
                 "setup": setup,
                 "trigger_score": round(_num(institutional.get("opportunity_score"), 0.0) or 0.0, 1),
-                "reason": f"Institutional Window {iw_state} · {gates}/6 gates · data safety ready",
+                "reason": f"Institutional Window {iw_state} · {gates}/6 gates · {transition} · data safety ready",
             }
 
     quality_state = str(integrity.get("quality_state") or "UNVERIFIED").upper()
@@ -162,6 +164,7 @@ def market_intelligence_candidate(snapshot: Any) -> dict[str, Any] | None:
                 "source": "MARKET INTELLIGENCE",
                 "trigger_type": "PRESSURE INTEGRITY",
                 "trigger_state": quality_state,
+                "trigger_transition": str(integrity.get("transition") or quality_state).upper(),
                 "direction": p_direction,
                 "setup": setup,
                 "trigger_score": round(_num(integrity.get("quality_score"), 0.0) or 0.0, 1),

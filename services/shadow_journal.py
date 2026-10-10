@@ -72,6 +72,19 @@ class ShadowJournalStore:
                 if fcntl is not None:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    @contextmanager
+    def _cycle_locked(self) -> Iterator[None]:
+        path = self.path.with_suffix(".cycles.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+", encoding="utf-8") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     @classmethod
     def _empty(cls) -> dict[str, Any]:
         return {"schema_version": cls.SCHEMA_VERSION, "entries": []}
@@ -139,6 +152,117 @@ class ShadowJournalStore:
     def _save_decisions(self, rows: list[dict[str, Any]]) -> None:
         with self._decision_locked():
             self._save_decisions_unlocked(rows)
+
+    def merge_decisions(self, rows: list[dict[str, Any]]) -> int:
+        """Restore/merge durable Railway decision rows after a fresh UI deploy."""
+        if not rows:
+            return 0
+        with self._decision_locked():
+            local = self._read_decisions_unlocked()
+            merged: dict[str, dict[str, Any]] = {}
+            for item in (*local, *rows):
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("at") or "")
+                if not key:
+                    continue
+                merged[key] = dict(item)
+            ordered = sorted(merged.values(), key=lambda item: str(item.get("at") or ""))
+            if len(ordered) != len(local) or any(a != b for a, b in zip(ordered, local)):
+                self._save_decisions_unlocked(ordered)
+            return len(ordered)
+
+    def _read_cycle_state_unlocked(self) -> dict[str, Any]:
+        path = self.path.with_suffix(".cycles.json")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_cycle_state_unlocked(self, data: dict[str, Any]) -> None:
+        path = self.path.with_suffix(".cycles.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, path)
+
+    @staticmethod
+    def _research_signature(lane: str, snapshot: MarketSnapshot, candidate: dict[str, Any]) -> str:
+        direction = normalize_direction(candidate.get("direction") or setup_direction(candidate.get("setup")))
+        setup = str(candidate.get("setup") or "").upper()
+        barrier = (
+            snapshot.barrier_map.nearest_resistance
+            if direction == "BULLISH"
+            else snapshot.barrier_map.nearest_support
+            if direction == "BEARISH"
+            else None
+        )
+        if barrier is None:
+            zone = "NO-BARRIER"
+        else:
+            # Five-point bins prevent tiny zone drift from manufacturing a new trial.
+            lo = round(float(barrier.lower) / 5.0) * 5.0
+            hi = round(float(barrier.upper) / 5.0) * 5.0
+            zone = f"{barrier.label}:{lo:.0f}-{hi:.0f}"
+        return f"{lane}|{direction}|{setup}|{zone}"
+
+    def identify_research_cycle(
+        self, lane: str, snapshot: MarketSnapshot, candidate: dict[str, Any] | None
+    ) -> tuple[str | None, bool, str]:
+        """Track one statistical sample per continuous setup cycle.
+
+        A cycle re-arms only after the candidate disappears, direction/setup changes,
+        or the relevant barrier materially changes. A cooldown alone never creates a
+        new statistical trial.
+        """
+        session = snapshot.created_at.date().isoformat()
+        lane_key = lane.upper()
+        with self._cycle_locked():
+            state = self._read_cycle_state_unlocked()
+            if str(state.get("session_date") or "") != session:
+                state = {"session_date": session, "lanes": {}}
+            lanes = state.setdefault("lanes", {})
+            lane_state = lanes.get(lane_key) if isinstance(lanes.get(lane_key), dict) else {}
+            if candidate is None:
+                if lane_state.get("active"):
+                    lane_state["active"] = False
+                    lane_state["signature"] = ""
+                    lane_state["sampled"] = False
+                    lanes[lane_key] = lane_state
+                    self._save_cycle_state_unlocked(state)
+                return None, False, "No active setup cycle"
+
+            signature = self._research_signature(lane, snapshot, candidate)
+            if not lane_state.get("active") or lane_state.get("signature") != signature:
+                counter = int(lane_state.get("counter") or 0) + 1
+                lane_state = {
+                    "counter": counter,
+                    "active": True,
+                    "signature": signature,
+                    "cycle_id": f"{lane_key.replace(' ', '-')}-{session}-{counter:03d}",
+                    "sampled": False,
+                    "started_at": snapshot.created_at.isoformat(),
+                }
+                lanes[lane_key] = lane_state
+                self._save_cycle_state_unlocked(state)
+            return (
+                str(lane_state.get("cycle_id") or ""),
+                bool(lane_state.get("sampled")),
+                signature,
+            )
+
+    def mark_research_cycle_sampled(self, lane: str, cycle_id: str) -> None:
+        if not cycle_id:
+            return
+        with self._cycle_locked():
+            state = self._read_cycle_state_unlocked()
+            lanes = state.get("lanes") if isinstance(state.get("lanes"), dict) else {}
+            lane_state = lanes.get(lane.upper()) if isinstance(lanes.get(lane.upper()), dict) else None
+            if lane_state and str(lane_state.get("cycle_id") or "") == cycle_id:
+                lane_state["sampled"] = True
+                lane_state["sampled_at"] = datetime.now().isoformat()
+                self._save_cycle_state_unlocked(state)
 
     def save(self, entries: list[dict[str, Any]], *, sync_cloud: bool = True) -> None:
         data = {"schema_version": self.SCHEMA_VERSION, "entries": entries[-500:]}
@@ -334,8 +458,10 @@ def _close_open_entries(
             net = gross - charges
             entry["status"] = "CLOSED"
             entry["outcome"] = guardian.instruction
+            entry["exit_reason"] = guardian.instruction
             entry["closed_at"] = snapshot.created_at.isoformat()
             entry["fill_basis"] = "First observed executable quote, not a guaranteed deadline fill"
+            entry["exit_price_basis"] = "First observed executable protected-spread quote at alert time"
             entry["exit_debit_points"] = guardian.current_debit_points
             entry["gross_pnl_rupees"] = round(gross, 2)
             entry["estimated_charges_rupees"] = round(charges, 2)
@@ -459,7 +585,11 @@ def _one_brain_candidate(snapshot: MarketSnapshot) -> dict[str, Any] | None:
     simple = snapshot.metadata.get("simple_brain") or {}
     common = snapshot.metadata.get("common_decision") or {}
     if simple:
-        action = str(simple.get("final_action") or "WAIT").upper()
+        # Research lane intentionally samples a developing protected candidate even
+        # when the live One-Brain final action remains WAIT for confirmation. This
+        # does NOT alter live execution; the paper execution guard below must still
+        # independently pass.
+        action = str(simple.get("candidate_action") or simple.get("final_action") or "WAIT").upper()
         direction_strength = float(simple.get("direction_strength") or 0.0)
         entry_readiness = float(simple.get("entry_readiness") or 0.0)
         if action not in _CONCRETE_SETUPS:
@@ -546,7 +676,9 @@ def _research_eligible(
     if candidate is None:
         if lane == "MARKET INTELLIGENCE":
             return False, "No MI Window/verified-pressure paper trigger", None
-        return False, "One Brain thresholds / final action not ready", None
+        return False, "One Brain candidate / research thresholds not ready", None
+    if bool(candidate.get("_cycle_sampled")):
+        return False, "Same setup cycle already sampled; waiting for genuine reset/re-arm", None
     if not snapshot.market_session.is_live:
         return False, "Market is not live", None
     rows = _lane_rows(entries, snapshot, lane)
@@ -626,6 +758,9 @@ def _make_research_record(
             "trigger_type": str(candidate.get("trigger_type") or lane),
             "trigger_state": str(candidate.get("trigger_state") or ""),
             "trigger_score": round(trigger_score, 1),
+            "trigger_transition": str(candidate.get("trigger_transition") or ""),
+            "setup_cycle_id": str(candidate.get("_setup_cycle_id") or ""),
+            "setup_fingerprint": str(candidate.get("_setup_fingerprint") or ""),
             "signal_direction": normalize_direction(candidate.get("direction") or setup_direction(action)),
             "alignment_state": alignment_state,
             "real_ai_action": str((snapshot.metadata.get("simple_brain") or {}).get("final_action") or snapshot.decision.final_action),
@@ -678,7 +813,7 @@ def process_auto_shadow_journal(
 ) -> list[dict[str, Any]]:
     """Observe/score two independent paper lanes without touching core decisions.
 
-    ONE BRAIN lane: concrete Simple-Brain final action, direction >=54 and entry
+    ONE BRAIN lane: concrete Simple-Brain candidate action, direction >=54 and entry
     readiness >=62 (current config values), then the existing protected-plan/risk/data
     guard must be ENTRY READY.
 
@@ -697,6 +832,18 @@ def process_auto_shadow_journal(
 
     ob_candidate = _one_brain_candidate(snapshot)
     mi_candidate = market_intelligence_candidate(snapshot)
+
+    # Unique-cycle sampling: cooldown is retained as a safety throttle, but it can no
+    # longer manufacture repeated statistical trials from one unchanged opportunity.
+    for lane_name, candidate in (("ONE BRAIN", ob_candidate), ("MARKET INTELLIGENCE", mi_candidate)):
+        cycle_id, already_sampled, fingerprint = store.identify_research_cycle(
+            lane_name, snapshot, candidate
+        )
+        if candidate is not None:
+            candidate["_setup_cycle_id"] = cycle_id or ""
+            candidate["_setup_fingerprint"] = fingerprint
+            candidate["_cycle_sampled"] = already_sampled
+
     ob_ok, ob_reason, ob_snapshot = _research_eligible(
         entries, snapshot, ob_candidate, "ONE BRAIN"
     )
@@ -728,6 +875,9 @@ def process_auto_shadow_journal(
                     alignment_state=alignment_state,
                 )
                 entries.append(record)
+                store.mark_research_cycle_sampled(
+                    lane, str(candidate.get("_setup_cycle_id") or "")
+                )
                 changed = True
                 cloud_changed = True
             except (ValueError, TypeError) as exc:
