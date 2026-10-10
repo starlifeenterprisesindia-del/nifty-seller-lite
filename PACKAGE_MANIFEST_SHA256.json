@@ -1,0 +1,18 @@
+{
+  "version": "2.75.2_DHAN_COOLDOWN_RECOVERY",
+  "sha256": {
+    ".gitignore": "0c3cb6a88850bca06118a47e0a0586fa74dbea44307641607362210a2ee9a6d4",
+    "BUILD_VALIDATION_2.75.2.txt": "9f85539b33d3324da222192b162c973a1b7869b9a4fd429ed783a861daab9c4a",
+    "DEPLOY_README_2.75.2.txt": "b24fd52d03bf0cff8b03cffd5feeb7e4c52abaf155577e5d41cebabbe243b1b9",
+    "README.md": "011775e8f737f2b5e0fb97fa3eeda104d0662ad62e4d5d0973b032d0a1b163bd",
+    "RELEASE_NOTES_2.75.2_DHAN_COOLDOWN_RECOVERY.txt": "c4e7d270719c63d57d86d0e80a0662cc83e80f416a3807d570ac3bf8493fde1e",
+    "UPLOAD_INSTRUCTIONS_FIRST.txt": "eb3c6bedf46a094a0cd18eb95b8a1db4c6c05173f6bbce85d6b95aed5d218b90",
+    "app.py": "e9bf120136588f51dfe0171e5a69a5f62bddb8cdf85ba964f1d2f2a499190ce7",
+    "config.py": "0bbb63feb2642da96f386ea70a5f5a993ba6e85e4fae9c805f39a26f145aff81",
+    "live_server.py": "edaed777b17f0c71d362c08817f341bfb97814294c6e39277a9b0ee4364299c9",
+    "models.py": "a1a6d309148b070482e82b2272e704313778c47fd2aa0778f1cb1febf9f5f6b2",
+    "nsl_runtime_v2752.zip": "b133eccee25a10215808c236095c007c6842e5a7986f456b6a9cb8d3c341f84c",
+    "railway.toml": "0a154c0067eb63799e95e5ad30fd9760b7f710484e83ac33a2e8b1e998d3f28e",
+    "requirements.txt": "29d11b5a5a9e777dc8957f2383e5bdd9e17c669bc77321c06bbb43d7d08dcd76"
+  }
+}

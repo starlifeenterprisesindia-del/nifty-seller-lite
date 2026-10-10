@@ -1,10 +1,19 @@
-# Nifty Seller Lite 2.75.0 — Live Readability + Validation Hardening
+# Nifty Seller Lite 2.75.2 — Dhan Cooldown Recovery + Live Readability Hardening
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
+
+
+## 2.75.2 hotfix
+
+- Railway `/ready` now separates **deployment ready** from **Dhan snapshot ready** without making Railway restart a healthy service.
+- Streamlit waits and retries automatically during a Dhan 429 cooldown instead of leaving the first snapshot on a manual-error screen.
+- Day Memory and premium-alert background lanes stay quiet during a bounded post-deploy startup grace, so the foreground One Brain snapshot gets first priority.
+- Background lanes skip themselves while the shared Dhan gateway is in cooldown.
+- No One Brain score, weight, barrier formula, MI gate, pressure formula, FII/DII weight, or trading threshold was changed by this hotfix.
 
 
 ## 2.75.0 highlights

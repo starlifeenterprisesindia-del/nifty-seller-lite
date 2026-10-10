@@ -1,12 +1,8 @@
-ONE BRAIN / NIFTY SELLER LITE — v2.75.1
+UPLOAD v2.75.2 — FIRST READ
 
-FOR GITHUB/RAILWAY UPLOAD:
-1. Use ONE_BRAIN_v2.75.1_UPLOAD_THIS.zip.
-2. Extract ONLY the outer ZIP.
-3. Upload/replace all extracted files together.
-4. Keep nsl_runtime_v2751.zip AS A ZIP in the repository root. Do NOT extract that inner ZIP.
-
-FOR BACKUP/EDITING:
-Use ONE_BRAIN_v2.75.1_COMPLETE_SOURCE_BACKUP.zip. It contains normal analysis/, services/, ui/, tests/ folders and intentionally does NOT contain a nested runtime ZIP.
-
-Core One Brain weights/thresholds are unchanged in this packaging-safety revision.
+1. Extract ONE_BRAIN_v2.75.2_UPLOAD_THIS.zip on your laptop.
+2. Upload ALL extracted top-level files to the GitHub repository root, replacing same-name files.
+3. Keep nsl_runtime_v2752.zip AS A ZIP in the repository root. Do NOT extract the inner ZIP.
+4. After the new files are present, delete old nsl_runtime_v275.zip and nsl_runtime_v2751.zip if either remains in GitHub.
+5. Do not upload the Complete Source Backup folder to GitHub for this compact deployment.
+6. During the first load after deploy, if Dhan is temporarily rate-limited, the app will show an automatic cooldown/wait message and retry itself. Do not repeatedly press Fetch/refresh.

@@ -1,0 +1,8 @@
+BUILD VALIDATION — v2.75.2_DHAN_COOLDOWN_RECOVERY
+
+- Python syntax compile: PASS for app.py, live_server.py, config.py, services/dhan_gateway.py and services/day_recorder.py.
+- Focused regression suite: 48 PASS (gateway/backoff/background grace, day memory, Railway alert store, snapshot service, v2.75 hardening).
+- Railway /ready smoke: PASS — returns ready=true, snapshot_ready=false and cooldown value during a simulated 79.8s gateway cooldown.
+- Two broader historical test failures were reproduced unchanged on v2.75.1 baseline (AI move journal-window expectation and MI liquidity acceptance expectation); they were not introduced by this cooldown hotfix.
+- Streamlit UI test harness is not installed in this build container; runtime syntax and non-UI regressions were verified.
+- No model/scoring/threshold recalibration was performed.

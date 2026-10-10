@@ -20,3 +20,6 @@ DAY_MEMORY_ENABLED = "1"
 RAILWAY_VOLUME_MOUNT_PATH = "/data"
 DAY_MEMORY_MIN_IDLE_SECONDS = "25"
 DAY_MEMORY_SLIM = "1"
+
+# Give Streamlit first priority after a deploy; background observers resume automatically.
+DHAN_BACKGROUND_STARTUP_GRACE_SECONDS = "300"

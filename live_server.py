@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 # Compact GitHub deploys keep pure-Python analysis/services/ui modules in one zip.
 # A complete-source checkout contains those directories directly. Prefer direct source
 # when present so a stale nested runtime bundle can never shadow edited source files.
-_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2751.zip")
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2752.zip")
 _DIRECT_RUNTIME_PRESENT = all(
     (Path(__file__).with_name(folder)).is_dir() for folder in ("analysis", "services", "ui")
 )
@@ -467,8 +467,14 @@ def ready() -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc.detail)) from exc
     if isinstance(gateway_status, dict) and gateway_status.get("configured") is False:
         raise HTTPException(status_code=503, detail="Dhan gateway not configured")
+    cooldown = float((gateway_status or {}).get("rate_limit_cooldown_seconds") or 0.0)
+    # Railway deployment health must stay HTTP 200 during a temporary upstream Dhan
+    # cooldown; otherwise Railway would restart a healthy process and make the burst
+    # worse. Streamlit uses snapshot_ready to wait automatically before first build.
     return {
         "ready": True,
+        "snapshot_ready": cooldown <= 0.5,
+        "rate_limit_cooldown_seconds": round(cooldown, 1),
         "service": "nifty-seller-live",
         "gateway_configured": True,
     }

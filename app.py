@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import re
 import gc
 import threading
 from dataclasses import replace
@@ -15,7 +16,7 @@ from zoneinfo import ZoneInfo
 # Compact GitHub deploys keep pure-Python analysis/services/ui modules in one zip.
 # A complete-source checkout contains those directories directly. Prefer direct source
 # when present so a stale nested runtime bundle can never shadow edited source files.
-_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2751.zip")
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2752.zip")
 _DIRECT_RUNTIME_PRESENT = all(
     (Path(__file__).with_name(folder)).is_dir() for folder in ("analysis", "services", "ui")
 )
@@ -641,6 +642,17 @@ def _format_age(seconds: float | None) -> str:
     return f"{hours}h {minutes:02d}m"
 
 
+def _dhan_cooldown_wait_seconds(error: object) -> float | None:
+    """Extract the bounded Railway/Dhan cooldown from a safe error string."""
+    match = re.search(r"cooldown active(?:;|\s)[^0-9]*([0-9]+(?:\.[0-9]+)?)s\s+wait", str(error), re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return max(1.0, min(180.0, float(match.group(1))))
+    except (TypeError, ValueError):
+        return None
+
+
 def _build_authoritative_snapshot_once() -> tuple[object | None, float, Exception | None]:
     """Build one full snapshot without forcing the rest of the page to rerender.
 
@@ -1138,10 +1150,17 @@ if "snapshot" not in st.session_state and railway_ready:
                 live_server_api_key,
                 timeout_seconds=1.5,
             )
-            if bool(health.get("ready")):
+            cooldown = max(0.0, float(health.get("rate_limit_cooldown_seconds") or 0.0))
+            snapshot_ready = bool(health.get("snapshot_ready", health.get("ready")))
+            if bool(health.get("ready")) and snapshot_ready:
                 st.session_state["railway_startup_ready"] = True
                 st.success("Railway backend ready — market workspace loading…")
                 st.rerun()
+            elif cooldown > 0.0:
+                st.warning(
+                    f"Dhan temporary cooldown active (~{cooldown:.0f}s). App khud wait/retry karegi; "
+                    "Fetch/refresh baar-baar na karein."
+                )
             else:
                 st.info(
                     "Railway backend warm-up chal raha hai. App automatically retry "
@@ -1164,8 +1183,29 @@ if "snapshot" not in st.session_state:
     ):
         new_snapshot, _initial_elapsed, _initial_error = _build_authoritative_snapshot_once()
     if _initial_error is not None or new_snapshot is None:
+        cooldown_wait = _dhan_cooldown_wait_seconds(_initial_error)
+        if cooldown_wait is not None and railway_ready:
+            retry_at = float(st.session_state.get("dhan_snapshot_retry_at", 0.0) or 0.0)
+            if retry_at <= time.time():
+                retry_at = time.time() + cooldown_wait + 2.0
+                st.session_state["dhan_snapshot_retry_at"] = retry_at
+
+            @st.fragment(run_every=3)
+            def _dhan_cooldown_recovery() -> None:
+                remaining = max(0.0, float(st.session_state.get("dhan_snapshot_retry_at", 0.0)) - time.time())
+                if remaining <= 0.0:
+                    st.session_state.pop("dhan_snapshot_retry_at", None)
+                    st.session_state.pop("railway_startup_ready", None)
+                    st.rerun()
+                st.warning(
+                    f"Dhan rate-limit cooldown — ~{remaining:.0f}s remaining. "
+                    "Automatic retry active; app/Fetch ko baar-baar refresh mat karein."
+                )
+
+            _dhan_cooldown_recovery()
+            st.stop()
         st.error(
-            f"Snapshot failed safely: {_initial_error}. Railway restart/health check karo; "
+            f"Snapshot failed safely: {_initial_error}. Railway health check karo; "
             "Fetch button baar-baar na dabayein."
         )
         st.stop()

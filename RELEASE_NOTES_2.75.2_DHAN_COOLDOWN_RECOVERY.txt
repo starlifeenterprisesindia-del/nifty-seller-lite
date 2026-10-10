@@ -1,0 +1,23 @@
+v2.75.2_DHAN_COOLDOWN_RECOVERY
+
+ROOT CAUSE FIXED
+- Streamlit deployment/startup itself was clean. The visible error was Railway gateway HTTP 502 carrying a Dhan 429 backoff message.
+- An 79.8s wait corresponds to the gateway's bounded exponential Dhan cooldown, not a Python/Streamlit crash.
+- Background Day Memory and premium-alert polling could become eligible before the first foreground snapshot after a fresh Railway deploy. That can consume broker request capacity during the exact cold-start window when One Brain needs it most.
+- Railway /ready previously meant process/config ready only, so Streamlit could start a full snapshot while the Dhan gateway itself was still cooling down.
+
+CHANGES
+1. Railway /ready stays HTTP 200 for platform health but now exposes snapshot_ready and rate_limit_cooldown_seconds.
+2. Streamlit startup gate waits automatically until snapshot_ready instead of firing the first full snapshot into an active cooldown.
+3. If a cooldown starts between readiness and the actual build, Streamlit parses the bounded wait and auto-retries after it expires; no repeated Fetch/refresh is required.
+4. DhanGateway adds a 300s bounded background startup grace. The first foreground request unlocks normal background behavior, while recent foreground activity still has priority.
+5. DayRecorder skips broker work during startup grace or a gateway cooldown.
+6. Premium alert background quote polling also yields during startup grace/cooldown.
+7. Existing v2.75.1 package/runtime safety remains intact.
+
+UNCHANGED
+- One Brain operational decision logic
+- 54/62 research floors
+- Core weights / MI gates / Pressure / Barrier formulas
+- FII/DII live direction weight
+- Existing visual/readability/journal/alert/calculator changes from v2.75.0/2.75.1
