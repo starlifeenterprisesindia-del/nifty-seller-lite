@@ -156,11 +156,6 @@ def _num(value: Any, default: float | None = None) -> float | None:
     return number if isfinite(number) else default
 
 
-def _status_ready(value: Any) -> bool:
-    status = str(getattr(value, "status", "") or "").upper()
-    return status in {"READY", "CAUTION", "PARTIAL", "REFERENCE ONLY", "WARMING UP"}
-
-
 def _feed_freshness(snapshot: Any, *names: str) -> float:
     if not names:
         return 1.0
@@ -210,16 +205,6 @@ def _state_direction(text: Any) -> str:
     if any(token in upper for token in ("BEAR", "DOWN", "DECLIN", "SELL")):
         return "BEARISH"
     return "MIXED"
-
-
-def _direction_triplet(direction: str, strength: float = 70.0, neutral: float = 25.0) -> tuple[float, float, float]:
-    strength = _clamp(strength)
-    neutral = _clamp(neutral)
-    if direction == "BULLISH":
-        return strength, max(0.0, 100.0 - strength - neutral / 2.0), neutral
-    if direction == "BEARISH":
-        return max(0.0, 100.0 - strength - neutral / 2.0), strength, neutral
-    return 25.0, 25.0, 70.0
 
 
 def _blend_triplets(parts: Iterable[tuple[tuple[float, float, float], float]]) -> tuple[float, float, float]:

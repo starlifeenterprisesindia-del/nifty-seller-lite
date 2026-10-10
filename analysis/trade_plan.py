@@ -163,14 +163,6 @@ def _frame_cache(frame: pd.DataFrame) -> dict[str, object]:
     return data
 
 
-def _row_for_leg(frame: pd.DataFrame, leg: OptionLeg) -> pd.Series | None:
-    rows = frame[
-        frame["side"].astype(str).str.upper().eq(leg.side)
-        & pd.to_numeric(frame["strike"], errors="coerce").eq(leg.strike)
-    ]
-    return None if rows.empty else rows.iloc[0]
-
-
 def _plan_decay_edge(frame: pd.DataFrame, plan: SetupPlan) -> float | None:
     sold = bought = 0.0
     seen = False
@@ -311,32 +303,6 @@ def _buy_candidate_rows(frame: pd.DataFrame, side: str, spot: float) -> pd.DataF
     max_distance = max(100.0, spot * 0.006)
     rows = rows[rows["strike"].sub(spot).abs() <= max_distance]
     return rows.sort_values("strike").reset_index(drop=True)
-
-
-def _has_farther_leg(
-    frame: pd.DataFrame,
-    *,
-    side: str,
-    strike: float,
-    minimum_steps: int,
-    maximum_steps: int | None = None,
-) -> bool:
-    """Check protection before a main leg is scored as the best candidate."""
-    step = _strike_step(frame)
-    if step is None or step <= 0:
-        return False
-    rows = frame[frame["side"].astype(str).str.upper().eq(side)].copy()
-    rows["strike"] = pd.to_numeric(rows["strike"], errors="coerce")
-    rows["last_price"] = pd.to_numeric(rows["last_price"], errors="coerce")
-    rows = rows.dropna(subset=["strike", "last_price"])
-    rows = rows[rows["last_price"] >= CONFIG.trade_min_hedge_premium]
-    minimum_gap = max(1, minimum_steps) * step
-    maximum_gap = (maximum_steps * step) if maximum_steps is not None else None
-    gap = rows["strike"] - strike if side == "CE" else strike - rows["strike"]
-    eligible = gap.ge(minimum_gap)
-    if maximum_gap is not None:
-        eligible &= gap.le(maximum_gap)
-    return bool(eligible.any())
 
 
 def _select_long_leg(

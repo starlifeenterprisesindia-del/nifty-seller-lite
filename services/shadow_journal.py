@@ -149,10 +149,6 @@ class ShadowJournalStore:
         temporary.write_text(json.dumps(rows[-2500:], sort_keys=True, separators=(",", ":")), encoding="utf-8")
         os.replace(temporary, path)
 
-    def _save_decisions(self, rows: list[dict[str, Any]]) -> None:
-        with self._decision_locked():
-            self._save_decisions_unlocked(rows)
-
     def merge_decisions(self, rows: list[dict[str, Any]]) -> int:
         """Restore/merge durable Railway decision rows after a fresh UI deploy."""
         if not rows:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from analysis.decision import _entry_alignment_blocker
 from analysis.entry_guidance import build_entry_guidance
 
 

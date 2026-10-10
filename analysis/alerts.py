@@ -49,10 +49,3 @@ def target_crossed(*, armed_spot: float, current_spot: float, target: float) -> 
     return current_spot <= target
 
 
-def heavy_activity_signature(activity: Any) -> str:
-    return "|".join(
-        (
-            str(getattr(activity, "direction", "")),
-            str(getattr(activity, "activity_type", "")),
-        )
-    )

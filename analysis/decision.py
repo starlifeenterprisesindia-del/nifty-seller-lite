@@ -90,36 +90,6 @@ def _institutional_scores(
     return clamp(bull, 5.0, 95.0), clamp(bear, 5.0, 95.0), clamp(neutral, 20.0, 80.0), None
 
 
-def _seller_environment_score(vix: VixContext) -> float:
-    if vix.status != "READY":
-        return 42.0
-    if vix.movement == "RISING FAST" or vix.regime == "HIGH":
-        return 30.0
-    if vix.regime == "ELEVATED":
-        return 72.0 if vix.movement != "RISING FAST" else 38.0
-    if vix.regime == "NORMAL":
-        return 68.0
-    if vix.regime == "LOW":
-        return 48.0
-    return 55.0
-
-
-
-
-def _buyer_environment_score(vix: VixContext) -> float:
-    """Score whether option premium conditions are reasonable for directional buying."""
-    if vix.status != "READY":
-        return 42.0
-    if vix.movement == "RISING FAST" or vix.regime == "HIGH":
-        return 32.0
-    if vix.regime == "ELEVATED":
-        return 48.0
-    if vix.regime == "NORMAL":
-        return 72.0
-    if vix.regime == "LOW":
-        return 82.0
-    return 55.0
-
 
 def _futures_activity_scores(
     activity: BigPlayerActivity | None,
@@ -590,17 +560,6 @@ def _top_reasons(*groups: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 
 def _direction_from_action(action: str) -> str | None:
     return _DIRECTION_FROM_ACTION.get(str(action or "").upper())
-
-
-def _direction_from_scores(
-    ce: float, pe: float, condor: float
-) -> tuple[str, float, float]:
-    ranked = sorted(
-        (("BEARISH", ce), ("BULLISH", pe), ("RANGE", condor)),
-        key=lambda item: item[1],
-        reverse=True,
-    )
-    return ranked[0][0], ranked[0][1], ranked[1][1]
 
 
 def _normalized_triplet(

@@ -6,7 +6,6 @@ estimates continuation/reversal/range paths; it cannot place an order.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from math import isfinite
 from typing import Any
 

@@ -4,7 +4,7 @@ from math import floor
 from typing import Any
 
 from analysis.technical_utils import clamp
-from models import MarketSnapshot, PatternSignal, TimeframeIndicators
+from models import MarketSnapshot, PatternSignal
 
 
 def _normalise(
@@ -52,57 +52,6 @@ def _weighted_scores(
     bullish = sum(item[0] * item[3] for item in usable) / weight_total
     bearish = sum(item[1] * item[3] for item in usable) / weight_total
     neutral = sum(item[2] * item[3] for item in usable) / weight_total
-    return _normalise(bullish, bearish, neutral)
-
-
-def _indicator_vote(item: TimeframeIndicators) -> tuple[float, float, float]:
-    if item.status != "READY":
-        return 0.0, 0.0, 0.0
-
-    bullish = bearish = neutral = 0.0
-    ema = item.ema_state.upper()
-    if ema == "BULLISH ALIGNED":
-        bullish += 1.0
-    elif "BULLISH STRUCTURE" in ema:
-        bullish += 0.65
-        neutral += 0.35
-    elif ema == "BEARISH ALIGNED":
-        bearish += 1.0
-    elif "BEARISH STRUCTURE" in ema:
-        bearish += 0.65
-        neutral += 0.35
-    else:
-        neutral += 1.0
-
-    macd = item.macd_state.upper()
-    if macd == "BULLISH":
-        bullish += 1.0
-    elif "BULLISH" in macd:
-        bullish += 0.65
-        neutral += 0.35
-    elif macd == "BEARISH":
-        bearish += 1.0
-    elif "BEARISH" in macd:
-        bearish += 0.65
-        neutral += 0.35
-    else:
-        neutral += 1.0
-
-    rsi = item.rsi_state.upper()
-    if "BULLISH" in rsi and "OVEREXTENDED" in rsi:
-        bullish += 0.55
-        neutral += 0.45
-    elif "BULLISH" in rsi:
-        bullish += 0.80
-        neutral += 0.20
-    elif "BEARISH" in rsi and "OVERSOLD" in rsi:
-        bearish += 0.55
-        neutral += 0.45
-    elif "BEARISH" in rsi:
-        bearish += 0.80
-        neutral += 0.20
-    else:
-        neutral += 1.0
     return _normalise(bullish, bearish, neutral)
 
 
@@ -166,21 +115,6 @@ def _heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
     # (60, 5, 0) to (92, 8, 0) made a mild 15m recovery look like 92/100
     # conviction and did not match the actual weighted decision input.
     return tuple(round(clamp(value, 0.0, 100.0), 1) for value in recent_scores(snapshot.heavyweights))
-
-
-def _legacy_day_heavyweight_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
-    if snapshot.heavyweights.status not in {"READY", "CAUTION"}:
-        return 0.0, 0.0, 100.0
-    state = snapshot.heavyweights.state.upper()
-    if "BROAD BULLISH" in state:
-        return 80.0, 8.0, 12.0
-    if "NARROW BULLISH" in state:
-        return 60.0, 18.0, 22.0
-    if "BROAD BEARISH" in state:
-        return 8.0, 80.0, 12.0
-    if "NARROW BEARISH" in state:
-        return 18.0, 60.0, 22.0
-    return 25.0, 25.0, 50.0
 
 
 def _institutional_scores(snapshot: MarketSnapshot) -> tuple[float, float, float]:
@@ -433,21 +367,6 @@ def _short_volume(value: str) -> str:
     if "UNAVAILABLE" in upper:
         return "VOLUME NA"
     return "VOLUME MIXED"
-
-
-def _short_heavy(value: str) -> str:
-    upper = str(value or "").upper()
-    if "BROAD BULLISH" in upper:
-        return "BULLISH"
-    if "NARROW BULLISH" in upper:
-        return "SLIGHT UP"
-    if "BROAD BEARISH" in upper:
-        return "BEARISH"
-    if "NARROW BEARISH" in upper:
-        return "SLIGHT DOWN"
-    if "MIXED" in upper or "FLAT" in upper:
-        return "MIXED"
-    return "NA"
 
 
 def _short_institutional(value: str) -> str:

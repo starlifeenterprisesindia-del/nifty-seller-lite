@@ -14,7 +14,6 @@ labelled as such; it is not a price forecast.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict
 from typing import Any
 
 import pandas as pd
