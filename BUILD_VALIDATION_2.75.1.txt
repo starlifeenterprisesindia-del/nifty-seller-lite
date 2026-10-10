@@ -1,8 +1,0 @@
-BUILD VALIDATION — v2.75.1_PACKAGE_RUNTIME_SAFETY
-
-- Python compileall: required before packaging.
-- Focused regression suite covering v2.75 hardening, barrier correctness, journal validation, instrument master/VIX, MI alert runtime, RSI reversal, Smart Entry, Snapshot Service: 51 PASS.
-- Known legacy test test_ai_move_tracker::test_no_prediction_outside_clean_journal_window also fails on untouched v2.74.2; not introduced by this revision.
-- Complete-source package excludes nested runtime ZIP to prevent confusion/stale shadowing.
-- Deploy package contains a freshly rebuilt nsl_runtime_v2751.zip generated from the exact analysis/services/ui source in the complete backup.
-- Runtime loader prefers direct source folders when present and uses the inner ZIP only in compact deploy mode.

@@ -1,8 +1,0 @@
-UPLOAD v2.75.2 — FIRST READ
-
-1. Extract ONE_BRAIN_v2.75.2_UPLOAD_THIS.zip on your laptop.
-2. Upload ALL extracted top-level files to the GitHub repository root, replacing same-name files.
-3. Keep nsl_runtime_v2752.zip AS A ZIP in the repository root. Do NOT extract the inner ZIP.
-4. After the new files are present, delete old nsl_runtime_v275.zip and nsl_runtime_v2751.zip if either remains in GitHub.
-5. Do not upload the Complete Source Backup folder to GitHub for this compact deployment.
-6. During the first load after deploy, if Dhan is temporarily rate-limited, the app will show an automatic cooldown/wait message and retry itself. Do not repeatedly press Fetch/refresh.

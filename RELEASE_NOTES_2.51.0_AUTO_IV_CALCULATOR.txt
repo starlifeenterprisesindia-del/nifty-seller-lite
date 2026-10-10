@@ -1,7 +1,0 @@
-Nifty Seller Lite 2.51.0_AUTO_IV_CALCULATOR
-
-- Spot-to-Premium Calculator Advanced IV/Time now auto-loads selected-strike IV delta from persisted option-state history.
-- Preferred window remains 3m, with existing 1m/5m fallback from Phase-6 IV Delta logic.
-- No broker/API request is added; no One-Brain score or decision logic is touched.
-- If history is insufficient, IV effect stays 0 and UI says warming/unavailable instead of inventing a value.
-- Optional manual IV scenario override remains available.
