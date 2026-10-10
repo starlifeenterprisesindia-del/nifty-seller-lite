@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 # Compact GitHub deploys keep pure-Python analysis/services/ui modules in one zip.
 # A complete-source checkout contains those directories directly. Prefer direct source
 # when present so a stale nested runtime bundle can never shadow edited source files.
-_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2752.zip")
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2760.zip")
 _DIRECT_RUNTIME_PRESENT = all(
     (Path(__file__).with_name(folder)).is_dir() for folder in ("analysis", "services", "ui")
 )
@@ -1227,6 +1227,52 @@ def _attach_snapshot_integrity_diagnostic(snapshot):
         }
 
 
+def _cached_edge_iv_history(snapshot):
+    """Load tiny historical IV summaries once per trading date, never per rerun.
+
+    Current-day observations are intentionally excluded by the calculator, so the
+    historical comparison set cannot change intraday. This keeps the new context
+    off the latency-critical path while reusing the existing option-state store.
+    """
+    try:
+        day = snapshot.created_at.date().isoformat()
+    except Exception:
+        day = "unknown"
+    cached = st.session_state.get("edge_iv_history_cache")
+    if isinstance(cached, dict) and cached.get("date") == day:
+        rows = cached.get("rows")
+        return list(rows) if isinstance(rows, list) else []
+    try:
+        rows = state_store.load_iv_history(limit=CONFIG.iv_history_max_sessions)
+    except Exception:
+        rows = []
+    st.session_state.edge_iv_history_cache = {"date": day, "rows": list(rows)}
+    return list(rows)
+
+
+def _attach_research_edge_context(snapshot):
+    """Attach VIX-room, mean-reversion and DTE-matched IV context with zero core weight."""
+    metadata = getattr(snapshot, "metadata", {})
+    if metadata.get("research_edge_context") or metadata.get("research_edge_context_error"):
+        return
+    started = time.perf_counter()
+    try:
+        from analysis.research_edge_context import build_research_edge_context
+        metadata["research_edge_context"] = build_research_edge_context(
+            snapshot,
+            market_intelligence=metadata.get("market_intelligence") or {},
+            iv_history=_cached_edge_iv_history(snapshot),
+            minimum_iv_bucket_sessions=CONFIG.edge_iv_min_bucket_sessions,
+        )
+        metadata["research_edge_context_core_weight"] = 0
+    except Exception as exc:
+        # Fail-open: these contexts can disappear without changing any One-Brain output.
+        metadata["research_edge_context_error"] = f"{type(exc).__name__}: {exc}"[:300]
+    finally:
+        performance = metadata.setdefault("performance", {})
+        performance["edge_context_seconds"] = round(time.perf_counter() - started, 5)
+
+
 def _attach_market_intelligence_shadow(snapshot, previous_snapshot):
     """Attach OB-MIE after current One-Brain decisions, with fail-open isolation."""
     metadata = getattr(snapshot, "metadata", {})
@@ -1341,6 +1387,9 @@ def _finalize_snapshot_once(snapshot, previous_snapshot):
     # decision/guard pipeline is finished.  It has zero core weight and cannot
     # feed back into any decision above.
     _attach_market_intelligence_shadow(snapshot, previous_snapshot)
+    # v2.76 research contexts live in their natural UI modules, but remain
+    # zero-weight until enough NIFTY live/replay evidence proves incremental value.
+    _attach_research_edge_context(snapshot)
     _attach_snapshot_integrity_diagnostic(snapshot)
     snapshot.metadata["canonical_finalized"] = True
 
@@ -1400,6 +1449,7 @@ shadow_entries = _finalize_snapshot_once(snapshot, previous_snapshot)
 # Idempotent safety for a restored/cached snapshot created before OB-MIE existed.
 # Fresh snapshots already have this attached inside the canonical finalizer.
 _attach_market_intelligence_shadow(snapshot, previous_snapshot)
+_attach_research_edge_context(snapshot)
 _attach_snapshot_integrity_diagnostic(snapshot)
 # Phase-11 latency history is session-local diagnostics only. It never feeds a
 # market score, and keeping 120 points is enough for P50/P95 without unbounded RAM.

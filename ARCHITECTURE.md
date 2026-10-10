@@ -1,4 +1,4 @@
-# Architecture — V2.74.1 Barrier Correctness Sync
+# Architecture — V2.76.0 Integrated Edge Context
 
 ## Canonical live path — unchanged
 
@@ -19,6 +19,27 @@ Two related barrier representations remain intentionally available, but now shar
 2. `analysis.barrier_map.calculate_barrier_map` enriches those structural levels with OI flow, reaction quality, momentum, Top-9, futures volume, market speed and VIX. It is consumed by Market Intelligence, Pressure Integrity, Liquidity Intelligence, Big Player, Smart Entry/Strike Entry, SL/Target planning, Premium Calculator, live maps, PDF/replay/day-memory and related display/validation layers.
 
 A live wick/tick through a barrier therefore remains `TESTING` / `AWAITING 3M CLOSE`; the next barrier is not promoted until the completed 3-minute close clears the full confluence zone. Range break bias compares net vulnerability (`Break Pressure - Strength`) on both sides. No new data request is made.
+
+
+## Integrated Edge Context — v2.76
+
+`analysis/research_edge_context.py` runs only after the canonical One Brain/common-decision pipeline and after the existing Market Intelligence shadow result is attached. It consumes the already-built `MarketSnapshot` plus the existing compact ATM-IV session summaries. It performs no network/broker request and cannot feed back into the protected decision pipeline.
+
+### VIX Expected-Move Context
+
+The existing Barrier Map remains the single source for expected-move points (`spot × India VIX / 100 / √252` and square-root-of-time remaining-session scaling). The v2.76 context does not create a second volatility formula; it anchors the existing move to the current session open/previous close and reports live envelope utilisation, remaining room and nearest-barrier fit.
+
+### Trend + Mean-Reversion Context
+
+The diagnostic uses completed 15-minute EMA20/EMA50 trend, completed-candle RSI(2), 15-minute ATR stretch, nearest trend-side barrier proximity, 3-minute directional evidence/pattern confirmation and existing Pressure Integrity. It differentiates `PULLBACK COMPLETION WATCH/CONFIRMED` from `GENUINE REVERSAL RISK`. These labels remain advisory and have zero decision weight.
+
+### DTE-matched IV Percentile
+
+`OptionStateStore` already persists one compact real ATM-IV summary per trading date. v2.76 retains a bounded 160-session history and compares current ATM IV only with prior observations in the same calendar-DTE bucket. The in-progress current date is excluded. A minimum of 20 matched sessions is required; otherwise the output is `WARMING UP / NO VOTE`. Advanced Options Intelligence and Strategy + Strike Value use the same DTE-matched population to avoid conflicting IVP definitions.
+
+### Recording and validation
+
+Day Memory, app observations and research-journal market context persist the three labels/metrics so later replay can test incremental value without retroactively changing the live decision. Performance timing records `edge_context_seconds`.
 
 ## Market Intelligence — Institutional Opportunity Window
 

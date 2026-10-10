@@ -1,10 +1,28 @@
-# Nifty Seller Lite 2.75.2 — Dhan Cooldown Recovery + Live Readability Hardening
+# Nifty Seller Lite 2.76.0 — Integrated Edge Context
 
 Read-only NIFTY options decision-support app with one operational path:
 
 **Regime → Direction → Entry → Risk → Action**
 
 The canonical Simple One-Brain remains unchanged: **Trend/Regime 40% + Options Flow 25% + Participation 20% + Barrier/Entry 15%**. Missing evidence is **NO VOTE**. Future Brain and Market Intelligence remain advisory/shadow layers and never become a second order/entry authority.
+
+
+## 2.76.0 integrated edge context
+
+Three research-backed contexts are now fitted into their natural existing modules without creating a second brain or changing the canonical decision score:
+
+- **VIX Expected-Move Context → Barrier + Market Intelligence:** reuses the Barrier Map's existing India-VIX daily/remaining expected-move calculation, anchors a live 1σ-style envelope to the session open/previous close, shows range utilisation and whether the nearest barrier sits inside realistic remaining room. It is magnitude/room context, never a direction signal.
+- **Trend + Mean-Reversion Context → Pullback vs Reversal:** combines completed 15m EMA20/EMA50 trend, RSI(2) extreme, ATR stretch, nearest trend-side barrier, 3m confirmation/candle support and existing Pressure Integrity. It labels pullback-completion watch/confirmation versus genuine reversal risk. It is an intraday adaptation of the research principle, not a copied daily-system win-rate claim.
+- **DTE-matched IV Percentile → Strategy + Strike Value:** current ATM IV is compared only with prior real ATM-IV sessions in the same calendar-DTE bucket (`0–1D`, `2–3D`, `4–7D`, `8+D`). At least 20 matched prior sessions are required; otherwise the result is `WARMING / NO VOTE`. No synthetic history is created.
+
+Golden-rule guarantees for v2.76:
+
+- all three contexts have **decision weight 0**; One Brain scores/thresholds/final action are unchanged
+- no additional Dhan/broker/API call
+- IV history is loaded from the existing tiny local option-state summary and cached once per trading date
+- missing/stale inputs stay **NO VOTE**, never fake neutral/zero
+- results are recorded in Day Memory / research journal for later live/replay validation
+- canonical One Brain, Execution Guard, Trade Plan, Barrier formulas, Pressure Integrity and MI gate calculations are not retuned
 
 
 ## 2.75.2 hotfix

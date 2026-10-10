@@ -399,9 +399,17 @@ def render_compact_barrier_map(
             st.success("🔄 **" + message + "**")
         else:
             st.warning("🔄 **" + message + "** · Retest ke bina confirmed barrier nahi.")
+    edge = (getattr(snapshot, "metadata", {}) or {}).get("research_edge_context") or {}
+    move_ctx = edge.get("expected_move") if isinstance(edge.get("expected_move"), dict) else {}
+    edge_extra = ""
+    if move_ctx.get("status") == "READY":
+        edge_extra = (
+            f" · VIX envelope {move_ctx.get('lower_1sigma', 0):,.0f}–{move_ctx.get('upper_1sigma', 0):,.0f}"
+            f" · Used {float(move_ctx.get('utilization_pct') or 0):.0f}% ({move_ctx.get('state')})"
+        )
     st.caption(
         f"Probable range {range_text} · Confidence {range_item.confidence:.0f}/100 · "
-        f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100. Full map detailed section me hai."
+        f"Speed {item.market_speed.state} {item.market_speed.score:.0f}/100{edge_extra}. Full map detailed section me hai."
     )
     core = snapshot.core_evidence
     core_state = getattr(core, "market_state", getattr(core, "state", "UNRESOLVED"))
@@ -446,6 +454,8 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
 
     range_item = item.trading_range
     speed = item.market_speed
+    edge = (getattr(snapshot, "metadata", {}) or {}).get("research_edge_context") or {}
+    move_ctx = edge.get("expected_move") if isinstance(edge.get("expected_move"), dict) else {}
     range_text = (
         f"{range_item.lower:,.0f}–{range_item.upper:,.0f}"
         if range_item.lower is not None and range_item.upper is not None
@@ -456,9 +466,15 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         if item.vix_expected_remaining_move_points is not None
         else "—"
     )
+    detail_extra = ""
+    if move_ctx.get("status") == "READY":
+        detail_extra = (
+            f" | 1σ envelope {float(move_ctx.get('lower_1sigma')):,.0f}–{float(move_ctx.get('upper_1sigma')):,.0f}"
+            f" | Used {float(move_ctx.get('utilization_pct') or 0):.0f}% ({move_ctx.get('state')})"
+        )
     st.caption(
         f"Detail map: Range {range_text} | Confidence {range_item.confidence:.0f}/100 | "
-        f"Speed {speed.state} {speed.score:.0f}/100 {speed.direction} | VIX remaining move {remaining_move}."
+        f"Speed {speed.state} {speed.score:.0f}/100 {speed.direction} | VIX remaining move {remaining_move}{detail_extra}."
     )
 
     if speed.state == "DANGER":
@@ -533,7 +549,9 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
           f'<div>{range_state} · Position {range_pos} · Break Bias {bias}</div></div>'
         + s1 + s2
         + '<div class="bm-road">'
-          f'<div><b>India VIX Risk</b><br>{escape(item.vix_risk)} · Daily move {vix_daily}</div>'
+          f'<div><b>India VIX Range</b><br>{escape(item.vix_risk)} · Daily move {vix_daily}'
+          + (f' · {escape(str(move_ctx.get("state")))} {float(move_ctx.get("utilization_pct") or 0):.0f}% used' if move_ctx.get("status") == "READY" else '')
+          + '</div>'
           f'<div><b>VIX Speed</b><br>5m {vix_5} · 15m {vix_15}</div>'
           f'<div><b>Option Shock</b><br>{speed.option_shock_score:.0f}/100 · Volume {volume_text}</div>'
           '</div></div>'
@@ -546,6 +564,12 @@ def render_barrier_map(snapshot: MarketSnapshot) -> None:
         st.markdown(barrier_html, unsafe_allow_html=True)
 
     st.info("🧠 **Barrier Brain:** " + item.summary)
+    if move_ctx.get("status") == "READY" and move_ctx.get("state") in {"NEAR 1σ EDGE", "OUTSIDE 1σ ENVELOPE"}:
+        st.warning(
+            f"📐 **VIX Expected-Move Context:** {move_ctx.get('caution')} · "
+            f"Envelope {float(move_ctx.get('lower_1sigma')):,.0f}–{float(move_ctx.get('upper_1sigma')):,.0f}. "
+            "Ye direction signal nahi; breakout/target realism context hai."
+        )
     if range_item.explanation:
         st.caption(range_item.explanation)
     if speed.reasons:
@@ -931,6 +955,9 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     leader = str(common.get("best_strategy") or "WAIT")
     simple = getattr(snapshot, "metadata", {}).get("simple_brain") or {}
     simple_direction = str(simple.get("direction") or common.get("direction") or "MIXED")
+    edge = getattr(snapshot, "metadata", {}).get("research_edge_context") or {}
+    iv_ctx = edge.get("iv_percentile") if isinstance(edge.get("iv_percentile"), dict) else {}
+    mean_ctx = edge.get("mean_reversion") if isinstance(edge.get("mean_reversion"), dict) else {}
     allowed = compatible_strategies(simple_direction)
     if leader not in evaluations:
         eligible = [name for name in evaluations if name in allowed]
@@ -939,7 +966,7 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
     st.subheader("🛡️ Strategy + Strike Value Table")
     st.caption(
         "Simple One-Brain direction ke compatible protected CE/PE/Condor setups. "
-        "Main decision Regime → Direction → Entry → Risk se aata hai; Future Brain advisory only hai."
+        "Main decision Regime → Direction → Entry → Risk se aata hai; VIX/Mean-Reversion/DTE-IV context ab isi workflow me advisory hai, hard vote nahi."
     )
 
     def _premium_value(plan: Any | None) -> tuple[str, str]:
@@ -993,6 +1020,11 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
                 "Brain Fit": f"{strategy.score:.0f}%",
                 "Strike + Hedge": _plan_structure_text(plan),
                 "Premium": premium,
+                "IV Context": (
+                    str(iv_ctx.get("state") or "WARMING")
+                    if name in {"CE SELL", "PE SELL", "IRON CONDOR"}
+                    else ("CHEAP IV SUPPORT" if str(iv_ctx.get("state") or "") == "CHEAP IV" else "REFERENCE")
+                ),
                 "Status": strategy_status_label(status),
             }
         )
@@ -1029,6 +1061,29 @@ def render_protected_candidates(snapshot: MarketSnapshot) -> None:
             details.append({"Strategy": name, "Premium": premium, "Decay": " | ".join([r for r in plan.reasons if r.startswith('Theta edge')]) or "—", "Strike/Pair Quality": f"{value_grade} · {plan.quality_score:.0f}/100"})
         st.dataframe(details, width="stretch", hide_index=True)
         _render_pair_comparison(plan_map)
+    if iv_ctx.get("status") == "READY":
+        ivp = float(iv_ctx.get("iv_percentile") or 0.0)
+        message = (
+            f"🌡️ DTE-matched IV: {iv_ctx.get('state')} · ATM IV {float(iv_ctx.get('atm_iv') or 0):.2f}% · "
+            f"IV Percentile {ivp:.1f} · bucket {iv_ctx.get('dte_bucket')} · {iv_ctx.get('seller_context')}. "
+            "Premium-value context only; direction/entry gate unchanged."
+        )
+        if str(iv_ctx.get("state")) == "RICH IV":
+            st.success(message)
+        elif str(iv_ctx.get("state")) == "CHEAP IV":
+            st.warning(message)
+        else:
+            st.info(message)
+    elif iv_ctx:
+        st.caption(
+            f"🌡️ DTE-matched IV context {iv_ctx.get('status', 'WARMING UP')} · "
+            f"{iv_ctx.get('history_sessions', 0)}/{iv_ctx.get('minimum_sessions', '—')} same-bucket sessions; NO VOTE."
+        )
+    if mean_ctx.get("status") == "READY" and mean_ctx.get("state") not in {"NO EXTREME", "NO TREND FILTER"}:
+        st.caption(
+            f"↩️ Pullback/Reversal context: {mean_ctx.get('state')} · {mean_ctx.get('verdict')} · "
+            f"15m RSI(2) {float(mean_ctx.get('rsi2_15m') or 0):.1f}. Strategy score/threshold unchanged."
+        )
     if not snapshot.market_session.is_live:
         st.info("Market live nahi hai—strategy fits sirf frozen reference hain, fresh advice nahi.")
     elif not common.get("entry_allowed"):
@@ -2352,3 +2407,16 @@ def render_vix_context(snapshot: MarketSnapshot) -> None:
         )
     else:
         st.info(message)
+    edge = (getattr(snapshot, "metadata", {}) or {}).get("research_edge_context") or {}
+    move_ctx = edge.get("expected_move") if isinstance(edge.get("expected_move"), dict) else {}
+    if move_ctx.get("status") == "READY":
+        x1, x2, x3, x4 = st.columns(4)
+        x1.metric("1σ Daily Move", f"±{float(move_ctx.get('daily_move_points') or 0):,.0f} pts")
+        x2.metric("Expected Envelope", f"{float(move_ctx.get('lower_1sigma')):,.0f}–{float(move_ctx.get('upper_1sigma')):,.0f}")
+        x3.metric("Range Used", f"{float(move_ctx.get('utilization_pct') or 0):.0f}%")
+        x4.metric("Range State", str(move_ctx.get("state") or "—"))
+        st.caption(
+            f"Anchor: {move_ctx.get('anchor_source')} {float(move_ctx.get('anchor') or 0):,.2f} · "
+            f"Remaining-session move ±{float(move_ctx.get('remaining_move_points') or 0):,.0f} pts. "
+            "Statistical context only—guaranteed daily high/low nahi."
+        )

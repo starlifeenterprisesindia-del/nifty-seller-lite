@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 # Compact GitHub deploys keep pure-Python analysis/services/ui modules in one zip.
 # A complete-source checkout contains those directories directly. Prefer direct source
 # when present so a stale nested runtime bundle can never shadow edited source files.
-_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2752.zip")
+_RUNTIME_BUNDLE = Path(__file__).with_name("nsl_runtime_v2760.zip")
 _DIRECT_RUNTIME_PRESENT = all(
     (Path(__file__).with_name(folder)).is_dir() for folder in ("analysis", "services", "ui")
 )

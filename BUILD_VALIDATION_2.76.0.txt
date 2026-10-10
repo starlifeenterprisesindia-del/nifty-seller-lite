@@ -1,0 +1,42 @@
+BUILD VALIDATION — v2.76.0_EDGE_CONTEXT_INTEGRATION
+
+STATUS: CODE/UNIT/STATIC VALIDATION PASS FOR THE NEW INTEGRATION; LIVE-MARKET VALIDATION STILL REQUIRED.
+
+Golden-rule source integrity:
+- Protected decision/calculation files compared against cleaned v2.75.2 and are byte-for-byte unchanged:
+  analysis/simple_brain.py
+  analysis/decision.py
+  analysis/barrier_map.py
+  analysis/trade_plan.py
+  analysis/execution_guard.py
+  analysis/market_intelligence.py
+  analysis/pressure_integrity.py
+  analysis/institutional_window.py
+  analysis/liquidity_intelligence.py
+  analysis/smart_entry_advisor.py
+  analysis/option_intelligence.py
+  services/snapshot_service.py
+  services/dhan_client.py
+  services/dhan_gateway.py
+
+New edge-context tests:
+- tests/test_research_edge_context.py: 6 PASS
+- Includes VIX envelope anchoring/utilisation, DTE matching/current-day exclusion, IV warm-up NO VOTE, pullback confirmation, genuine reversal risk and missing-input NO VOTE.
+
+Affected regression suites:
+- Barrier / MI / Pressure / Option-state / Option-intelligence / TradePlan / SimpleBrain / Decision / ExecutionGuard / new edge context: 104 PASS; 1 old Phase-2 payload test fails identically in cleaned v2.75.2.
+- Day Memory / journal / serialization / release hygiene / related suites: 72 PASS; same old Phase-2 payload failure reproduced in cleaned v2.75.2.
+- Additional MI group: 113 PASS; one old liquidity-radar expectation fails identically in cleaned v2.75.2.
+- Additional non-UI group: 74 PASS, 1 SKIP; one old ai_move_tracker expectation fails identically in cleaned v2.75.2.
+
+Environment limitation:
+- Streamlit is not installed in this audit container, so Streamlit AppTest/UI smoke tests cannot execute here. Changed UI modules were Python-compiled and imported successfully with a minimal Streamlit stub.
+
+Static validation:
+- compileall: PASS before package cleanup.
+- Changed UI modules: import PASS with Streamlit stub.
+- New research module contains no Dhan/HTTP/Railway/client import or network call.
+- Representative microbenchmarks on synthetic snapshots: mean-reversion context ~1.6 ms/call; DTE-IV context ~1.5 ms/call in this container. Production timing is recorded separately as edge_context_seconds.
+
+Important:
+This build is not claimed to be live-market validated. First live sessions should verify display correctness, history warming, latency, recording and incremental usefulness before any future decision weight is considered.

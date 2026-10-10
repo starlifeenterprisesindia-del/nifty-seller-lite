@@ -4,8 +4,10 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from config import CONFIG
 
 from analysis.advanced_options_display import build_phase9_payload
+from analysis.research_edge_context import dte_matched_iv_history
 
 
 def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
@@ -17,14 +19,14 @@ def _fmt(value: Any, digits: int = 1, suffix: str = "") -> str:
         return "—"
 
 
-def _history_inputs(snapshot: Any, option_state_store: Any | None) -> tuple[list[float], list[dict[str, Any]]]:
-    """Read saved IV context only when this panel is opened; never calls broker/API."""
+def _history_inputs(snapshot: Any, option_state_store: Any | None) -> tuple[list[float], list[dict[str, Any]], dict[str, Any]]:
+    """Read same-DTE saved IV context only when this panel is opened; never calls broker/API."""
     if option_state_store is None:
-        return [], []
+        return [], [], {"bucket": "UNKNOWN", "days_to_expiry": None, "matched_sessions": 0}
     session_summaries: list[dict[str, Any]] = []
     intraday: list[dict[str, Any]] = []
     try:
-        session_summaries = option_state_store.load_iv_history(limit=60)
+        session_summaries = option_state_store.load_iv_history(limit=getattr(CONFIG, "iv_history_max_sessions", 160))
     except Exception:
         session_summaries = []
     try:
@@ -35,20 +37,18 @@ def _history_inputs(snapshot: Any, option_state_store: Any | None) -> tuple[list
             )
     except Exception:
         intraday = []
-    historical = []
-    for row in session_summaries:
-        try:
-            value = float(row.get("last"))
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            historical.append(value)
-    return historical, intraday
+    historical, _rows, bucket, days = dte_matched_iv_history(snapshot, session_summaries)
+    return historical, intraday, {
+        "bucket": bucket,
+        "days_to_expiry": days,
+        "matched_sessions": len(historical),
+        "all_saved_sessions": len(session_summaries),
+    }
 
 
 def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | None = None) -> None:
     """Phase-10 advanced options intelligence, display-only and on-open."""
-    historical_iv, intraday_history = _history_inputs(snapshot, option_state_store)
+    historical_iv, intraday_history, iv_history_meta = _history_inputs(snapshot, option_state_store)
     payload = build_phase9_payload(
         snapshot,
         historical_atm_iv=historical_iv,
@@ -150,10 +150,13 @@ def render_phase2_options_intelligence(snapshot: Any, option_state_store: Any | 
         b.metric("Chain median IV", _fmt(iv.get("chain_median_iv"), 2, "%"))
         c.metric("IV history", str(iv.get("history_sessions", 0)) + " sessions")
         d.metric("Volatility regime", str(regime.get("regime") or "—"))
-        st.caption(iv.get("ivr_status") or "IV history unavailable")
         st.caption(
-            "True IV Rank/Percentile fake nahi kiya gaya. Same option-state persistence ab har live session ka compact ATM-IV summary save karega; "
-            ">=20 real sessions ke baad IVR/IVP READY hoga."
+            f"{iv.get('ivr_status') or 'IV history unavailable'} · DTE bucket {iv_history_meta.get('bucket', 'UNKNOWN')} "
+            f"({iv_history_meta.get('matched_sessions', 0)} matched / {iv_history_meta.get('all_saved_sessions', 0)} saved sessions)."
+        )
+        st.caption(
+            "True IV Rank/Percentile fake nahi kiya gaya. Current ATM IV ko sirf prior real sessions ke same calendar-DTE bucket se compare kiya jata hai; "
+            ">=20 matched sessions se pehle WARMING/NO VOTE."
         )
         series = payload.get("intraday_iv") or []
         if series:

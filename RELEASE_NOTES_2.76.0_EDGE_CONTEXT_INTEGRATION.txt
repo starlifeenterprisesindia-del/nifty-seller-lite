@@ -1,0 +1,43 @@
+v2.76.0_EDGE_CONTEXT_INTEGRATION
+
+PURPOSE
+Fit three research-backed context layers into their natural existing One Brain modules without changing the canonical trading decision, weights, thresholds, risk controls, Barrier formulas or broker traffic.
+
+1) VIX EXPECTED-MOVE CONTEXT — BARRIER + MARKET INTELLIGENCE
+- Reuses BarrierMap.vix_expected_daily_move_points and vix_expected_remaining_move_points.
+- No second volatility formula and no additional API request.
+- Anchors a live 1-sigma-style envelope to session open, with previous close fallback.
+- Reports envelope utilisation, remaining room and nearest R1/S1 fit.
+- Labels: INSIDE EXPECTED ENVELOPE / NEAR 1σ EDGE / OUTSIDE 1σ ENVELOPE.
+- Magnitude/room context only; never a direction vote.
+
+2) TREND + MEAN-REVERSION CONTEXT — PULLBACK VS REVERSAL
+- Uses completed 15m EMA20/EMA50 trend, completed 15m RSI(2), 15m ATR stretch, nearest trend-side barrier, existing 3m directional/pattern evidence and Pressure Integrity.
+- Labels: PULLBACK COMPLETION CONFIRMED / PULLBACK COMPLETION WATCH / MEAN-REVERSION EXTREME / GENUINE REVERSAL RISK / NO VOTE.
+- This is an intraday adaptation of the research principle, not a copied daily RSI(2) strategy or win-rate claim.
+
+3) DTE-MATCHED IV PERCENTILE — STRATEGY + STRIKE VALUE
+- Current ATM IV is compared only with prior real ATM-IV summaries in the same calendar-DTE bucket: 0-1D / 2-3D / 4-7D / 8+D.
+- Current trading date is excluded from its own percentile.
+- Minimum 20 matched prior sessions; otherwise WARMING UP / NO VOTE.
+- No synthetic/backfilled IV history.
+- Bounded IV summary history increased from 60 to 160 sessions so weekly-expiry DTE buckets can build adequate samples.
+- Advanced Options Intelligence now uses the same DTE-matched population to avoid conflicting IVP definitions.
+
+NATURAL UI PLACEMENT
+- Barrier Map / VIX Context: expected envelope, utilisation and edge caution.
+- Market Intelligence: VIX Range + Pullback/Reversal + IV Sell Context cards and research detail.
+- Strategy + Strike Value Table: DTE-matched IV context plus pullback/reversal note.
+
+RECORDING / VALIDATION
+- Day Memory and app observations persist the full research_edge_context.
+- App-decision rows persist compact VIX range, mean-reversion and IV percentile fields.
+- Journal research context persists the same fields with missing values as NO VOTE/None, never fake zero.
+- performance.edge_context_seconds records local calculation time.
+
+GOLDEN RULES PRESERVED
+- decision_weight = 0 for all three contexts.
+- No Dhan/broker/API calls added.
+- Canonical Simple One-Brain, Decision, BarrierMap, TradePlan, ExecutionGuard, PressureIntegrity, MarketIntelligence, InstitutionalWindow, LiquidityIntelligence, SmartEntry, OptionIntelligence, SnapshotService, Dhan client and Dhan gateway source files are byte-for-byte unchanged from cleaned v2.75.2.
+- Missing inputs remain NO VOTE.
+- Context attachment is fail-open and occurs after canonical common decision and existing Market Intelligence calculation.

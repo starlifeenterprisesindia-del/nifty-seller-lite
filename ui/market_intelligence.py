@@ -206,10 +206,15 @@ def _render_story_grid(items: list[tuple[str, str]], *, outlook: bool = False) -
 
 def render_market_intelligence(snapshot: Any) -> None:
     """Simple user-facing story; detailed calculations remain hidden by default."""
-    item = (getattr(snapshot, "metadata", {}) or {}).get("market_intelligence") or {}
+    metadata = (getattr(snapshot, "metadata", {}) or {})
+    item = metadata.get("market_intelligence") or {}
     if not item:
         st.info("🧠 Market Intelligence warming up — next authoritative snapshot ka wait.")
         return
+    edge = metadata.get("research_edge_context") if isinstance(metadata.get("research_edge_context"), dict) else {}
+    move_ctx = edge.get("expected_move") if isinstance(edge.get("expected_move"), dict) else {}
+    mean_ctx = edge.get("mean_reversion") if isinstance(edge.get("mean_reversion"), dict) else {}
+    iv_ctx = edge.get("iv_percentile") if isinstance(edge.get("iv_percentile"), dict) else {}
 
     direction = str(item.get("direction") or "MIXED")
     liquidity = item.get("liquidity") if isinstance(item.get("liquidity"), dict) else {}
@@ -249,6 +254,25 @@ def render_market_intelligence(snapshot: Any) -> None:
             ("ONE BRAIN", one_brain_text),
             ("STATUS", str(item.get("system_status") or "WAIT")),
         ])
+
+        move_story = (
+            f"{move_ctx.get('state')} · {_num(move_ctx.get('utilization_pct')):.0f}% used"
+            if move_ctx.get("status") == "READY" else "NO VOTE"
+        )
+        mean_story = (
+            f"{mean_ctx.get('state')}"
+            if mean_ctx.get("status") == "READY" else "NO VOTE"
+        )
+        iv_story = (
+            f"{iv_ctx.get('state')} · IVP {_num(iv_ctx.get('iv_percentile')):.0f}"
+            if iv_ctx.get("status") == "READY" else f"{iv_ctx.get('status', 'NO VOTE')} · NO VOTE"
+        )
+        _render_story_grid([
+            ("VIX RANGE", move_story),
+            ("PULLBACK / REVERSAL", mean_story),
+            ("IV SELL CONTEXT", iv_story),
+        ], outlook=True)
+        st.caption("Edge context is integrated here for range/quality diagnostics only; One Brain score, thresholds and final action remain unchanged.")
 
         if alignment == "STRONG EVIDENCE ALIGNMENT":
             st.success(f"🔥 STRONG EVIDENCE ALIGNMENT · {_direction_icon(direction)} {direction} · Target {target}")
@@ -318,6 +342,41 @@ def render_market_intelligence(snapshot: Any) -> None:
             f"Context: {item.get('direction_context', 'MIXED')} · "
             f"Fast families: {int(_num(item.get('fast_confirmation_count')))}"
         )
+
+        st.markdown("**📐 Integrated Edge Context — zero decision weight**")
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric(
+            "VIX envelope used",
+            "—" if move_ctx.get("status") != "READY" else f"{_num(move_ctx.get('utilization_pct')):.0f}%",
+        )
+        e2.metric(
+            "Mean-reversion",
+            str(mean_ctx.get("state") or "NO VOTE"),
+        )
+        e3.metric(
+            "15m RSI(2)",
+            "—" if mean_ctx.get("rsi2_15m") is None else f"{_num(mean_ctx.get('rsi2_15m')):.1f}",
+        )
+        e4.metric(
+            "DTE IV Percentile",
+            "—" if iv_ctx.get("status") != "READY" else f"{_num(iv_ctx.get('iv_percentile')):.1f}",
+        )
+        if move_ctx.get("status") == "READY":
+            st.caption(
+                f"VIX envelope {move_ctx.get('lower_1sigma', 0):,.0f}–{move_ctx.get('upper_1sigma', 0):,.0f} · "
+                f"Remaining ±{_num(move_ctx.get('remaining_move_points')):.0f} pts · {move_ctx.get('caution')}."
+            )
+        if mean_ctx:
+            st.caption(
+                f"Pullback/Reversal: {mean_ctx.get('verdict', 'NO VOTE')} · trend {mean_ctx.get('trend', '—')} · "
+                f"stretch {mean_ctx.get('stretch_atr', '—')} ATR · pressure {mean_ctx.get('pressure_quality_state', '—')}."
+            )
+        if iv_ctx:
+            st.caption(
+                f"IV: {iv_ctx.get('seller_context', 'NO VOTE')} · DTE bucket {iv_ctx.get('dte_bucket', 'UNKNOWN')} · "
+                f"history {iv_ctx.get('history_sessions', 0)}/{iv_ctx.get('minimum_sessions', CONFIG.edge_iv_min_bucket_sessions)}. "
+                "Same-DTE real sessions only; no synthetic history."
+            )
 
         if institutional:
             st.markdown("**🏦 Institutional Opportunity Window — research detail**")

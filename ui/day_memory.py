@@ -126,6 +126,7 @@ def app_observation(snapshot):
                              "top_ask_price": row.get("top_ask_price")})
     future = snapshot.metadata.get("future_brain") or {}
     simple = snapshot.metadata.get("simple_brain") or {}
+    edge = snapshot.metadata.get("research_edge_context") or {}
     simple_reason = str(simple.get("instruction") or "")
     reason = simple_reason or str((common.get("blockers") or [common.get("status", "WAIT")])[0])
     return clean({"at": snapshot.created_at.isoformat(), "action": common.get("final_action", simple.get("final_action", "WAIT")),
@@ -147,6 +148,7 @@ def app_observation(snapshot):
                   "common_decision": {k: common.get(k) for k in (
                       "status", "final_action", "best_strategy", "entry_allowed", "direction",
                       "trade_confidence", "historical_hit_rate", "historical_matches", "blockers")},
+                  "research_edge_context": edge,
                   "institutional": asdict(snapshot.institutional_context),
                   "fresh": snapshot.market_session.is_live and all(getattr(snapshot.feed_status.get(k),"use_state","")=="LIVE" for k in ("quotes","candles","option_chain"))})
 

@@ -21,7 +21,7 @@ class InstrumentRef:
 @dataclass(frozen=True)
 class AppConfig:
     app_name: str = "Nifty Seller Lite"
-    version: str = "2.75.2_DHAN_COOLDOWN_RECOVERY"
+    version: str = "2.76.0_EDGE_CONTEXT_INTEGRATION"
     request_timeout_seconds: int = 12
     snapshot_min_refresh_seconds: int = 5
     fast_monitor_interval_seconds: int = 5
@@ -105,7 +105,12 @@ class AppConfig:
     # Phase-8: tiny once-per-session ATM-IV summaries retained inside the same
     # option-state file. This builds true IV Rank/Percentile history over time
     # without any extra broker/API call or extra live-path file.
-    iv_history_max_sessions: int = 60
+    # v2.76 keeps a longer but still tiny/bounded daily summary history so each
+    # weekly-expiry DTE bucket can accumulate a statistically useful sample.
+    iv_history_max_sessions: int = 160
+    # v2.76: strategy-table IV context compares only like-with-like DTE buckets.
+    # Fewer samples remain NO VOTE; no synthetic/backfilled IV history is allowed.
+    edge_iv_min_bucket_sessions: int = 20
     # Same-session compact activity memory. It stores only direction/score/state,
     # never credentials, orders or trader identity.
     big_player_state_path: str = "data/big_player_state.json"
